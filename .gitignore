@@ -1,6 +1,6 @@
-.env
-*.pyc
+﻿.env
 __pycache__/
+*.pyc
 .venv/
 pgdata/
 redisdata/
