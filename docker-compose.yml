@@ -1,12 +1,11 @@
-services:
+﻿services:
   postgres:
     image: postgres:16
     env_file: .env
-    # не даём compose подставлять ${...}, пусть контейнер возьмёт из окружения
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"]
+      test: ["CMD-SHELL", "pg_isready -U  -d "]
       interval: 5s
       timeout: 3s
       retries: 20
