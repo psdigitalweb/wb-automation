@@ -1,0 +1,66 @@
+services:
+  postgres:
+    image: postgres:16
+    env_file: .env
+    # не даём compose подставлять ${...}, пусть контейнер возьмёт из окружения
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7
+    command: ["redis-server","--appendonly","yes"]
+    volumes:
+      - redisdata:/data
+    restart: unless-stopped
+
+  api:
+    build: .
+    command: uvicorn src.app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips="*"
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./:/app
+    restart: unless-stopped
+
+  worker:
+    build: .
+    command: celery -A src.app.tasks.sync_prices.celery_app worker --loglevel=INFO
+    env_file: .env
+    depends_on:
+      - redis
+      - postgres
+    volumes:
+      - ./:/app
+    restart: unless-stopped
+
+  beat:
+    build: .
+    command: celery -A src.app.tasks.sync_prices.celery_app beat --loglevel=INFO
+    env_file: .env
+    depends_on:
+      - worker
+    volumes:
+      - ./:/app
+    restart: unless-stopped
+
+  adminer:
+    image: adminer
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:

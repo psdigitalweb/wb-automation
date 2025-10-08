@@ -1,0 +1,7 @@
+.env
+*.pyc
+__pycache__/
+.venv/
+pgdata/
+redisdata/
+.alembic_cache/

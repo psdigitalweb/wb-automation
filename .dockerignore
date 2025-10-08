@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.venv/
+venv/
+.git/
+.gitignore
+.alembic_cache/
+dist/
+build/
+node_modules/
