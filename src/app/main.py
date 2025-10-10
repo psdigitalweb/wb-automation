@@ -1,49 +1,24 @@
-from fastapi import FastAPI, Depends
-from sqlalchemy.orm import Session
-from sqlalchemy import text
-from . import settings
-from .db import Base, engine, SessionLocal
-from .models import Product, PriceSnapshot
-from .tasks.sync_prices import sync_prices
+from fastapi import FastAPI
+from sqlalchemy import create_engine, text
+import os
 
 app = FastAPI(title="WB Automation")
 
-# создаём таблицы, если их нет
-Base.metadata.create_all(bind=engine)
+# читаем URL прямо из окружения
+DATABASE_URL = os.getenv("DATABASE_URL")
+# Явно указываем использование psycopg2 драйвера
+if DATABASE_URL:
+    if "psycopg://" in DATABASE_URL:
+        DATABASE_URL = DATABASE_URL.replace("psycopg://", "psycopg2://", 1)
+    elif DATABASE_URL.startswith("postgresql://"):
+        DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
+    elif DATABASE_URL.startswith("postgres://"):
+        DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg2://", 1)
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
-@app.get("/health")
+@app.get("/api/v1/health")
 def health():
-    try:
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-        return {"status": "ok"}
-    except Exception as e:
-        return {"status": "error", "detail": str(e)}
-
-@app.post("/sync/prices")
-def sync_prices_now():
-    res = sync_prices.delay()
-    return {"task_id": res.id}
-
-@app.get("/prices/latest")
-def latest_prices(nm_id: int, db: Session = Depends(get_db)):
-    snap = db.query(PriceSnapshot).filter(PriceSnapshot.nm_id == nm_id)\
-             .order_by(PriceSnapshot.created_at.desc()).first()
-    if not snap:
-        return {"nm_id": nm_id, "status": "no data"}
-    return {
-        "nm_id": nm_id,
-        "wb_price": str(snap.wb_price),
-        "wb_discount": str(snap.wb_discount),
-        "spp": str(snap.spp),
-        "customer_price": str(snap.customer_price),
-        "rrc": str(snap.rrc),
-        "ts": snap.created_at.isoformat()
-    }
+    with engine.connect() as conn:
+        conn.execute(text("SELECT 1"))
+    return {"status": "ok"}
