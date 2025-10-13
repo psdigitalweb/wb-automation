@@ -25,3 +25,15 @@ services:
     dns:
       - 1.1.1.1
       - 8.8.8.8    
+
+  ingest-tariffs:
+    build: .
+    env_file: .env
+    environment:
+      - PYTHONPATH=/app/src
+    volumes:
+      - ./:/app
+    working_dir: /app/src
+    command: python -m app.ingest_tariffs
+    depends_on:
+      - postgres
