@@ -175,8 +175,9 @@ LOG_LEVEL=INFO
 ### Environment Variables
 
 ```bash
-# WB API (required)
-WB_API_TOKEN=your_token_here
+# WB API (required) - supports both variants for backward compatibility
+WB_API_TOKEN=your_token_here  # preferred
+# WB_TOKEN=your_token_here    # legacy alias
 
 # API settings
 WB_API_MIN_INTERVAL=0.2
@@ -194,4 +195,69 @@ INFO wb.api: OK /api/v3/offices bytes=1234
 INFO wb.ingest.warehouses: fetched offices=123
 INFO wb.db.warehouses: wb_offices upsert inserted=120 updated=3
 INFO wb.ingest.warehouses: dry-run warehouses count=57
+```
+
+## Deployment
+
+### Environment Setup
+
+Create `.env` file in the project root with required variables:
+
+```bash
+# Database
+DATABASE_URL=postgresql+psycopg2://wb:wbpassword@postgres:5432/wb
+
+# WB API (required) - supports both variants for backward compatibility
+WB_API_TOKEN=your_token_here  # preferred
+# WB_TOKEN=your_token_here    # legacy alias
+
+# API settings
+WB_API_MIN_INTERVAL=0.2
+WB_API_MAX_RETRIES=3
+WB_API_TIMEOUT=15
+LOG_LEVEL=INFO
+```
+
+### Deploy to Server
+
+1. **Connect to server:**
+```bash
+ssh user@server
+cd /path/to/wb-automation
+```
+
+2. **Run deployment script:**
+```bash
+bash scripts/deploy_pull_restart.sh
+```
+
+The script will:
+- Fetch latest changes from git
+- Switch to `p3/wb-ingest-warehouses` branch
+- Pull latest changes
+- Update Docker images
+- Rebuild and restart services
+- Show service status
+
+### Testing Deployment
+
+**Check environment variables:**
+```bash
+docker compose exec api sh -lc "python -c 'import os; print(\"WB_API_TOKEN:\", \"SET\" if os.getenv(\"WB_API_TOKEN\") else \"MISSING\")'"
+```
+
+**Test warehouses ingest (dry-run):**
+```bash
+docker compose exec api sh -lc "python -m app.ingest_warehouses --dry-run"
+```
+
+**Run full warehouses ingest:**
+```bash
+docker compose exec api sh -lc "python -m app.ingest_warehouses"
+```
+
+**Check service logs:**
+```bash
+docker compose logs api
+docker compose logs postgres
 ```
