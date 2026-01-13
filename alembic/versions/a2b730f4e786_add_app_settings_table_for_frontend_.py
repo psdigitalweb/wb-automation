@@ -20,8 +20,37 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    pass
+    # Create app_settings table for storing application settings
+    op.create_table(
+        'app_settings',
+        sa.Column('key', sa.Text(), nullable=False),
+        sa.Column('value', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+        sa.PrimaryKeyConstraint('key')
+    )
+    
+    # Insert default settings
+    op.execute("""
+        INSERT INTO app_settings (key, value, updated_at)
+        VALUES (
+            'frontend_prices.brand_base_url',
+            '{"url": "https://catalog.wb.ru/brands/v4/catalog?ab_testing=false&appType=1&brand=41189&curr=rub&dest=-1255987&lang=ru&page=1&sort=popular&spp=30&uclusters=1"}'::jsonb,
+            now()
+        )
+        ON CONFLICT (key) DO NOTHING
+    """)
+    
+    op.execute("""
+        INSERT INTO app_settings (key, value, updated_at)
+        VALUES (
+            'frontend_prices.sleep_ms',
+            '{"value": 800}'::jsonb,
+            now()
+        )
+        ON CONFLICT (key) DO NOTHING
+    """)
 
 
 def downgrade() -> None:
-    pass
+    # Drop table
+    op.drop_table('app_settings')
