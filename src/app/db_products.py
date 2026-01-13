@@ -50,19 +50,33 @@ def ensure_schema() -> None:
         """
     )
 
-    create_indexes_sql: List = [
-        text("CREATE INDEX IF NOT EXISTS idx_products_brand ON products(brand);"),
-        text(
-            "CREATE INDEX IF NOT EXISTS idx_products_subject ON products(subject_name);"
-        ),
-        text("CREATE INDEX IF NOT EXISTS idx_products_nm_id ON products(nm_id);"),
-        text(
-            "CREATE INDEX IF NOT EXISTS idx_products_vendor_code ON products(vendor_code);"
-        ),
-    ]
-
+    # Check which columns exist before creating indexes
+    # This prevents errors if columns don't exist yet (e.g., during migration)
+    check_column_sql = text("""
+        SELECT column_name 
+        FROM information_schema.columns 
+        WHERE table_name = 'products' AND table_schema = 'public'
+    """)
+    
+    create_indexes_sql: List = []
+    
     with engine.begin() as conn:
         conn.execute(create_table_sql)
+        
+        # Get existing columns
+        result = conn.execute(check_column_sql)
+        existing_columns = {row[0] for row in result}
+        
+        # Only create indexes for columns that exist
+        if 'brand' in existing_columns:
+            create_indexes_sql.append(text("CREATE INDEX IF NOT EXISTS idx_products_brand ON products(brand);"))
+        if 'subject_name' in existing_columns:
+            create_indexes_sql.append(text("CREATE INDEX IF NOT EXISTS idx_products_subject ON products(subject_name);"))
+        if 'nm_id' in existing_columns:
+            create_indexes_sql.append(text("CREATE INDEX IF NOT EXISTS idx_products_nm_id ON products(nm_id);"))
+        if 'vendor_code' in existing_columns:
+            create_indexes_sql.append(text("CREATE INDEX IF NOT EXISTS idx_products_vendor_code ON products(vendor_code);"))
+        
         for stmt in create_indexes_sql:
             conn.execute(stmt)
 
