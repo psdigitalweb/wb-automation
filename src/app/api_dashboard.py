@@ -10,7 +10,11 @@ router = APIRouter(prefix="/api/v1/dashboard", tags=["dashboard"])
 
 @router.get("/metrics")
 async def get_dashboard_metrics():
-    """Get dashboard metrics: counts and max dates."""
+    """Get dashboard metrics: counts and max dates.
+    
+    Always returns 200 OK, even if some metrics fail.
+    Each metric is wrapped in try/except to prevent one failure from breaking the entire endpoint.
+    """
     counts = {
         "products": 0,
         "warehouses": 0,
@@ -26,72 +30,72 @@ async def get_dashboard_metrics():
     
     # Query each table separately to handle missing tables gracefully
     tables = [
-        ("products", "products_count"),
-        ("wb_warehouses", "warehouses_count"),
-        ("stock_snapshots", "stock_snapshots_count"),
-        ("supplier_stock_snapshots", "supplier_stock_snapshots_count"),
+        ("products", "products"),
+        ("wb_warehouses", "warehouses"),
+        ("stock_snapshots", "stock_snapshots"),
+        ("supplier_stock_snapshots", "supplier_stock_snapshots"),
     ]
     
     with engine.connect() as conn:
+        # Get counts - each wrapped in try/except
         for table_name, count_key in tables:
             try:
                 sql = text(f"SELECT COUNT(*) AS cnt FROM {table_name}")
                 result = conn.execute(sql).mappings().all()
                 if result:
-                    counts[count_key.replace("_count", "")] = result[0].get("cnt", 0)
+                    counts[count_key] = result[0].get("cnt", 0)
             except Exception as e:
-                print(f"api_dashboard: table {table_name} not found or error: {e}")
-                # Continue with other tables
+                print(f"WARNING: api_dashboard: failed to get count for {table_name}: {type(e).__name__}: {e}")
+                # Keep default value 0
         
-        # Get max dates
+        # Get max dates - each wrapped in try/except
         try:
             sql = text("SELECT MAX(snapshot_at) AS max_date FROM stock_snapshots")
             result = conn.execute(sql).mappings().all()
             if result and result[0].get("max_date"):
                 max_dates["stock_snapshots"] = result[0]["max_date"].isoformat()
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"WARNING: api_dashboard: failed to get max date for stock_snapshots: {type(e).__name__}: {e}")
+            # Keep default value None
         
         try:
             sql = text("SELECT MAX(last_change_date) AS max_date FROM supplier_stock_snapshots")
             result = conn.execute(sql).mappings().all()
             if result and result[0].get("max_date"):
                 max_dates["supplier_stock_snapshots"] = result[0]["max_date"].isoformat()
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"WARNING: api_dashboard: failed to get max date for supplier_stock_snapshots: {type(e).__name__}: {e}")
+            # Keep default value None
         
-        # Get prices count (unique nm_id with latest prices)
+        # Get prices count - check if table exists first, then use simple COUNT(DISTINCT)
         try:
-            # Try VIEW first
-            sql = text("SELECT COUNT(*) AS cnt FROM v_products_latest_price")
+            # First check if table exists
+            check_sql = text("SELECT 1 FROM price_snapshots LIMIT 1")
+            conn.execute(check_sql).scalar_one_or_none()
+            
+            # Table exists, get count of distinct nm_id
+            sql = text("SELECT COUNT(DISTINCT nm_id) AS cnt FROM price_snapshots")
             result = conn.execute(sql).mappings().all()
             if result:
                 counts["prices"] = result[0].get("cnt", 0)
-        except Exception:
-            # Fallback to CTE
-            try:
-                sql = text("""
-                    WITH latest AS (
-                        SELECT DISTINCT ON (nm_id) nm_id
-                        FROM price_snapshots
-                        ORDER BY nm_id, created_at DESC
-                    )
-                    SELECT COUNT(*) AS cnt FROM latest
-                """)
-                result = conn.execute(sql).mappings().all()
-                if result:
-                    counts["prices"] = result[0].get("cnt", 0)
-            except Exception:
-                pass
+        except Exception as e:
+            print(f"WARNING: api_dashboard: failed to get prices count: {type(e).__name__}: {e}")
+            # Keep default value 0
         
-        # Get max price snapshot date
+        # Get max price snapshot date - wrapped in try/except
         try:
+            # Check if table exists first
+            check_sql = text("SELECT 1 FROM price_snapshots LIMIT 1")
+            conn.execute(check_sql).scalar_one_or_none()
+            
+            # Table exists, get max date
             sql = text("SELECT MAX(created_at) AS max_date FROM price_snapshots")
             result = conn.execute(sql).mappings().all()
             if result and result[0].get("max_date"):
                 max_dates["price_snapshots"] = result[0]["max_date"].isoformat()
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"WARNING: api_dashboard: failed to get max date for price_snapshots: {type(e).__name__}: {e}")
+            # Keep default value None
     
     return {
         "counts": counts,

@@ -25,6 +25,7 @@ export default function Dashboard() {
   const [metrics, setMetrics] = useState<Metrics | null>(null)
   const [loading, setLoading] = useState(true)
   const [toast, setToast] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     loadMetrics()
@@ -35,12 +36,20 @@ export default function Dashboard() {
 
   const loadMetrics = async () => {
     try {
+      setError(null)
+      setLoading(true)
       const res = await fetch(`${API_BASE}/v1/dashboard/metrics`)
+      
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+      }
+      
       const data = await res.json()
       setMetrics(data)
       setLoading(false)
     } catch (error) {
       console.error('Failed to load metrics:', error)
+      setError(error instanceof Error ? error.message : 'Failed to load metrics')
       setLoading(false)
     }
   }
@@ -77,6 +86,11 @@ export default function Dashboard() {
         <h2>Metrics</h2>
         {loading ? (
           <p>Loading...</p>
+        ) : error ? (
+          <div>
+            <p style={{ color: 'red' }}>Error: {error}</p>
+            <button onClick={loadMetrics}>Retry</button>
+          </div>
         ) : metrics ? (
           <div className="metrics">
             <div className="metric-card">
