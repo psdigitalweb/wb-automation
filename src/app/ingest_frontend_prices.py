@@ -107,13 +107,39 @@ def extract_page_from_url(url: str) -> int:
         return 1
 
 
+def get_brand_base_url_from_settings() -> Optional[str]:
+    """Get frontend prices brand base URL from app_settings."""
+    sql = text("""
+        SELECT value->>'url' AS url
+        FROM app_settings
+        WHERE key = 'frontend_prices.brand_base_url'
+    """)
+    
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(sql).scalar_one_or_none()
+            return result if result else None
+    except Exception as e:
+        print(f"get_brand_base_url_from_settings: error: {e}")
+        return None
+
+
 async def ingest_frontend_brand_prices(
     brand_id: int,
-    base_url: str,
+    base_url: Optional[str] = None,
     max_pages: int = 0,
     sleep_ms: int = 800
 ) -> Dict[str, Any]:
     """Fetch and insert frontend catalog price snapshots from WB public API."""
+    # If base_url not provided, get it from settings
+    if not base_url or not base_url.strip():
+        base_url = get_brand_base_url_from_settings()
+        if not base_url:
+            return {
+                "error": "brand_base_url not configured. Please set it via PUT /api/v1/settings/frontend-prices/brand-url or provide base_url in request."
+            }
+        print(f"ingest_frontend_brand_prices: using base_url from settings: {base_url[:100]}...")
+    
     start_page = extract_page_from_url(base_url)
     
     print(f"ingest_frontend_prices: starting, brand_id={brand_id}, start_page={start_page}, max_pages={max_pages}, sleep_ms={sleep_ms}")
