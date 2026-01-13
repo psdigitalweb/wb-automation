@@ -45,129 +45,123 @@ class WBClient:
         return None
 
     async def get_prices(self, nm_ids: list[int]) -> dict[int, dict]:
-        """Fetch prices for given nm_ids from WB API.
+        """Fetch prices for given nm_ids from WB Content API.
         
-        Uses WB Content API: GET /public/api/v1/info?nmId={nm_id}
-        This endpoint requires one nm_id per request and valid authorization token.
+        According to WB API docs (02-products.yaml), prices are retrieved via:
+        POST /content/v1/cards/filter (with nmIds in body)
+        or
+        GET /content/v1/cards (with nmIds as query parameter)
+        
+        Returns dict mapping nm_id to price data: {nm_id: {"price": ..., "discount": ...}}
         """
         if (self.token or "").upper() == "MOCK":
             print("get_prices: MOCK mode, returning fake data")
-            return {nm: {"price": 1290, "discount": 15, "raw": {}} for nm in nm_ids}
+            return {nm: {"price": 1290, "discount": 15} for nm in nm_ids}
 
         if not nm_ids:
-            print("get_prices: empty nm_ids list")
+            print("get_prices: empty nm_ids list, returning empty dict")
             return {}
 
-        if not self.token:
-            print("get_prices: WARNING - no token provided, cannot fetch prices")
-            return {}
-
+        # According to WB API docs, use POST /content/v1/cards/filter with nmIds in body
+        # Batch size: WB API typically allows up to 1000 items per request
+        batch_size = 1000
         result: dict[int, dict] = {}
         
-        # WB API для цен: Content API
-        # GET /public/api/v1/info?nmId={nm_id}
-        # Один nm_id на запрос, требует авторизацию
-        url_template = f"{self.base_url}/public/api/v1/info"
-        
-        print(f"get_prices: fetching prices for {len(nm_ids)} products (one per request)")
-        print(f"get_prices: URL={url_template}")
-        print(f"get_prices: method=GET, headers={{'Authorization': 'Bearer <token_present>' if self.token else 'None'}}")
+        print(f"get_prices: starting, total nm_ids={len(nm_ids)}, batch_size={batch_size}")
         
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            for idx, nm_id in enumerate(nm_ids, 1):
-                params = {"nmId": nm_id}
+            for batch_idx in range(0, len(nm_ids), batch_size):
+                batch = nm_ids[batch_idx:batch_idx + batch_size]
+                print(f"get_prices: processing batch {batch_idx // batch_size + 1}, nm_ids count={len(batch)}, first_nm_id={batch[0] if batch else None}")
                 
-                if idx % 100 == 0 or idx <= 5:
-                    print(f"get_prices: progress {idx}/{len(nm_ids)}, nm_id={nm_id}")
+                # Try POST /content/v1/cards/filter first (recommended by WB docs)
+                url = f"{self.base_url}/content/v1/cards/filter"
+                body = {"nmIds": batch}
+                
+                print(f"get_prices: URL={url}")
+                print(f"get_prices: method=POST, body.nmIds.len={len(batch)}")
+                print(f"get_prices: headers={{'Authorization': 'Bearer <token_present>' if self.token else 'None'}}")
                 
                 try:
                     r = await self._request_with_retry(
-                        client, "GET", url_template, params=params, headers=self.headers
+                        client, "POST", url, headers=self.headers, json=body
                     )
                     
                     if not r:
-                        if idx <= 5:
-                            print(f"get_prices: nm_id={nm_id} request returned None (no response)")
+                        print(f"get_prices: batch {batch_idx // batch_size + 1} request returned None (no response)")
                         continue
                     
-                    if idx <= 5 or idx % 100 == 0:
-                        print(f"get_prices: nm_id={nm_id} HTTP status={r.status_code}")
-                        response_text = r.text[:500] if r.text else "(empty)"
-                        print(f"get_prices: nm_id={nm_id} response preview (first 500 chars): {response_text}")
+                    print(f"get_prices: batch {batch_idx // batch_size + 1} HTTP status={r.status_code}")
+                    response_text = r.text[:500] if r.text else "(empty)"
+                    print(f"get_prices: batch {batch_idx // batch_size + 1} response preview (first 500 chars): {response_text}")
                     
                     if r.status_code == 200:
                         try:
                             data = r.json()
+                            print(f"get_prices: batch {batch_idx // batch_size + 1} response type={type(data)}, keys={list(data.keys()) if isinstance(data, dict) else 'list'}")
                             
-                            # WB API возвращает объект с данными товара
-                            # Извлекаем цену и скидку из различных возможных полей
-                            price = (
-                                data.get("price") 
-                                or data.get("salePriceU") 
-                                or data.get("priceU") 
-                                or data.get("salePrice")
-                                or 0
-                            )
-                            discount = (
-                                data.get("discount") 
-                                or data.get("sale") 
-                                or data.get("basicSale")
-                                or 0
-                            )
-                            
-                            # Если price в копейках (больше 10000), делим на 100
-                            if price and price > 10000:
-                                price = price / 100
-                            
-                            if price and price > 0:
-                                result[int(nm_id)] = {
-                                    "price": float(price),
-                                    "discount": float(discount) if discount else 0,
-                                    "raw": data
-                                }
-                            elif idx <= 5:
-                                print(f"get_prices: nm_id={nm_id} zero or missing price, data keys: {list(data.keys()) if isinstance(data, dict) else 'N/A'}")
+                            # WB API returns {"data": [...]} where each item has nmId, price, discount
+                            if isinstance(data, dict) and "data" in data:
+                                cards = data["data"]
+                                print(f"get_prices: batch {batch_idx // batch_size + 1} found {len(cards)} cards in response")
+                                
+                                for card in cards:
+                                    nm_id = card.get("nmId") or card.get("nm_id")
+                                    if not nm_id:
+                                        continue
+                                    
+                                    # Extract price and discount from card
+                                    # Price structure may vary, check common fields
+                                    price = card.get("price") or card.get("priceU") or card.get("salePriceU")
+                                    discount = card.get("discount") or card.get("discountPercent") or 0
+                                    
+                                    # If price is in kopecks (priceU), convert to rubles
+                                    if price and price > 10000:  # Likely in kopecks
+                                        price = price / 100
+                                    
+                                    result[int(nm_id)] = {
+                                        "price": float(price) if price else 0,
+                                        "discount": float(discount) if discount else 0,
+                                        "raw": card  # Store full card data
+                                    }
+                                
+                                print(f"get_prices: batch {batch_idx // batch_size + 1} extracted prices for {len([k for k in result.keys() if k in batch])} items")
+                            elif isinstance(data, list):
+                                print(f"get_prices: batch {batch_idx // batch_size + 1} response is list with {len(data)} items")
+                                for card in data:
+                                    nm_id = card.get("nmId") or card.get("nm_id")
+                                    if not nm_id:
+                                        continue
+                                    
+                                    price = card.get("price") or card.get("priceU") or card.get("salePriceU")
+                                    discount = card.get("discount") or card.get("discountPercent") or 0
+                                    
+                                    if price and price > 10000:
+                                        price = price / 100
+                                    
+                                    result[int(nm_id)] = {
+                                        "price": float(price) if price else 0,
+                                        "discount": float(discount) if discount else 0,
+                                        "raw": card
+                                    }
+                            else:
+                                print(f"get_prices: batch {batch_idx // batch_size + 1} unexpected response format")
                         except Exception as e:
-                            if idx <= 5:
-                                print(f"get_prices: nm_id={nm_id} JSON parse error: {type(e).__name__}: {e}")
-                            continue
+                            print(f"get_prices: batch {batch_idx // batch_size + 1} JSON parse error: {type(e).__name__}: {e}")
                     elif r.status_code == 400:
-                        if idx <= 5:
-                            print(f"get_prices: nm_id={nm_id} HTTP 400 Bad Request - check nmId format")
-                        continue
+                        print(f"get_prices: batch {batch_idx // batch_size + 1} HTTP 400 Bad Request - check nmIds format/body")
+                        response_text = r.text[:500] if r.text else "(empty)"
+                        print(f"get_prices: batch {batch_idx // batch_size + 1} error response: {response_text}")
                     elif r.status_code == 401:
-                        print(f"get_prices: nm_id={nm_id} HTTP 401 Unauthorized - check token validity and permissions (need 'Контент' or 'Цены и скидки' category)")
-                        # Если токен неверен, останавливаемся после первых ошибок
-                        if idx <= 5:
-                            print(f"get_prices: stopping after 401 errors - check WB_TOKEN")
-                            break
-                        continue
+                        print(f"get_prices: batch {batch_idx // batch_size + 1} HTTP 401 Unauthorized - check token validity and permissions (need 'Контент' category)")
                     elif r.status_code == 403:
-                        print(f"get_prices: nm_id={nm_id} HTTP 403 Forbidden - token may lack required permissions")
-                        if idx <= 5:
-                            print(f"get_prices: stopping after 403 errors - check token scopes")
-                            break
-                        continue
-                    elif r.status_code == 404:
-                        # 404 может означать, что товар не найден - это нормально, пропускаем
-                        continue
+                        print(f"get_prices: batch {batch_idx // batch_size + 1} HTTP 403 Forbidden - token may lack required scopes/permissions (need 'Контент' category)")
                     elif r.status_code == 429:
-                        if idx <= 5:
-                            print(f"get_prices: nm_id={nm_id} HTTP 429 Too Many Requests - rate limit exceeded, sleeping 2s")
-                        await asyncio.sleep(2)
-                        continue
+                        print(f"get_prices: batch {batch_idx // batch_size + 1} HTTP 429 Too Many Requests - rate limit exceeded, need backoff")
                     else:
-                        if idx <= 5:
-                            print(f"get_prices: nm_id={nm_id} HTTP {r.status_code} error")
-                        continue
+                        print(f"get_prices: batch {batch_idx // batch_size + 1} HTTP {r.status_code} error")
                 except Exception as e:
-                    if idx <= 5:
-                        print(f"get_prices: nm_id={nm_id} exception during request: {type(e).__name__}: {e}")
-                    continue
-                
-                # Небольшая задержка между запросами (rate limiting)
-                if idx < len(nm_ids):
-                    await asyncio.sleep(0.1)  # 100ms между запросами
+                    print(f"get_prices: batch {batch_idx // batch_size + 1} exception during request: {type(e).__name__}: {e}")
         
         print(f"get_prices: finished, collected prices for {len(result)}/{len(nm_ids)} products")
         return result
@@ -229,10 +223,10 @@ class WBClient:
                         return []
                 else:
                     print("fetch_warehouses: request returned None (no response)")
-                    return []
             except Exception as e:
                 print(f"fetch_warehouses: exception during request: {type(e).__name__}: {e}")
-                return []
+        
+        return []
 
     async def fetch_stocks(self, warehouse_id: int, chrt_ids: List[int]) -> List[Dict[str, Any]]:
         """Fetch stock balances for given chrtIds on a specific warehouse.
@@ -342,76 +336,90 @@ class WBClient:
                 return []
 
     async def fetch_supplier_stocks(self, date_from: str) -> List[Dict[str, Any]]:
-        """Fetch supplier stock balances from WB Statistics API.
-
+        """Fetch supplier stock balances from WB Statistics API (Reports).
+        
         Endpoint: GET https://statistics-api.wildberries.ru/api/v1/supplier/stocks
-        Parameter: dateFrom (RFC3339) - required.
-        Authorization: ApiKey (Statistics category token).
-        Rate limit: 1 request per minute.
+        Requires: dateFrom parameter (RFC3339 format, e.g., "2019-06-20T00:00:00Z")
+        
+        Rate limit: 1 request per minute per account.
+        Response limit: ~60,000 rows per request.
+        Pagination: use lastChangeDate from last row as next dateFrom.
+        
+        Args:
+            date_from: RFC3339 formatted date string (e.g., "2019-06-20T00:00:00Z")
+        
+        Returns:
+            List of stock records. Empty list if no data or error.
         """
         if (self.token or "").upper() == "MOCK":
             print("fetch_supplier_stocks: MOCK mode, returning empty list")
             return []
-
+        
         url = f"{self.statistics_base_url}/api/v1/supplier/stocks"
         params = {"dateFrom": date_from}
-
+        
+        # Statistics API uses Authorization header with Bearer token
+        # According to WB swagger docs (12-reports.yaml), security scheme is HeaderApiKey
+        # but in practice it's still Authorization: Bearer <token>
+        headers = {"Authorization": f"Bearer {self.token}" if self.token else ""}
+        
         print(f"fetch_supplier_stocks: URL={url}")
         print(f"fetch_supplier_stocks: method=GET, dateFrom={date_from}")
-        print(
-            f"fetch_supplier_stocks: headers={{'Authorization': 'Bearer <token_present>' if self.token else 'None'}}"
-        )
-
+        print(f"fetch_supplier_stocks: headers={{'Authorization': 'Bearer <token_present>' if self.token else 'None'}}")
+        
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             try:
                 r = await self._request_with_retry(
-                    client, "GET", url, headers=self.headers, params=params
+                    client, "GET", url, headers=headers, params=params
                 )
                 if not r:
                     print("fetch_supplier_stocks: request returned None (no response)")
                     return []
-
+                
                 print(f"fetch_supplier_stocks: HTTP status={r.status_code}")
                 response_text = r.text[:500] if r.text else "(empty)"
-                print(
-                    f"fetch_supplier_stocks: response preview (first 500 chars): {response_text}"
-                )
-
+                print(f"fetch_supplier_stocks: response preview (first 500 chars): {response_text}")
+                
                 if r.status_code == 200:
                     try:
                         data = r.json()
-                        print(
-                            "fetch_supplier_stocks: response type="
-                            f"{type(data)}, keys={list(data.keys()) if isinstance(data, dict) else 'list'}"
-                        )
+                        print(f"fetch_supplier_stocks: response type={type(data)}, keys={list(data.keys()) if isinstance(data, dict) else 'list'}")
+                        
+                        # WB Statistics API returns list directly
                         if isinstance(data, list):
                             if len(data) == 0:
-                                print("fetch_supplier_stocks: WB API returned empty list")
+                                print("fetch_supplier_stocks: WB API returned empty list (pagination complete)")
                             else:
                                 print(f"fetch_supplier_stocks: WB API returned {len(data)} stock records")
                             return data
+                        elif isinstance(data, dict) and "data" in data:
+                            result = data["data"]
+                            if len(result) == 0:
+                                print("fetch_supplier_stocks: WB API returned empty list in data field")
+                            else:
+                                print(f"fetch_supplier_stocks: WB API returned {len(result)} stock records")
+                            return result
+                        elif isinstance(data, dict):
+                            print("fetch_supplier_stocks: WB API returned single dict, wrapping in list")
+                            return [data]
+                        
                         print("fetch_supplier_stocks: WB API returned unexpected format")
                         return []
                     except Exception as e:
                         print(f"fetch_supplier_stocks: JSON parse error: {e}")
                         return []
                 elif r.status_code == 401:
-                    print(
-                        "fetch_supplier_stocks: HTTP 401 Unauthorized - check token validity and permissions (need 'Статистика' category)"
-                    )
+                    print("fetch_supplier_stocks: HTTP 401 Unauthorized - check token validity and permissions (need 'Статистика' category)")
                     return []
                 elif r.status_code == 403:
-                    print(
-                        "fetch_supplier_stocks: HTTP 403 Forbidden - token may lack required scopes/permissions (need 'Статистика' category)"
-                    )
+                    print("fetch_supplier_stocks: HTTP 403 Forbidden - token may lack required scopes/permissions (need 'Статистика' category)")
                     return []
                 elif r.status_code == 429:
-                    print(
-                        "fetch_supplier_stocks: HTTP 429 Too Many Requests - rate limit exceeded. Retrying with backoff."
-                    )
-                    # _request_with_retry handles retries, but for 429 specifically, we might need longer sleep
-                    await asyncio.sleep(60) # Additional sleep for 429
-                    return [] # Let retry mechanism handle it
+                    print("fetch_supplier_stocks: HTTP 429 Too Many Requests - rate limit exceeded (1 req/min), need backoff")
+                    return []
+                elif r.status_code >= 500:
+                    print(f"fetch_supplier_stocks: HTTP {r.status_code} server error - will retry")
+                    return []
                 else:
                     print(f"fetch_supplier_stocks: HTTP {r.status_code} error")
                     return []
