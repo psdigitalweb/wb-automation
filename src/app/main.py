@@ -3,10 +3,12 @@ from sqlalchemy import create_engine, text
 import os
 
 from app.ingest_products import router as ingest_router
+from app.api_prices import router as prices_router
 
 app = FastAPI(title="WB Automation")
 
 app.include_router(ingest_router)
+app.include_router(prices_router)
 
 # читаем URL прямо из окружения
 DATABASE_URL = os.getenv("DATABASE_URL")

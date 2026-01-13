@@ -1,0 +1,113 @@
+"""API endpoints for product prices and latest price information."""
+
+from decimal import Decimal
+from typing import Any, Dict, List, Optional
+
+from fastapi import APIRouter, Query
+from sqlalchemy import text
+from sqlalchemy.engine import Engine
+
+from app.db import engine
+
+router = APIRouter(prefix="/api/v1", tags=["prices"])
+
+
+def _serialize_decimal(value: Any) -> Optional[float]:
+    """Convert Decimal to float for JSON serialization."""
+    if value is None:
+        return None
+    if isinstance(value, Decimal):
+        return float(value)
+    return float(value) if value is not None else None
+
+
+def _serialize_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Serialize a database row to JSON-serializable dict."""
+    result = {}
+    for key, value in row.items():
+        if isinstance(value, Decimal):
+            result[key] = float(value)
+        elif hasattr(value, "isoformat"):  # datetime objects
+            result[key] = value.isoformat()
+        else:
+            result[key] = value
+    return result
+
+
+@router.get("/prices/latest")
+async def get_latest_prices(
+    limit: int = Query(50, ge=1, le=1000, description="Maximum number of records to return"),
+    offset: int = Query(0, ge=0, description="Number of records to skip"),
+):
+    """Get latest prices for all products.
+    
+    Returns the most recent price snapshot for each product (nm_id),
+    sorted by nm_id in ascending order.
+    """
+    query = text("""
+        SELECT 
+            nm_id,
+            wb_price,
+            wb_discount,
+            spp,
+            customer_price,
+            rrc,
+            price_at
+        FROM v_products_latest_price
+        ORDER BY nm_id
+        LIMIT :limit OFFSET :offset
+    """)
+    
+    with engine.connect() as conn:
+        result = conn.execute(query, {"limit": limit, "offset": offset})
+        rows = [dict(row._mapping) for row in result]
+    
+    return {
+        "items": [_serialize_row(row) for row in rows],
+        "limit": limit,
+        "offset": offset,
+        "count": len(rows)
+    }
+
+
+@router.get("/products/with-latest-price")
+async def get_products_with_latest_price(
+    limit: int = Query(50, ge=1, le=1000, description="Maximum number of records to return"),
+    offset: int = Query(0, ge=0, description="Number of records to skip"),
+):
+    """Get products with their latest price information.
+    
+    Returns products joined with their latest price snapshot,
+    sorted by products.nm_id in ascending order.
+    """
+    query = text("""
+        SELECT 
+            p.nm_id,
+            p.vendor_code,
+            p.title,
+            p.brand,
+            p.subject_name,
+            p.updated_at,
+            lp.wb_price,
+            lp.wb_discount,
+            lp.spp,
+            lp.customer_price,
+            lp.rrc,
+            lp.price_at
+        FROM products p
+        LEFT JOIN v_products_latest_price lp ON p.nm_id = lp.nm_id
+        ORDER BY p.nm_id
+        LIMIT :limit OFFSET :offset
+    """)
+    
+    with engine.connect() as conn:
+        result = conn.execute(query, {"limit": limit, "offset": offset})
+        rows = [dict(row._mapping) for row in result]
+    
+    return {
+        "items": [_serialize_row(row) for row in rows],
+        "limit": limit,
+        "offset": offset,
+        "count": len(rows)
+    }
+
