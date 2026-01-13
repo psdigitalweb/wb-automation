@@ -12,10 +12,12 @@ interface Metrics {
     warehouses: number
     stock_snapshots: number
     supplier_stock_snapshots: number
+    prices: number
   }
   max_dates: {
     stock_snapshots: string | null
     supplier_stock_snapshots: string | null
+    price_snapshots: string | null
   }
 }
 
@@ -93,6 +95,10 @@ export default function Dashboard() {
               <div className="metric-value">{metrics.counts.supplier_stock_snapshots}</div>
               <div className="metric-label">Supplier Stock Snapshots</div>
             </div>
+            <div className="metric-card">
+              <div className="metric-value">{metrics.counts.prices}</div>
+              <div className="metric-label">Latest Prices</div>
+            </div>
           </div>
         ) : (
           <p>Failed to load metrics</p>
@@ -102,6 +108,7 @@ export default function Dashboard() {
           <div style={{ marginTop: '20px' }}>
             <p><strong>Last Stock Snapshot:</strong> {formatDate(metrics.max_dates.stock_snapshots)}</p>
             <p><strong>Last Supplier Stock:</strong> {formatDate(metrics.max_dates.supplier_stock_snapshots)}</p>
+            <p><strong>Last Price Snapshot:</strong> {formatDate(metrics.max_dates.price_snapshots)}</p>
           </div>
         )}
       </div>
@@ -117,6 +124,9 @@ export default function Dashboard() {
         <button onClick={() => triggerIngest('supplier-stocks')}>
           Run Supplier Stocks Ingestion
         </button>
+        <button onClick={() => triggerIngest('prices')}>
+          Run Prices Ingestion
+        </button>
       </div>
 
       <div className="card">
@@ -126,6 +136,9 @@ export default function Dashboard() {
         </Link>
         <Link href="/supplier-stocks">
           <button>View Supplier Stocks</button>
+        </Link>
+        <Link href="/prices">
+          <button>View Prices</button>
         </Link>
       </div>
     </div>

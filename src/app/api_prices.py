@@ -39,35 +39,98 @@ async def get_latest_prices(
     limit: int = Query(50, ge=1, le=1000, description="Maximum number of records to return"),
     offset: int = Query(0, ge=0, description="Number of records to skip"),
 ):
-    """Get latest prices for all products.
+    """Get latest prices for all products with pagination.
     
     Returns the most recent price snapshot for each product (nm_id),
-    sorted by nm_id in ascending order.
+    sorted by created_at DESC (most recent first), then by nm_id.
+    Uses CTE to get latest prices if VIEW doesn't exist.
     """
-    query = text("""
-        SELECT 
-            nm_id,
-            wb_price,
-            wb_discount,
-            spp,
-            customer_price,
-            rrc,
-            price_at
-        FROM v_products_latest_price
-        ORDER BY nm_id
-        LIMIT :limit OFFSET :offset
-    """)
-    
-    with engine.connect() as conn:
-        result = conn.execute(query, {"limit": limit, "offset": offset})
-        rows = [dict(row._mapping) for row in result]
-    
-    return {
-        "items": [_serialize_row(row) for row in rows],
-        "limit": limit,
-        "offset": offset,
-        "count": len(rows)
-    }
+    try:
+        # Try to use VIEW first (if it exists)
+        query = text("""
+            SELECT 
+                nm_id,
+                wb_price,
+                wb_discount,
+                spp,
+                customer_price,
+                rrc,
+                price_at AS snapshot_at
+            FROM v_products_latest_price
+            ORDER BY price_at DESC, nm_id
+            LIMIT :limit OFFSET :offset
+        """)
+        
+        with engine.connect() as conn:
+            result = conn.execute(query, {"limit": limit, "offset": offset})
+            rows = [dict(row._mapping) for row in result]
+        
+        # Get total count from VIEW
+        count_query = text("SELECT COUNT(*) AS cnt FROM v_products_latest_price")
+        with engine.connect() as conn:
+            count_result = conn.execute(count_query).scalar_one()
+        
+        return {
+            "data": [_serialize_row(row) for row in rows],
+            "limit": limit,
+            "offset": offset,
+            "count": len(rows),
+            "total": count_result if count_result else len(rows)
+        }
+    except Exception:
+        # Fallback to CTE if VIEW doesn't exist
+        query = text("""
+            WITH latest AS (
+                SELECT DISTINCT ON (nm_id)
+                    nm_id,
+                    wb_price,
+                    wb_discount,
+                    spp,
+                    customer_price,
+                    rrc,
+                    created_at AS snapshot_at
+                FROM price_snapshots
+                ORDER BY nm_id, created_at DESC
+            )
+            SELECT * FROM latest
+            ORDER BY snapshot_at DESC, nm_id
+            LIMIT :limit OFFSET :offset
+        """)
+        
+        count_query = text("""
+            WITH latest AS (
+                SELECT DISTINCT ON (nm_id)
+                    nm_id
+                FROM price_snapshots
+                ORDER BY nm_id, created_at DESC
+            )
+            SELECT COUNT(*) AS cnt FROM latest
+        """)
+        
+        try:
+            with engine.connect() as conn:
+                result = conn.execute(query, {"limit": limit, "offset": offset})
+                rows = [dict(row._mapping) for row in result]
+                
+                count_result = conn.execute(count_query).scalar_one()
+            
+            return {
+                "data": [_serialize_row(row) for row in rows],
+                "limit": limit,
+                "offset": offset,
+                "count": len(rows),
+                "total": count_result if count_result else len(rows)
+            }
+        except Exception as e:
+            print(f"get_latest_prices: error: {e}")
+            return {
+                "data": [],
+                "limit": limit,
+                "offset": offset,
+                "count": 0,
+                "total": 0,
+                "error": "Table not found or error occurred"
+            }
 
 
 @router.get("/products/with-latest-price")
