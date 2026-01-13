@@ -40,7 +40,19 @@ services:
       - PYTHONPATH=/app/src
     volumes:
       - ./:/app
-    command: celery -A app.tasks.sync_prices worker -l info
+    command: celery -A app.celery_app worker -l info
+    depends_on:
+      - redis
+      - postgres
+
+  beat:
+    build: .
+    env_file: .env
+    environment:
+      - PYTHONPATH=/app/src
+    volumes:
+      - ./:/app
+    command: celery -A app.celery_app beat -l info
     depends_on:
       - redis
       - postgres
