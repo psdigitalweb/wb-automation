@@ -3,11 +3,13 @@ from sqlalchemy import create_engine, text
 import os
 
 from app.ingest_products import router as ingest_router
+from app.ingest_stocks import router as ingest_stocks_router
 from app.api_prices import router as prices_router
 
 app = FastAPI(title="WB Automation")
 
 app.include_router(ingest_router)
+app.include_router(ingest_stocks_router)
 app.include_router(prices_router)
 
 # читаем URL прямо из окружения

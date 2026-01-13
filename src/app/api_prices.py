@@ -111,3 +111,45 @@ async def get_products_with_latest_price(
         "count": len(rows)
     }
 
+
+@router.get("/products/with-latest-price-and-stock")
+async def get_products_with_price_and_stock(
+    limit: int = Query(50, ge=1, le=1000, description="Maximum number of records to return"),
+    offset: int = Query(0, ge=0, description="Number of records to skip"),
+):
+    """Get products with their latest price and stock information.
+    
+    Returns products joined with their latest price snapshot and latest stock,
+    sorted by products.nm_id in ascending order.
+    """
+    query = text("""
+        SELECT 
+            p.nm_id,
+            p.vendor_code,
+            p.title,
+            p.brand,
+            p.subject_name,
+            p.updated_at,
+            lp.wb_price,
+            lp.customer_price,
+            lp.price_at,
+            ls.total_quantity,
+            ls.stock_at
+        FROM products p
+        LEFT JOIN v_products_latest_price lp ON p.nm_id = lp.nm_id
+        LEFT JOIN v_products_latest_stock ls ON p.nm_id = ls.nm_id
+        ORDER BY p.nm_id
+        LIMIT :limit OFFSET :offset
+    """)
+    
+    with engine.connect() as conn:
+        result = conn.execute(query, {"limit": limit, "offset": offset})
+        rows = [dict(row._mapping) for row in result]
+    
+    return {
+        "items": [_serialize_row(row) for row in rows],
+        "limit": limit,
+        "offset": offset,
+        "count": len(rows)
+    }
+
