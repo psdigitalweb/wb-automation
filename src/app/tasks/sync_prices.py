@@ -1,15 +1,13 @@
-from celery import Celery
 from decimal import Decimal, ROUND_HALF_UP
 from .. import settings
 from ..db import SessionLocal
 from ..models import Product, PriceSnapshot
 import asyncio
 from ..wb.client import WBClient
+from ..celery_app import celery_app
 
-celery_app = Celery("wb",
-    broker=settings.REDIS_URL,
-    backend=settings.REDIS_URL,
-)
+# Import tasks to register them
+from . import frontend_prices  # noqa: F401
 
 def round_to_49_99(value: Decimal) -> Decimal:
     v = int(value)
