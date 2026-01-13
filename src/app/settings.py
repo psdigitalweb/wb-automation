@@ -1,7 +1,9 @@
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
+# Use override=True to ensure .env file values take precedence over existing env vars
+# This is important when .env is mounted as volume and may have updated values
+load_dotenv(override=True)
 
 POSTGRES_DB = os.getenv("POSTGRES_DB", "wb")
 POSTGRES_USER = os.getenv("POSTGRES_USER", "wb")
