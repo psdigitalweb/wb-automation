@@ -44,10 +44,56 @@ export default function FrontendPricesPage() {
   const [maxPages, setMaxPages] = useState('2')
   const [sleepMs, setSleepMs] = useState('800')
   const [ingesting, setIngesting] = useState(false)
+  const [savingUrl, setSavingUrl] = useState(false)
+  const [urlLoaded, setUrlLoaded] = useState(false)
 
   useEffect(() => {
     loadPrices()
+    loadBrandUrl()
   }, [offset])
+
+  const loadBrandUrl = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/v1/settings/frontend-prices/brand-url`)
+      if (res.ok) {
+        const data = await res.json()
+        setBaseUrl(data.url || '')
+        setUrlLoaded(true)
+      }
+    } catch (error) {
+      console.error('Failed to load brand URL:', error)
+    }
+  }
+
+  const handleSaveUrl = async () => {
+    if (!baseUrl.trim()) {
+      setToast('URL cannot be empty')
+      setTimeout(() => setToast(null), 3000)
+      return
+    }
+    
+    setSavingUrl(true)
+    try {
+      const res = await fetch(`${API_BASE}/v1/settings/frontend-prices/brand-url`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: baseUrl.trim() })
+      })
+      if (res.ok) {
+        setToast('URL saved successfully')
+        setTimeout(() => setToast(null), 3000)
+      } else {
+        const data = await res.json()
+        setToast(`Error: ${data.detail || 'Failed to save URL'}`)
+        setTimeout(() => setToast(null), 3000)
+      }
+    } catch (error) {
+      setToast(`Error: ${error}`)
+      setTimeout(() => setToast(null), 3000)
+    } finally {
+      setSavingUrl(false)
+    }
+  }
 
   const loadPrices = async () => {
     setLoading(true)
@@ -76,30 +122,36 @@ export default function FrontendPricesPage() {
   }
 
   const handleIngest = async () => {
-    if (!baseUrl.trim()) {
-      setToast('Please provide base URL')
-      setTimeout(() => setToast(null), 3000)
-      return
-    }
-    
     setIngesting(true)
     try {
+      const requestBody: any = {
+        brand_id: parseInt(brandId) || 41189,
+        max_pages: parseInt(maxPages) || 0,
+        sleep_ms: parseInt(sleepMs) || 800
+      }
+      
+      // Only include base_url if it's provided (otherwise server will use default from settings)
+      if (baseUrl.trim()) {
+        requestBody.base_url = baseUrl.trim()
+      }
+      
       const res = await fetch(`${API_BASE}/v1/ingest/frontend-prices/brand`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          brand_id: parseInt(brandId) || 41189,
-          base_url: baseUrl.trim(),
-          max_pages: parseInt(maxPages) || 0,
-          sleep_ms: parseInt(sleepMs) || 800
-        })
+        body: JSON.stringify(requestBody)
       })
       const data = await res.json()
-      setToast(data.message || `Ingestion ${data.status}`)
-      setTimeout(() => setToast(null), 5000)
       
-      // Reload prices after a delay
-      setTimeout(loadPrices, 2000)
+      if (data.error) {
+        setToast(`Error: ${data.error}`)
+        setTimeout(() => setToast(null), 5000)
+      } else {
+        setToast(data.message || `Ingestion ${data.status}`)
+        setTimeout(() => setToast(null), 5000)
+        
+        // Reload prices after a delay
+        setTimeout(loadPrices, 2000)
+      }
     } catch (error) {
       setToast(`Error: ${error}`)
       setTimeout(() => setToast(null), 3000)
@@ -135,13 +187,23 @@ export default function FrontendPricesPage() {
           </div>
           <div>
             <label>Base URL (with page=1):</label>
-            <input 
-              type="text" 
-              value={baseUrl} 
-              onChange={(e) => setBaseUrl(e.target.value)}
-              placeholder="https://catalog.wb.ru/brands/v4/catalog?...&page=1..."
-              style={{ width: '100%' }}
-            />
+            <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+              <input 
+                type="text" 
+                value={baseUrl} 
+                onChange={(e) => setBaseUrl(e.target.value)}
+                placeholder="https://catalog.wb.ru/brands/v4/catalog?...&page=1..."
+                style={{ flex: 1 }}
+                disabled={!urlLoaded}
+              />
+              <button onClick={handleSaveUrl} disabled={savingUrl || !urlLoaded}>
+                {savingUrl ? 'Saving...' : 'Save URL'}
+              </button>
+            </div>
+            {!urlLoaded && <small style={{ color: '#666' }}>Loading URL from settings...</small>}
+            <small style={{ color: '#666', display: 'block', marginTop: '5px' }}>
+              Leave empty to use saved URL from settings
+            </small>
           </div>
           <div>
             <label>Max Pages (0 = until empty):</label>

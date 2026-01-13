@@ -19,7 +19,7 @@ router = APIRouter(prefix="/api/v1/ingest", tags=["ingest"])
 
 class FrontendBrandPricesRequest(BaseModel):
     brand_id: int
-    base_url: str
+    base_url: Optional[str] = None  # If not provided, will be read from app_settings
     max_pages: int = 0  # 0 or null = until empty
     sleep_ms: int = 800
 
