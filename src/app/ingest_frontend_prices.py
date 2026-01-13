@@ -300,7 +300,6 @@ async def ingest_frontend_brand_prices(
                 empty_pages_count += 1
                 if empty_pages_count >= 2:
                     # Log stop reason
-                    import json
                     response_preview = json.dumps(data, ensure_ascii=False)[:500] if data else "(empty)"
                     print(f"ingest_frontend_prices: page {page} - stop reason: {empty_pages_count} consecutive empty pages")
                     print(f"ingest_frontend_prices: page {page} - response preview (500 chars): {response_preview}")
