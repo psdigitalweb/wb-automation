@@ -258,6 +258,8 @@ async def ingest_frontend_brand_prices(
     total_products = 0
     pages_fetched = 0
     page = start_page
+    total_pages: Optional[int] = None
+    empty_pages_count = 0  # Count consecutive empty pages
     
     while True:
         pages_fetched += 1
@@ -272,18 +274,63 @@ async def ingest_frontend_brand_prices(
         data = await client.fetch_brand_catalog_page(brand_id, page, base_url)
         
         if not data:
-            print(f"ingest_frontend_prices: no data returned for page {page}, stopping")
+            print(f"ingest_frontend_prices: page {page} - HTTP status: no response, stopping")
             break
+        
+        # Extract total pages on first page if available
+        if pages_fetched == 1 and total_pages is None:
+            total_pages = extract_total_pages(data)
+            if total_pages:
+                print(f"ingest_frontend_prices: detected total_pages={total_pages} from first page")
         
         # Extract products
         products = extract_products_from_response(data)
+        products_count = len(products)
+        
+        print(f"ingest_frontend_prices: page {page} - products_count={products_count}, total_pages={total_pages if total_pages else 'unknown'}")
+        
+        # If we have total_pages, use it for pagination
+        if total_pages:
+            if page > total_pages:
+                print(f"ingest_frontend_prices: page {page} > total_pages {total_pages}, stopping")
+                break
+        else:
+            # If no total_pages, check for empty pages with retry
+            if products_count == 0:
+                empty_pages_count += 1
+                if empty_pages_count >= 2:
+                    # Log stop reason
+                    import json
+                    response_preview = json.dumps(data, ensure_ascii=False)[:500] if data else "(empty)"
+                    print(f"ingest_frontend_prices: page {page} - stop reason: {empty_pages_count} consecutive empty pages")
+                    print(f"ingest_frontend_prices: page {page} - response preview (500 chars): {response_preview}")
+                    break
+                else:
+                    # Retry once
+                    print(f"ingest_frontend_prices: page {page} - empty, retrying once...")
+                    await asyncio.sleep(sleep_ms / 1000.0)
+                    data_retry = await client.fetch_brand_catalog_page(brand_id, page, base_url)
+                    if data_retry:
+                        products_retry = extract_products_from_response(data_retry)
+                        products_count = len(products_retry)
+                        if products_count > 0:
+                            products = products_retry
+                            empty_pages_count = 0
+                            print(f"ingest_frontend_prices: page {page} - retry successful, products_count={products_count}")
+                        else:
+                            print(f"ingest_frontend_prices: page {page} - retry also empty, will stop if next page empty")
+                    continue
+            else:
+                empty_pages_count = 0  # Reset counter on successful page
         
         if not products:
-            print(f"ingest_frontend_prices: no products found in response for page {page}, stopping")
-            break
+            # This should not happen if we have total_pages, but handle it
+            if total_pages:
+                print(f"ingest_frontend_prices: page {page} - no products but total_pages={total_pages}, continuing")
+            continue
         
-        print(f"ingest_frontend_prices: found {len(products)} products on page {page}")
-        total_products += len(products)
+        print(f"ingest_frontend_prices: page {page} - processing {products_count} products")
+        total_products += products_count
         
         # Process products
         rows: List[Dict[str, Any]] = []
