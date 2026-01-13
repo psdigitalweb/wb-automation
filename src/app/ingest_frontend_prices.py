@@ -27,73 +27,154 @@ class FrontendBrandPricesRequest(BaseModel):
 def extract_products_from_response(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Extract products array from various response formats (universal, like pickProducts in Apps Script).
     
-    Tries:
-    - data.listGoods (catalog.wb.ru format)
-    - data.data.listGoods
-    - data.products
-    - data.data.products
-    - data.data.catalog.products
-    - data.catalog.products
-    - products (root level)
+    Tries in order:
+    1. data.products (most common for catalog.wb.ru)
+    2. data.data.products
+    3. data.data.products.products (nested)
+    4. data.data.catalog.products
+    5. data.data.list (if list of objects)
+    6. data.catalog.products
+    7. data.listGoods
+    8. data.data.listGoods
     """
     if isinstance(data, dict):
-        # Try data.listGoods (catalog.wb.ru format)
-        if "listGoods" in data:
-            products = data["listGoods"]
+        # Try data.products first (most common for catalog.wb.ru)
+        if "products" in data:
+            products = data["products"]
             if isinstance(products, list):
-                print(f"extract_products_from_response: found {len(products)} products in data.listGoods")
+                print(f"extract_products: found {len(products)} products in data.products")
                 return products
         
-        # Try data.data.listGoods
+        # Try data.data.products
         if "data" in data and isinstance(data["data"], dict):
-            if "listGoods" in data["data"]:
-                products = data["data"]["listGoods"]
-                if isinstance(products, list):
-                    print(f"extract_products_from_response: found {len(products)} products in data.data.listGoods")
-                    return products
-            
             # Try data.data.products
             if "products" in data["data"]:
                 products = data["data"]["products"]
                 if isinstance(products, list):
-                    print(f"extract_products_from_response: found {len(products)} products in data.data.products")
+                    print(f"extract_products: found {len(products)} products in data.data.products")
                     return products
+                elif isinstance(products, dict) and "products" in products:
+                    # Nested: data.data.products.products
+                    nested = products["products"]
+                    if isinstance(nested, list):
+                        print(f"extract_products: found {len(nested)} products in data.data.products.products")
+                        return nested
             
             # Try data.data.catalog.products
             if "catalog" in data["data"] and isinstance(data["data"]["catalog"], dict):
                 if "products" in data["data"]["catalog"]:
                     products = data["data"]["catalog"]["products"]
                     if isinstance(products, list):
-                        print(f"extract_products_from_response: found {len(products)} products in data.data.catalog.products")
+                        print(f"extract_products: found {len(products)} products in data.data.catalog.products")
                         return products
-        
-        # Try data.products
-        if "products" in data:
-            products = data["products"]
-            if isinstance(products, list):
-                print(f"extract_products_from_response: found {len(products)} products in data.products")
-                return products
+            
+            # Try data.data.list (if list of objects)
+            if "list" in data["data"]:
+                products = data["data"]["list"]
+                if isinstance(products, list):
+                    print(f"extract_products: found {len(products)} products in data.data.list")
+                    return products
+            
+            # Try data.data.listGoods
+            if "listGoods" in data["data"]:
+                products = data["data"]["listGoods"]
+                if isinstance(products, list):
+                    print(f"extract_products: found {len(products)} products in data.data.listGoods")
+                    return products
         
         # Try data.catalog.products
         if "catalog" in data and isinstance(data["catalog"], dict):
             if "products" in data["catalog"]:
                 products = data["catalog"]["products"]
                 if isinstance(products, list):
-                    print(f"extract_products_from_response: found {len(products)} products in data.catalog.products")
+                    print(f"extract_products: found {len(products)} products in data.catalog.products")
                     return products
         
+        # Try data.listGoods
+        if "listGoods" in data:
+            products = data["listGoods"]
+            if isinstance(products, list):
+                print(f"extract_products: found {len(products)} products in data.listGoods")
+                return products
+        
         # Log structure for debugging
-        print(f"extract_products_from_response: no products found, data keys: {list(data.keys())}")
+        print(f"extract_products: no products found, top-level keys: {list(data.keys())}")
         if "data" in data and isinstance(data["data"], dict):
-            print(f"extract_products_from_response: data.data keys: {list(data['data'].keys())}")
+            print(f"extract_products: data.data keys: {list(data['data'].keys())}")
     
     elif isinstance(data, list):
         # Root level is list
-        print(f"extract_products_from_response: root level is list with {len(data)} items")
+        print(f"extract_products: root level is list with {len(data)} items")
         return data
     
-    print("extract_products_from_response: no products found, returning empty list")
+    print("extract_products: no products found, returning empty list")
     return []
+
+
+def extract_total_pages(data: Dict[str, Any], products_per_page: int = 100) -> Optional[int]:
+    """Extract total pages count from response.
+    
+    Tries:
+    - totalPages / pages / pageCount (direct)
+    - total / totalCount (calculate pages = ceil(total / products_per_page))
+    - data.totalPages / data.pages / data.pageCount
+    - data.total / data.totalCount (calculate)
+    - data.pager.total / data.pager.pages
+    """
+    if not isinstance(data, dict):
+        return None
+    
+    # Try direct fields
+    for field in ["totalPages", "pages", "pageCount"]:
+        if field in data:
+            value = data[field]
+            if isinstance(value, (int, float)) and value > 0:
+                print(f"extract_total_pages: found {field}={int(value)}")
+                return int(value)
+    
+    # Try total/totalCount and calculate pages
+    for field in ["total", "totalCount"]:
+        if field in data:
+            value = data[field]
+            if isinstance(value, (int, float)) and value > 0:
+                pages = (int(value) + products_per_page - 1) // products_per_page  # ceil division
+                print(f"extract_total_pages: found {field}={int(value)}, calculated pages={pages}")
+                return pages
+    
+    # Try data.totalPages / data.pages / data.pageCount
+    if "data" in data and isinstance(data["data"], dict):
+        for field in ["totalPages", "pages", "pageCount"]:
+            if field in data["data"]:
+                value = data["data"][field]
+                if isinstance(value, (int, float)) and value > 0:
+                    print(f"extract_total_pages: found data.{field}={int(value)}")
+                    return int(value)
+        
+        # Try data.total / data.totalCount
+        for field in ["total", "totalCount"]:
+            if field in data["data"]:
+                value = data["data"][field]
+                if isinstance(value, (int, float)) and value > 0:
+                    pages = (int(value) + products_per_page - 1) // products_per_page
+                    print(f"extract_total_pages: found data.{field}={int(value)}, calculated pages={pages}")
+                    return pages
+        
+        # Try data.pager.total / data.pager.pages
+        if "pager" in data["data"] and isinstance(data["data"]["pager"], dict):
+            if "pages" in data["data"]["pager"]:
+                value = data["data"]["pager"]["pages"]
+                if isinstance(value, (int, float)) and value > 0:
+                    print(f"extract_total_pages: found data.pager.pages={int(value)}")
+                    return int(value)
+            if "total" in data["data"]["pager"]:
+                value = data["data"]["pager"]["total"]
+                if isinstance(value, (int, float)) and value > 0:
+                    pages = (int(value) + products_per_page - 1) // products_per_page
+                    print(f"extract_total_pages: found data.pager.total={int(value)}, calculated pages={pages}")
+                    return pages
+    
+    print(f"extract_total_pages: no total pages found, top-level keys: {list(data.keys())}")
+    return None
 
 
 def extract_page_from_url(url: str) -> int:
@@ -276,8 +357,13 @@ async def ingest_frontend_brand_prices(
         
         # Move to next page
         page += 1
+        
+        # If we have total_pages and reached it, stop
+        if total_pages and page > total_pages:
+            print(f"ingest_frontend_prices: reached total_pages={total_pages}, stopping")
+            break
     
-    print(f"ingest_frontend_prices: finished, pages_fetched={pages_fetched}, total_products={total_products}, total_inserted={total_inserted}")
+    print(f"ingest_frontend_prices: finished, pages_fetched={pages_fetched}, total_pages={total_pages}, total_products={total_products}, total_inserted={total_inserted}")
     
     return {
         "pages_fetched": pages_fetched,
