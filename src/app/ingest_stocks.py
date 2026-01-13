@@ -101,9 +101,12 @@ async def ingest_stocks() -> None:
     
     rows = []
     for stock in stocks:
+        # WB API returns stocks with chrtId (size ID), not nmId directly
+        # Need to map chrtId to nmId from products table, or store chrtId
+        chrt_id = stock.get("chrtId") or stock.get("chrt_id")
         nm_id = stock.get("nmId") or stock.get("nm_id") or stock.get("nmID")
         warehouse_wb_id = stock.get("warehouseId") or stock.get("warehouse_id") or stock.get("warehouse_wb_id")
-        quantity = stock.get("quantity") or stock.get("qty") or stock.get("stock") or 0
+        quantity = stock.get("quantity") or stock.get("qty") or stock.get("stock") or stock.get("amount") or 0
         
         if not nm_id:
             print(f"ingest_stocks: skipping stock without nm_id: {stock}")
