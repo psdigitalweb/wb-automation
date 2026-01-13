@@ -33,15 +33,37 @@ class CatalogClient:
         url: str,
         **kwargs
     ) -> Optional[httpx.Response]:
-        """Make HTTP request with retries and exponential backoff."""
+        """Make HTTP request with retries and exponential backoff.
+        
+        Retries on:
+        - 429 (rate limit) - with longer backoff
+        - 5xx (server errors)
+        - Network exceptions
+        """
         for attempt in range(self.max_retries):
             try:
                 response = await client.request(method, url, **kwargs)
-                if response.status_code < 500:  # Don't retry on 4xx errors
+                
+                # Handle 429 rate limit with longer backoff
+                if response.status_code == 429:
+                    if attempt < self.max_retries - 1:
+                        # Longer backoff for rate limits: 60-120 seconds
+                        delay = 60 + (attempt * 30)  # 60s, 90s, 120s
+                        print(f"catalog_client: HTTP 429 rate limit, waiting {delay}s before retry (attempt {attempt + 1}/{self.max_retries})")
+                        await asyncio.sleep(delay)
+                        continue
+                    else:
+                        print(f"catalog_client: HTTP 429 after {self.max_retries} attempts, giving up")
+                        return response  # Return 429 response so caller can handle it
+                
+                # Don't retry on other 4xx errors
+                if response.status_code < 500:
                     return response
+                
+                # Retry on 5xx errors
                 if attempt < self.max_retries - 1:
                     delay = self.retry_delay * (2 ** attempt)
-                    print(f"catalog_client: request failed with {response.status_code}, retrying in {delay}s (attempt {attempt + 1}/{self.max_retries})")
+                    print(f"catalog_client: HTTP {response.status_code}, retrying in {delay}s (attempt {attempt + 1}/{self.max_retries})")
                     await asyncio.sleep(delay)
             except Exception as e:
                 if attempt < self.max_retries - 1:
