@@ -7,6 +7,8 @@ from app.ingest_stocks import router as ingest_stocks_router, stocks_router
 from app.ingest_supplier_stocks import router as ingest_supplier_stocks_router, supplier_stocks_router
 from app.ingest_prices import router as ingest_prices_router
 from app.api_prices import router as prices_router
+from app.ingest_frontend_prices import router as ingest_frontend_prices_router
+from app.api_frontend_prices import router as frontend_prices_router
 from app.api_dashboard import router as dashboard_router
 
 app = FastAPI(title="WB Automation")
@@ -18,6 +20,8 @@ app.include_router(ingest_supplier_stocks_router)
 app.include_router(supplier_stocks_router)
 app.include_router(ingest_prices_router)
 app.include_router(prices_router)
+app.include_router(ingest_frontend_prices_router)
+app.include_router(frontend_prices_router)
 app.include_router(dashboard_router)
 
 # читаем URL прямо из окружения

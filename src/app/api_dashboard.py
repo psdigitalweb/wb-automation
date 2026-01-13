@@ -21,11 +21,13 @@ async def get_dashboard_metrics():
         "stock_snapshots": 0,
         "supplier_stock_snapshots": 0,
         "prices": 0,
+        "frontend_prices": 0,
     }
     max_dates = {
         "stock_snapshots": None,
         "supplier_stock_snapshots": None,
         "price_snapshots": None,
+        "frontend_price_snapshots": None,
     }
     
     # Query each table separately to handle missing tables gracefully
@@ -95,6 +97,32 @@ async def get_dashboard_metrics():
                 max_dates["price_snapshots"] = result[0]["max_date"].isoformat()
         except Exception as e:
             print(f"WARNING: api_dashboard: failed to get max date for price_snapshots: {type(e).__name__}: {e}")
+            # Keep default value None
+        
+        # Get frontend prices count - wrapped in try/except
+        try:
+            check_sql = text("SELECT 1 FROM frontend_catalog_price_snapshots LIMIT 1")
+            conn.execute(check_sql).scalar_one_or_none()
+            
+            sql = text("SELECT COUNT(*) AS cnt FROM frontend_catalog_price_snapshots")
+            result = conn.execute(sql).mappings().all()
+            if result:
+                counts["frontend_prices"] = result[0].get("cnt", 0)
+        except Exception as e:
+            print(f"WARNING: api_dashboard: failed to get frontend_prices count: {type(e).__name__}: {e}")
+            # Keep default value 0
+        
+        # Get max frontend price snapshot date - wrapped in try/except
+        try:
+            check_sql = text("SELECT 1 FROM frontend_catalog_price_snapshots LIMIT 1")
+            conn.execute(check_sql).scalar_one_or_none()
+            
+            sql = text("SELECT MAX(snapshot_at) AS max_date FROM frontend_catalog_price_snapshots")
+            result = conn.execute(sql).mappings().all()
+            if result and result[0].get("max_date"):
+                max_dates["frontend_price_snapshots"] = result[0]["max_date"].isoformat()
+        except Exception as e:
+            print(f"WARNING: api_dashboard: failed to get max date for frontend_price_snapshots: {type(e).__name__}: {e}")
             # Keep default value None
     
     return {
