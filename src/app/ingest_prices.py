@@ -24,36 +24,16 @@ def round_to_49_99(value: Decimal) -> Decimal:
 
 
 async def ingest_prices() -> None:
-    """Fetch and insert price snapshots from WB API."""
+    """Fetch and insert price snapshots from WB Prices and Discounts API.
+    
+    Uses GET /api/v2/list/goods/filter with pagination via offset.
+    Iterates until listGoods becomes empty.
+    """
     token = os.getenv("WB_TOKEN", "") or ""
     if not token or token.upper() == "MOCK":
         print("ingest_prices: skipped (MOCK mode or no token)")
         return
 
-    # Get all nm_ids from products
-    sql = text("SELECT DISTINCT nm_id FROM products ORDER BY nm_id")
-    with engine.connect() as conn:
-        result = conn.execute(sql).mappings().all()
-        nm_ids = [int(row["nm_id"]) for row in result if row.get("nm_id") is not None]
-
-    if not nm_ids:
-        print("ingest_prices: no products found, skipping")
-        return
-
-    print(f"ingest_prices: found {len(nm_ids)} products")
-
-    client = WBClient()
-    
-    # Fetch prices from WB API
-    prices_data = await client.get_prices(nm_ids)
-    
-    if not prices_data:
-        print("ingest_prices: no prices data received from WB API")
-        return
-
-    print(f"ingest_prices: received prices for {len(prices_data)} products")
-
-    # Prepare rows for insertion
     # Check if raw column exists in price_snapshots table
     check_raw_sql = text("""
         SELECT column_name 
@@ -66,6 +46,10 @@ async def ingest_prices() -> None:
         result = conn.execute(check_raw_sql).scalar_one_or_none()
         has_raw_column = result is not None
     
+    if not has_raw_column:
+        print("ingest_prices: WARNING - raw column not found in price_snapshots, will not save raw JSON")
+    
+    # Prepare insert SQL
     if has_raw_column:
         insert_sql = text("""
             INSERT INTO price_snapshots (nm_id, wb_price, wb_discount, spp, customer_price, rrc, raw)
@@ -77,47 +61,108 @@ async def ingest_prices() -> None:
             VALUES (:nm_id, :wb_price, :wb_discount, :spp, :customer_price, :rrc)
         """)
 
-    rows: List[Dict[str, Any]] = []
-    for nm_id in nm_ids:
-        price_info = prices_data.get(nm_id, {})
-        if not price_info:
-            continue
-
-        # Extract price and discount from response
-        wb_price = Decimal(str(price_info.get("price", 0)))
-        wb_discount = Decimal(str(price_info.get("discount", 0)))
-        spp = Decimal("0")
+    client = WBClient()
+    limit = 1000
+    offset = 0
+    total_inserted = 0
+    page_count = 0
+    max_pages = 1000  # Safety limit
+    
+    print(f"ingest_prices: starting pagination, limit={limit}")
+    
+    while page_count < max_pages:
+        page_count += 1
+        print(f"ingest_prices: fetching page {page_count}, offset={offset}")
         
-        # Calculate customer price
-        customer_price = (wb_price * (Decimal(1) - wb_discount / Decimal(100))) * (
-            Decimal(1) - spp / Decimal(100)
-        )
-        customer_price = customer_price.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        rrc = round_to_49_99(wb_price)
-
-        row = {
-            "nm_id": int(nm_id),
-            "wb_price": float(wb_price),
-            "wb_discount": float(wb_discount),
-            "spp": float(spp),
-            "customer_price": float(customer_price),
-            "rrc": float(rrc),
-        }
+        # Fetch prices from WB API
+        list_goods = await client.fetch_prices(limit=limit, offset=offset)
         
-        # Add raw data if column exists
-        if has_raw_column:
-            raw_data = price_info.get("raw", {})
-            import json
-            row["raw"] = json.dumps(raw_data) if raw_data else None
+        if not list_goods:
+            print(f"ingest_prices: no goods returned at offset {offset}, pagination complete")
+            break
         
-        rows.append(row)
+        print(f"ingest_prices: received {len(list_goods)} goods from WB API")
+        
+        # Process each good
+        rows: List[Dict[str, Any]] = []
+        for good in list_goods:
+            nm_id = good.get("nmID") or good.get("nm_id")
+            if not nm_id:
+                print(f"ingest_prices: skipping good without nmID: {good.get('vendorCode', 'unknown')}")
+                continue
+            
+            # Extract discount from good level
+            discount = good.get("discount") or good.get("clubDiscount") or 0
+            
+            # Extract prices from sizes array
+            sizes = good.get("sizes", [])
+            if not sizes:
+                print(f"ingest_prices: good {nm_id} has no sizes, skipping")
+                continue
+            
+            # Get minimum price from all sizes
+            prices = []
+            discounted_prices = []
+            for size in sizes:
+                price = size.get("price")
+                discounted_price = size.get("discountedPrice")
+                if price is not None:
+                    prices.append(Decimal(str(price)))
+                if discounted_price is not None:
+                    discounted_prices.append(Decimal(str(discounted_price)))
+            
+            if not prices:
+                print(f"ingest_prices: good {nm_id} has no prices in sizes, skipping")
+                continue
+            
+            # Use minimum price as base price
+            min_price = min(prices)
+            min_discounted_price = min(discounted_prices) if discounted_prices else min_price
+            
+            # Calculate fields
+            wb_price = min_price
+            wb_discount = Decimal(str(discount))
+            spp = Decimal("0")
+            
+            # Calculate customer price (price after discount)
+            customer_price = min_discounted_price if discounted_prices else (wb_price * (Decimal(1) - wb_discount / Decimal(100)))
+            customer_price = customer_price.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            rrc = round_to_49_99(wb_price)
 
-    if rows:
-        with engine.begin() as conn:
-            conn.execute(insert_sql, rows)
-        print(f"ingest_prices: inserted {len(rows)} price snapshots")
-    else:
-        print("ingest_prices: no rows to insert")
+            row = {
+                "nm_id": int(nm_id),
+                "wb_price": float(wb_price),
+                "wb_discount": float(wb_discount),
+                "spp": float(spp),
+                "customer_price": float(customer_price),
+                "rrc": float(rrc),
+            }
+            
+            # Add raw data if column exists
+            if has_raw_column:
+                import json
+                row["raw"] = json.dumps(good, ensure_ascii=False)
+            
+            rows.append(row)
+        
+        # Insert batch
+        if rows:
+            with engine.begin() as conn:
+                conn.execute(insert_sql, rows)
+            total_inserted += len(rows)
+            print(f"ingest_prices: inserted {len(rows)} price snapshots (total: {total_inserted})")
+        else:
+            print(f"ingest_prices: no rows to insert from page {page_count}")
+        
+        # Move to next page
+        offset += limit
+        
+        # If we got fewer items than limit, we're done
+        if len(list_goods) < limit:
+            print(f"ingest_prices: received {len(list_goods)} < {limit} items, pagination complete")
+            break
+    
+    print(f"ingest_prices: finished, total pages={page_count}, total inserted={total_inserted}")
 
 
 @router.get("/prices")

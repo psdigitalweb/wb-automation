@@ -13,6 +13,7 @@ class WBClient:
         self.base_url = "https://content-api.wildberries.ru"
         self.marketplace_base_url = "https://marketplace-api.wildberries.ru"
         self.statistics_base_url = "https://statistics-api.wildberries.ru"
+        self.prices_base_url = "https://discounts-prices-api.wildberries.ru"
         self.timeout = 30
         self.max_retries = 3
         self.retry_delay = 1.0
@@ -43,6 +44,107 @@ class WBClient:
                     print(f"Request failed after {self.max_retries} attempts: {e}")
                     return None
         return None
+
+    async def fetch_prices(
+        self, 
+        limit: int = 1000, 
+        offset: int = 0, 
+        filter_nm_id: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        """Fetch prices from WB Prices and Discounts API.
+        
+        Endpoint: GET https://discounts-prices-api.wildberries.ru/api/v2/list/goods/filter
+        Requires token with "Prices and Discounts" category access.
+        
+        Args:
+            limit: Maximum number of items per request (<=1000, required)
+            offset: Pagination offset (0, 1000, 2000, ...)
+            filter_nm_id: Optional filter by specific nmID
+        
+        Returns:
+            List of goods with prices. Empty list if no data or error.
+        """
+        if (self.token or "").upper() == "MOCK":
+            print("fetch_prices: MOCK mode, returning empty list")
+            return []
+        
+        url = f"{self.prices_base_url}/api/v2/list/goods/filter"
+        params = {"limit": limit, "offset": offset}
+        if filter_nm_id:
+            params["filterNmID"] = filter_nm_id
+        
+        # Prices API uses Authorization header with Bearer token
+        headers = {"Authorization": f"Bearer {self.token}" if self.token else ""}
+        
+        print(f"fetch_prices: URL={url}")
+        print(f"fetch_prices: method=GET, limit={limit}, offset={offset}, filter_nm_id={filter_nm_id}")
+        print(f"fetch_prices: headers={{'Authorization': 'Bearer <token_present>' if self.token else 'None'}}")
+        
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            try:
+                r = await self._request_with_retry(
+                    client, "GET", url, headers=headers, params=params
+                )
+                
+                if not r:
+                    print("fetch_prices: request returned None (no response)")
+                    return []
+                
+                print(f"fetch_prices: HTTP status={r.status_code}")
+                response_text = r.text[:500] if r.text else "(empty)"
+                print(f"fetch_prices: response preview (first 500 chars): {response_text}")
+                
+                if r.status_code == 200:
+                    try:
+                        data = r.json()
+                        print(f"fetch_prices: response type={type(data)}, keys={list(data.keys()) if isinstance(data, dict) else 'list'}")
+                        
+                        # WB Prices API returns: {"data": {"listGoods": [...]}, "error": false, "errorText": ""}
+                        if isinstance(data, dict) and "data" in data:
+                            data_obj = data["data"]
+                            if isinstance(data_obj, dict) and "listGoods" in data_obj:
+                                list_goods = data_obj["listGoods"]
+                                if not isinstance(list_goods, list):
+                                    print(f"fetch_prices: listGoods is not a list, type={type(list_goods)}")
+                                    return []
+                                
+                                if len(list_goods) == 0:
+                                    print("fetch_prices: WB API returned empty listGoods (pagination complete)")
+                                else:
+                                    print(f"fetch_prices: WB API returned {len(list_goods)} goods")
+                                return list_goods
+                            else:
+                                print(f"fetch_prices: data.listGoods not found, data keys={list(data_obj.keys()) if isinstance(data_obj, dict) else 'not a dict'}")
+                                return []
+                        elif isinstance(data, dict) and "error" in data:
+                            error = data.get("error", False)
+                            error_text = data.get("errorText", "")
+                            if error:
+                                print(f"fetch_prices: WB API returned error: {error_text}")
+                            return []
+                        else:
+                            print(f"fetch_prices: unexpected response format, keys={list(data.keys()) if isinstance(data, dict) else 'not a dict'}")
+                            return []
+                    except Exception as e:
+                        print(f"fetch_prices: JSON parse error: {type(e).__name__}: {e}")
+                        return []
+                elif r.status_code == 401:
+                    print("fetch_prices: HTTP 401 Unauthorized - check token validity and permissions (need 'Prices and Discounts' category)")
+                    return []
+                elif r.status_code == 403:
+                    print("fetch_prices: HTTP 403 Forbidden - token may lack required scopes/permissions (need 'Prices and Discounts' category)")
+                    return []
+                elif r.status_code == 429:
+                    print("fetch_prices: HTTP 429 Too Many Requests - rate limit exceeded, need backoff")
+                    return []
+                else:
+                    print(f"fetch_prices: HTTP {r.status_code} error")
+                    return []
+            except Exception as e:
+                print(f"fetch_prices: exception during request: {type(e).__name__}: {e}")
+                return []
+        
+        return []
 
     async def get_prices(self, nm_ids: list[int]) -> dict[int, dict]:
         """Fetch prices for given nm_ids from WB Content API.
