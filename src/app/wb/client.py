@@ -9,8 +9,10 @@ class WBClient:
         self.headers = {"Authorization": f"Bearer {self.token}" if self.token else ""}
         # Use content-api.wildberries.ru for products
         # For warehouses/stocks, use marketplace-api.wildberries.ru (according to WB docs)
+        # For Statistics API (Reports), use statistics-api.wildberries.ru
         self.base_url = "https://content-api.wildberries.ru"
         self.marketplace_base_url = "https://marketplace-api.wildberries.ru"
+        self.statistics_base_url = "https://statistics-api.wildberries.ru"
         self.timeout = 30
         self.max_retries = 3
         self.retry_delay = 1.0
@@ -224,4 +226,96 @@ class WBClient:
                     return []
             except Exception as e:
                 print(f"fetch_stocks: exception during request: {type(e).__name__}: {e}")
+                return []
+
+    async def fetch_supplier_stocks(self, date_from: str) -> List[Dict[str, Any]]:
+        """Fetch supplier stock balances from WB Statistics API (Reports).
+        
+        Endpoint: GET https://statistics-api.wildberries.ru/api/v1/supplier/stocks
+        Requires: dateFrom parameter (RFC3339 format, e.g., "2019-06-20T00:00:00Z")
+        
+        Rate limit: 1 request per minute per account.
+        Response limit: ~60,000 rows per request.
+        Pagination: use lastChangeDate from last row as next dateFrom.
+        
+        Args:
+            date_from: RFC3339 formatted date string (e.g., "2019-06-20T00:00:00Z")
+        
+        Returns:
+            List of stock records. Empty list if no data or error.
+        """
+        if (self.token or "").upper() == "MOCK":
+            print("fetch_supplier_stocks: MOCK mode, returning empty list")
+            return []
+        
+        url = f"{self.statistics_base_url}/api/v1/supplier/stocks"
+        params = {"dateFrom": date_from}
+        
+        # Statistics API uses ApiKey header (not Bearer)
+        # But according to WB docs, it's still Authorization: Bearer <token>
+        # Let's use the same header format for now
+        headers = {"Authorization": f"Bearer {self.token}" if self.token else ""}
+        
+        print(f"fetch_supplier_stocks: URL={url}")
+        print(f"fetch_supplier_stocks: method=GET, dateFrom={date_from}")
+        print(f"fetch_supplier_stocks: headers={{'Authorization': 'Bearer <token_present>' if self.token else 'None'}}")
+        
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            try:
+                r = await self._request_with_retry(
+                    client, "GET", url, headers=headers, params=params
+                )
+                if not r:
+                    print("fetch_supplier_stocks: request returned None (no response)")
+                    return []
+                
+                print(f"fetch_supplier_stocks: HTTP status={r.status_code}")
+                response_text = r.text[:500] if r.text else "(empty)"
+                print(f"fetch_supplier_stocks: response preview (first 500 chars): {response_text}")
+                
+                if r.status_code == 200:
+                    try:
+                        data = r.json()
+                        print(f"fetch_supplier_stocks: response type={type(data)}, keys={list(data.keys()) if isinstance(data, dict) else 'list'}")
+                        
+                        # WB Statistics API returns list directly
+                        if isinstance(data, list):
+                            if len(data) == 0:
+                                print("fetch_supplier_stocks: WB API returned empty list (pagination complete)")
+                            else:
+                                print(f"fetch_supplier_stocks: WB API returned {len(data)} stock records")
+                            return data
+                        elif isinstance(data, dict) and "data" in data:
+                            result = data["data"]
+                            if len(result) == 0:
+                                print("fetch_supplier_stocks: WB API returned empty list in data field")
+                            else:
+                                print(f"fetch_supplier_stocks: WB API returned {len(result)} stock records")
+                            return result
+                        elif isinstance(data, dict):
+                            print("fetch_supplier_stocks: WB API returned single dict, wrapping in list")
+                            return [data]
+                        
+                        print("fetch_supplier_stocks: WB API returned unexpected format")
+                        return []
+                    except Exception as e:
+                        print(f"fetch_supplier_stocks: JSON parse error: {e}")
+                        return []
+                elif r.status_code == 401:
+                    print("fetch_supplier_stocks: HTTP 401 Unauthorized - check token validity and permissions (need 'Статистика' category)")
+                    return []
+                elif r.status_code == 403:
+                    print("fetch_supplier_stocks: HTTP 403 Forbidden - token may lack required scopes/permissions (need 'Статистика' category)")
+                    return []
+                elif r.status_code == 429:
+                    print("fetch_supplier_stocks: HTTP 429 Too Many Requests - rate limit exceeded (1 req/min), need backoff")
+                    return []
+                elif r.status_code >= 500:
+                    print(f"fetch_supplier_stocks: HTTP {r.status_code} server error - will retry")
+                    return []
+                else:
+                    print(f"fetch_supplier_stocks: HTTP {r.status_code} error")
+                    return []
+            except Exception as e:
+                print(f"fetch_supplier_stocks: exception during request: {type(e).__name__}: {e}")
                 return []

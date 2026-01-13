@@ -105,7 +105,7 @@ curl "http://localhost:8000/api/v1/ingest/warehouses"
 curl -X POST "http://localhost:8000/api/v1/ingest/warehouses"
 ```
 
-### Загрузка остатков
+### Загрузка остатков (Marketplace API)
 
 ```bash
 # Проверить статус конфигурации (нужен токен категории «Маркетплейс»)
@@ -122,6 +122,38 @@ curl -s "http://localhost:8000/api/v1/stocks/latest?limit=5" | python3 -m json.t
 ```
 
 **Примечание:** В режиме MOCK (когда `WB_TOKEN=MOCK` или не установлен) ingestion будет пропущен с соответствующим сообщением.
+
+### WB остатки на складах (Reports / Statistics API)
+
+Загрузка остатков из раздела Reports (Statistics API), отчёт "Остатки на складах".
+
+**Особенности:**
+- Endpoint: `GET https://statistics-api.wildberries.ru/api/v1/supplier/stocks`
+- Rate limit: 1 запрос в минуту (автоматический throttling)
+- Пагинация: через параметр `dateFrom` (используется `lastChangeDate` последней строки)
+- Данные обновляются каждые ~30 минут
+- Лимит ответа: ~60 000 строк на запрос
+
+**Команды:**
+
+```bash
+# Проверить статус конфигурации
+curl "http://localhost:8000/api/v1/ingest/supplier-stocks"
+
+# Запустить загрузку остатков
+curl -X POST "http://localhost:8000/api/v1/ingest/supplier-stocks"
+
+# Проверить количество записей в БД
+docker compose exec -T postgres psql -U wb -d wb -c "SELECT COUNT(*) FROM supplier_stock_snapshots;"
+
+# Посмотреть последние записи
+curl -s "http://localhost:8000/api/v1/supplier-stocks/latest?limit=5" | python3 -m json.tool
+```
+
+**Настройка:**
+- Начальная дата по умолчанию: `2019-06-20T00:00:00Z` (можно переопределить через `WB_STOCKS_DATE_FROM_DEFAULT`)
+- Инкрементальная загрузка: если в БД уже есть данные, ingestion продолжит с `MAX(last_change_date)`
+- Требуется токен с категорией "Статистика" (Statistics API)
 
 ## Запуск
 
