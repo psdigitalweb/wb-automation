@@ -10,6 +10,7 @@ from app.api_prices import router as prices_router
 from app.ingest_frontend_prices import router as ingest_frontend_prices_router
 from app.api_frontend_prices import router as frontend_prices_router
 from app.api_settings import router as settings_router
+from app.api_settings import router as settings_router
 from app.api_dashboard import router as dashboard_router
 
 app = FastAPI(title="WB Automation")
@@ -23,6 +24,7 @@ app.include_router(ingest_prices_router)
 app.include_router(prices_router)
 app.include_router(ingest_frontend_prices_router)
 app.include_router(frontend_prices_router)
+app.include_router(settings_router)
 app.include_router(settings_router)
 app.include_router(dashboard_router)
 

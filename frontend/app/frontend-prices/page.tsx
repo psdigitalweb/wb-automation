@@ -45,6 +45,7 @@ export default function FrontendPricesPage() {
   const [sleepMs, setSleepMs] = useState('800')
   const [ingesting, setIngesting] = useState(false)
   const [savingUrl, setSavingUrl] = useState(false)
+  const [savingUrl, setSavingUrl] = useState(false)
   const [urlLoaded, setUrlLoaded] = useState(false)
 
   useEffect(() => {
