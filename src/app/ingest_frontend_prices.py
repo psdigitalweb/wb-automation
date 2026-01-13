@@ -28,6 +28,8 @@ def extract_products_from_response(data: Dict[str, Any]) -> List[Dict[str, Any]]
     """Extract products array from various response formats (universal, like pickProducts in Apps Script).
     
     Tries:
+    - data.listGoods (catalog.wb.ru format)
+    - data.data.listGoods
     - data.products
     - data.data.products
     - data.data.catalog.products
@@ -35,17 +37,26 @@ def extract_products_from_response(data: Dict[str, Any]) -> List[Dict[str, Any]]
     - products (root level)
     """
     if isinstance(data, dict):
-        # Try data.products
-        if "products" in data:
-            products = data["products"]
+        # Try data.listGoods (catalog.wb.ru format)
+        if "listGoods" in data:
+            products = data["listGoods"]
             if isinstance(products, list):
+                print(f"extract_products_from_response: found {len(products)} products in data.listGoods")
                 return products
         
-        # Try data.data.products
+        # Try data.data.listGoods
         if "data" in data and isinstance(data["data"], dict):
+            if "listGoods" in data["data"]:
+                products = data["data"]["listGoods"]
+                if isinstance(products, list):
+                    print(f"extract_products_from_response: found {len(products)} products in data.data.listGoods")
+                    return products
+            
+            # Try data.data.products
             if "products" in data["data"]:
                 products = data["data"]["products"]
                 if isinstance(products, list):
+                    print(f"extract_products_from_response: found {len(products)} products in data.data.products")
                     return products
             
             # Try data.data.catalog.products
@@ -53,19 +64,35 @@ def extract_products_from_response(data: Dict[str, Any]) -> List[Dict[str, Any]]
                 if "products" in data["data"]["catalog"]:
                     products = data["data"]["catalog"]["products"]
                     if isinstance(products, list):
+                        print(f"extract_products_from_response: found {len(products)} products in data.data.catalog.products")
                         return products
+        
+        # Try data.products
+        if "products" in data:
+            products = data["products"]
+            if isinstance(products, list):
+                print(f"extract_products_from_response: found {len(products)} products in data.products")
+                return products
         
         # Try data.catalog.products
         if "catalog" in data and isinstance(data["catalog"], dict):
             if "products" in data["catalog"]:
                 products = data["catalog"]["products"]
                 if isinstance(products, list):
+                    print(f"extract_products_from_response: found {len(products)} products in data.catalog.products")
                     return products
+        
+        # Log structure for debugging
+        print(f"extract_products_from_response: no products found, data keys: {list(data.keys())}")
+        if "data" in data and isinstance(data["data"], dict):
+            print(f"extract_products_from_response: data.data keys: {list(data['data'].keys())}")
     
     elif isinstance(data, list):
         # Root level is list
+        print(f"extract_products_from_response: root level is list with {len(data)} items")
         return data
     
+    print("extract_products_from_response: no products found, returning empty list")
     return []
 
 
