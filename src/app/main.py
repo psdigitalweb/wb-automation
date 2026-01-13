@@ -2,7 +2,11 @@ from fastapi import FastAPI
 from sqlalchemy import create_engine, text
 import os
 
+from app.ingest_products import router as ingest_router
+
 app = FastAPI(title="WB Automation")
+
+app.include_router(ingest_router)
 
 # читаем URL прямо из окружения
 DATABASE_URL = os.getenv("DATABASE_URL")

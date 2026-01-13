@@ -16,8 +16,8 @@ from typing import Any, Dict, Iterable, Iterator, List
 
 from sqlalchemy import text
 
-# Import only the engine from app.main as required
-from app.main import engine
+# Import engine from db module to avoid circular imports
+from app.db import engine
 
 
 def ensure_schema() -> None:

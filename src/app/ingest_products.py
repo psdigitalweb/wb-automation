@@ -18,8 +18,11 @@ import os
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
+from fastapi import APIRouter, BackgroundTasks
 
 from app.db_products import ensure_schema, upsert_products
+
+router = APIRouter(prefix="/api/v1/ingest", tags=["ingest"])
 
 
 WB_DEFAULT_ENDPOINT = (
@@ -252,6 +255,34 @@ async def ingest(loop_delay_s: float = 6.0) -> None:
 
 def _sync_entry() -> None:
     asyncio.run(ingest())
+
+
+@router.post("/products")
+async def start_ingest_products(background_tasks: BackgroundTasks, loop_delay_s: float = 6.0):
+    """Start ingestion of products from Wildberries API.
+    
+    Args:
+        loop_delay_s: Delay between requests in seconds (default 6s for WB API limits)
+    """
+    background_tasks.add_task(ingest, loop_delay_s)
+    return {"status": "started", "message": "Product ingestion started in background"}
+
+
+@router.get("/products")
+async def get_ingest_info():
+    """Get information about product ingestion endpoint."""
+    token = os.getenv("WB_TOKEN", "")
+    endpoint = os.getenv("WB_ENDPOINT", WB_DEFAULT_ENDPOINT)
+    page_size = int(os.getenv("WB_PAGE_SIZE", "100"))
+    max_pages = os.getenv("WB_MAX_PAGES")
+    
+    return {
+        "endpoint": endpoint,
+        "page_size": page_size,
+        "max_pages": max_pages,
+        "token_configured": bool(token and token != "MOCK"),
+        "mock_mode": token.upper() == "MOCK"
+    }
 
 
 if __name__ == "__main__":
