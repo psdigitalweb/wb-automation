@@ -270,30 +270,69 @@ async def ingest_frontend_brand_prices(
         
         print(f"ingest_frontend_prices: fetching page {page}")
         
-        # Fetch page
-        data = await client.fetch_brand_catalog_page(brand_id, page, base_url)
+        # Fetch page with retry for 429/5xx
+        data = None
+        retry_count = 0
+        max_retries = 3
+        while retry_count < max_retries:
+            data = await client.fetch_brand_catalog_page(brand_id, page, base_url)
+            if data:
+                break
+            retry_count += 1
+            if retry_count < max_retries:
+                backoff_seconds = 60 * retry_count  # 60s, 120s
+                print(f"ingest_frontend_prices: page {page} - no response, retrying in {backoff_seconds}s (attempt {retry_count + 1}/{max_retries})")
+                await asyncio.sleep(backoff_seconds)
         
         if not data:
-            print(f"ingest_frontend_prices: page {page} - HTTP status: no response, stopping")
-            break
+            print(f"ingest_frontend_prices: page {page} - HTTP status: no response after {max_retries} retries, STOP REASON: failed to fetch page")
+            # If we have total_pages, continue to next page (might be temporary issue)
+            if total_pages and page < total_pages:
+                print(f"ingest_frontend_prices: page {page} - continuing to next page despite error (total_pages={total_pages})")
+                page += 1
+                continue
+            else:
+                break
         
-        # Extract total pages on first page if available
+        # Extract total pages and total count on first page if available
         if pages_fetched == 1 and total_pages is None:
+            first_page_data = data
             total_pages = extract_total_pages(data)
             if total_pages:
                 print(f"ingest_frontend_prices: detected total_pages={total_pages} from first page")
+            
+            # Extract expected_total (total products count)
+            if isinstance(data, dict):
+                expected_total = data.get("total") or data.get("totalCount")
+                if expected_total:
+                    try:
+                        expected_total = int(expected_total)
+                        print(f"ingest_frontend_prices: detected expected_total={expected_total} from first page")
+                    except (ValueError, TypeError):
+                        expected_total = None
         
         # Extract products
         products = extract_products_from_response(data)
         products_count = len(products)
         
-        print(f"ingest_frontend_prices: page {page} - products_count={products_count}, total_pages={total_pages if total_pages else 'unknown'}")
+        # Log page info with total/totalPages detection
+        total_info = ""
+        if isinstance(data, dict):
+            total_val = data.get("total") or data.get("totalCount")
+            total_pages_val = data.get("totalPages") or data.get("pages") or data.get("pageCount")
+            if total_val:
+                total_info = f", total={total_val}"
+            if total_pages_val:
+                total_info += f", totalPages={total_pages_val}"
         
-        # If we have total_pages, use it for pagination
+        print(f"ingest_frontend_prices: page {page} - HTTP status=200, products_count={products_count}, total_pages={total_pages if total_pages else 'unknown'}{total_info}")
+        
+        # If we have total_pages, use it for pagination - DO NOT stop on empty products
         if total_pages:
             if page > total_pages:
                 print(f"ingest_frontend_prices: page {page} > total_pages {total_pages}, stopping")
                 break
+            # Continue even if products_count == 0, because we know there should be more pages
         else:
             # If no total_pages, check for empty pages with retry
             if products_count == 0:
@@ -301,13 +340,13 @@ async def ingest_frontend_brand_prices(
                 if empty_pages_count >= 2:
                     # Log stop reason
                     response_preview = json.dumps(data, ensure_ascii=False)[:500] if data else "(empty)"
-                    print(f"ingest_frontend_prices: page {page} - stop reason: {empty_pages_count} consecutive empty pages")
+                    print(f"ingest_frontend_prices: page {page} - STOP REASON: {empty_pages_count} consecutive empty pages")
                     print(f"ingest_frontend_prices: page {page} - response preview (500 chars): {response_preview}")
                     break
                 else:
-                    # Retry once
-                    print(f"ingest_frontend_prices: page {page} - empty, retrying once...")
-                    await asyncio.sleep(sleep_ms / 1000.0)
+                    # Retry once with backoff
+                    print(f"ingest_frontend_prices: page {page} - empty, retrying once with backoff...")
+                    await asyncio.sleep(sleep_ms / 1000.0 * 2)  # 2x backoff
                     data_retry = await client.fetch_brand_catalog_page(brand_id, page, base_url)
                     if data_retry:
                         products_retry = extract_products_from_response(data_retry)
@@ -322,45 +361,47 @@ async def ingest_frontend_brand_prices(
             else:
                 empty_pages_count = 0  # Reset counter on successful page
         
+        # Process products even if empty (for logging), but skip insert if empty
         if not products:
-            # This should not happen if we have total_pages, but handle it
             if total_pages:
-                print(f"ingest_frontend_prices: page {page} - no products but total_pages={total_pages}, continuing")
+                print(f"ingest_frontend_prices: page {page} - no products but total_pages={total_pages}, continuing to next page")
+            # Sleep and continue to next page
+            if sleep_ms > 0:
+                await asyncio.sleep(sleep_ms / 1000.0)
+            page += 1
             continue
         
         print(f"ingest_frontend_prices: page {page} - processing {products_count} products")
         total_products += products_count
         
-        # Process products
+        # Process products - DO NOT skip products without sizes/price
         rows: List[Dict[str, Any]] = []
+        skipped_no_nm_id = 0
         for product in products:
             nm_id = product.get("id") or product.get("nmId") or product.get("nm_id")
             if not nm_id:
-                print(f"ingest_frontend_prices: skipping product without nm_id: {product.get('name', 'unknown')}")
+                skipped_no_nm_id += 1
                 continue
             
             vendor_code = product.get("supplierVendorCode") or product.get("vendorCode")
             name = product.get("name")
             
-            # Extract prices from sizes[0]
-            sizes = product.get("sizes", [])
-            if not sizes:
-                print(f"ingest_frontend_prices: product {nm_id} has no sizes, skipping")
-                continue
-            
-            first_size = sizes[0]
-            price_obj = first_size.get("price", {})
-            
-            # Prices are in kopecks, convert to rubles
+            # Extract prices from sizes[0] - but don't skip if sizes/price missing
             price_basic = None
             price_product = None
-            if isinstance(price_obj, dict):
-                basic_kopecks = price_obj.get("basic")
-                product_kopecks = price_obj.get("product")
-                if basic_kopecks is not None:
-                    price_basic = Decimal(str(basic_kopecks)) / 100
-                if product_kopecks is not None:
-                    price_product = Decimal(str(product_kopecks)) / 100
+            sizes = product.get("sizes", [])
+            if sizes and len(sizes) > 0:
+                first_size = sizes[0]
+                price_obj = first_size.get("price", {})
+                
+                # Prices are in kopecks, convert to rubles
+                if isinstance(price_obj, dict):
+                    basic_kopecks = price_obj.get("basic")
+                    product_kopecks = price_obj.get("product")
+                    if basic_kopecks is not None:
+                        price_basic = Decimal(str(basic_kopecks)) / 100
+                    if product_kopecks is not None:
+                        price_product = Decimal(str(product_kopecks)) / 100
             
             # Sale percent
             sale_percent = product.get("sale")
@@ -370,12 +411,13 @@ async def ingest_frontend_brand_prices(
                 except (ValueError, TypeError):
                     sale_percent = None
             
-            # Calculate discount percent
+            # Calculate discount percent (only if we have both prices)
             discount_calc_percent = None
             if price_basic and price_basic > 0 and price_product:
                 discount_calc = (1 - price_product / price_basic) * 100
                 discount_calc_percent = int(round(discount_calc))
             
+            # Insert row even if price_basic/price_product are None
             row = {
                 "query_value": str(brand_id),
                 "page": page,
@@ -389,6 +431,9 @@ async def ingest_frontend_brand_prices(
                 "raw": json.dumps(product, ensure_ascii=False)
             }
             rows.append(row)
+        
+        if skipped_no_nm_id > 0:
+            print(f"ingest_frontend_prices: page {page} - skipped {skipped_no_nm_id} products without nm_id")
         
         # Bulk insert
         if rows:
