@@ -134,7 +134,7 @@ async def ingest_stocks() -> None:
 async def get_warehouses_info():
     """Get information about warehouses ingestion endpoint."""
     token = os.getenv("WB_TOKEN", "")
-    endpoint = "https://suppliers-api.wildberries.ru/api/v1/warehouses"
+    endpoint = "https://content-api.wildberries.ru/api/v1/warehouses"
     
     return {
         "endpoint": endpoint,
@@ -161,7 +161,7 @@ async def start_ingest_warehouses(background_tasks: BackgroundTasks):
 async def get_stocks_info():
     """Get information about stocks ingestion endpoint."""
     token = os.getenv("WB_TOKEN", "")
-    endpoint = "https://suppliers-api.wildberries.ru/api/v1/supplies/stocks"
+    endpoint = "https://content-api.wildberries.ru/api/v1/supplies/stocks"
     
     return {
         "endpoint": endpoint,
