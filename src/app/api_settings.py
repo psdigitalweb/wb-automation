@@ -48,18 +48,18 @@ async def get_frontend_prices_brand_url():
 @router.put("/frontend-prices/brand-url", response_model=BrandUrlResponse)
 async def update_frontend_prices_brand_url(request: BrandUrlRequest = Body(...)):
     """Update frontend prices brand base URL in settings."""
+    import json
+    value_json = json.dumps({"url": request.url})
+    
     sql = text("""
         INSERT INTO app_settings (key, value, updated_at)
-        VALUES ('frontend_prices.brand_base_url', :value::jsonb, now())
+        VALUES ('frontend_prices.brand_base_url', CAST(:value AS jsonb), now())
         ON CONFLICT (key) 
         DO UPDATE SET 
-            value = :value::jsonb,
+            value = CAST(:value AS jsonb),
             updated_at = now()
         RETURNING value->>'url' AS url
     """)
-    
-    import json
-    value_json = json.dumps({"url": request.url})
     
     try:
         with engine.begin() as conn:
