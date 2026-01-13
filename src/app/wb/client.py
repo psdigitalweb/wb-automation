@@ -251,9 +251,9 @@ class WBClient:
         url = f"{self.statistics_base_url}/api/v1/supplier/stocks"
         params = {"dateFrom": date_from}
         
-        # Statistics API uses ApiKey header (not Bearer)
-        # But according to WB docs, it's still Authorization: Bearer <token>
-        # Let's use the same header format for now
+        # Statistics API uses Authorization header with Bearer token
+        # According to WB swagger docs (12-reports.yaml), security scheme is HeaderApiKey
+        # but in practice it's still Authorization: Bearer <token>
         headers = {"Authorization": f"Bearer {self.token}" if self.token else ""}
         
         print(f"fetch_supplier_stocks: URL={url}")

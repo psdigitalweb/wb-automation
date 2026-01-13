@@ -88,13 +88,20 @@ async def ingest_supplier_stocks() -> None:
         max_date = result[0]["max_date"] if result and result[0].get("max_date") else None
     
     if max_date:
-        # Использовать последнюю дату + 1 секунда для инкрементальной загрузки
-        # Преобразуем datetime в RFC3339
-        date_from = max_date.strftime("%Y-%m-%dT%H:%M:%S%z")
-        if not date_from.endswith("Z") and "+" not in date_from and "-" not in date_from[-6:]:
-            # Add timezone if missing
-            date_from = date_from + "+00:00"
-        print(f"ingest_supplier_stocks: incremental mode, starting from {date_from} (last max_date: {max_date})")
+        # Инкрементальная загрузка с overlap window (2 минуты) для защиты от потери данных
+        # из-за задержек/часовых поясов. Дубликаты уберёт уникальный индекс.
+        from datetime import timedelta
+        overlap_minutes = 2
+        date_from_dt = max_date - timedelta(minutes=overlap_minutes)
+        # Преобразуем datetime в RFC3339 с правильным форматом timezone
+        if date_from_dt.tzinfo:
+            # Format: 2026-01-13T13:10:26+03:00
+            tz_offset = date_from_dt.strftime("%z")
+            tz_formatted = f"{tz_offset[:3]}:{tz_offset[3:]}" if len(tz_offset) == 5 else "+00:00"
+            date_from = date_from_dt.strftime("%Y-%m-%dT%H:%M:%S") + tz_formatted
+        else:
+            date_from = date_from_dt.strftime("%Y-%m-%dT%H:%M:%S") + "Z"
+        print(f"ingest_supplier_stocks: incremental mode, starting from {date_from} (max_date: {max_date}, overlap: -{overlap_minutes}min)")
     else:
         date_from = default_date_from
         print(f"ingest_supplier_stocks: full mode, starting from {date_from}")
@@ -118,11 +125,13 @@ async def ingest_supplier_stocks() -> None:
     """)
     
     total_pages = 0
+    total_received = 0
     total_inserted = 0
     rate_limit_delay = 60  # 1 request per minute
+    max_pages_per_run = 200  # Защита от зацикливания
     
     # 2. Цикл пагинации
-    while True:
+    while total_pages < max_pages_per_run:
         print(f"ingest_supplier_stocks: fetching page {total_pages + 1}, dateFrom={date_from}")
         
         stocks = await client.fetch_supplier_stocks(date_from)
@@ -133,18 +142,21 @@ async def ingest_supplier_stocks() -> None:
         
         print(f"ingest_supplier_stocks: received {len(stocks)} records for page {total_pages + 1}")
         total_pages += 1
+        total_received += len(stocks)
         
-        # Сохранить записи
+        # Сохранить записи и вычислить min/max lastChangeDate для страницы
         rows: List[Dict[str, Any]] = []
-        last_change_date_str = None
+        page_last_change_dates: List[datetime] = []
         
         for stock in stocks:
-            # Извлечь lastChangeDate для следующей итерации
+            # Извлечь lastChangeDate
             last_change_date_str = stock.get("lastChangeDate") or stock.get("last_change_date")
             
             # Парсим lastChangeDate в datetime для БД
             try:
                 last_change_date_dt = _parse_rfc3339_to_datetime(last_change_date_str) if last_change_date_str else None
+                if last_change_date_dt:
+                    page_last_change_dates.append(last_change_date_dt)
             except Exception as e:
                 print(f"ingest_supplier_stocks: error parsing lastChangeDate '{last_change_date_str}': {e}")
                 continue
@@ -195,21 +207,58 @@ async def ingest_supplier_stocks() -> None:
         else:
             print(f"ingest_supplier_stocks: no valid rows to insert for page {total_pages}")
         
-        # Если нет lastChangeDate, завершаем
-        if not last_change_date_str:
-            print("ingest_supplier_stocks: no lastChangeDate in response, pagination complete")
+        # Вычислить min/max lastChangeDate для страницы
+        if not page_last_change_dates:
+            print("ingest_supplier_stocks: no valid lastChangeDate in page, pagination complete")
             break
         
-        # Использовать lastChangeDate последней строки как следующий dateFrom
-        date_from = last_change_date_str
-        print(f"ingest_supplier_stocks: next dateFrom={date_from} (from last row's lastChangeDate)")
+        page_min_last_change_date = min(page_last_change_dates)
+        page_max_last_change_date = max(page_last_change_dates)
+        
+        print(f"ingest_supplier_stocks: page {total_pages} lastChangeDate range: min={page_min_last_change_date}, max={page_max_last_change_date}")
+        
+        # Защита от зацикливания: если не сдвигаемся вперёд, остановиться
+        current_date_from_dt = _parse_rfc3339_to_datetime(date_from)
+        # Убедимся, что оба datetime имеют timezone для сравнения
+        if current_date_from_dt.tzinfo is None:
+            # Если naive, добавим UTC
+            from datetime import timezone
+            current_date_from_dt = current_date_from_dt.replace(tzinfo=timezone.utc)
+        if page_max_last_change_date.tzinfo is None:
+            from datetime import timezone
+            page_max_last_change_date = page_max_last_change_date.replace(tzinfo=timezone.utc)
+        
+        if page_max_last_change_date <= current_date_from_dt:
+            print(f"ingest_supplier_stocks: WARNING - page_max_last_change_date ({page_max_last_change_date}) <= current_dateFrom ({current_date_from_dt}), stopping to prevent infinite loop")
+            break
+        
+        # Следующий dateFrom = page_max_last_change_date минус 1 секунда для overlap
+        # (чтобы не пропустить пограничные записи, дубликаты уберёт уникальный индекс)
+        from datetime import timedelta
+        next_date_from_dt = page_max_last_change_date - timedelta(seconds=1)
+        # Форматируем в RFC3339 с правильным timezone
+        if next_date_from_dt.tzinfo:
+            tz_offset = next_date_from_dt.strftime("%z")
+            tz_formatted = f"{tz_offset[:3]}:{tz_offset[3:]}" if len(tz_offset) == 5 else "+00:00"
+            date_from = next_date_from_dt.strftime("%Y-%m-%dT%H:%M:%S") + tz_formatted
+        else:
+            date_from = next_date_from_dt.strftime("%Y-%m-%dT%H:%M:%S") + "Z"
+        
+        print(f"ingest_supplier_stocks: next dateFrom={date_from} (page_max - 1s for overlap)")
         
         # Rate limit: sleep 60 секунд между запросами
-        if total_pages > 0:  # Не спать после последней страницы
-            print(f"ingest_supplier_stocks: rate limit throttling, sleeping {rate_limit_delay} seconds...")
-            await asyncio.sleep(rate_limit_delay)
+        print(f"ingest_supplier_stocks: rate limit throttling, sleeping {rate_limit_delay} seconds...")
+        await asyncio.sleep(rate_limit_delay)
     
-    print(f"ingest_supplier_stocks: finished. pages={total_pages}, total_inserted={total_inserted}")
+    if total_pages >= max_pages_per_run:
+        print(f"ingest_supplier_stocks: WARNING - reached max_pages limit ({max_pages_per_run}), stopping")
+    
+    # Финальная проверка: получить max(last_change_date) из БД
+    with engine.connect() as conn:
+        result = conn.execute(max_date_sql).mappings().all()
+        final_max_date = result[0]["max_date"] if result and result[0].get("max_date") else None
+    
+    print(f"ingest_supplier_stocks: finished. pages={total_pages}, total_received={total_received}, total_inserted={total_inserted}, max(last_change_date)={final_max_date}")
 
 
 @router.get("/supplier-stocks")

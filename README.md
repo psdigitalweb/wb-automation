@@ -130,7 +130,9 @@ curl -s "http://localhost:8000/api/v1/stocks/latest?limit=5" | python3 -m json.t
 **Особенности:**
 - Endpoint: `GET https://statistics-api.wildberries.ru/api/v1/supplier/stocks`
 - Rate limit: 1 запрос в минуту (автоматический throttling)
-- Пагинация: через параметр `dateFrom` (используется `lastChangeDate` последней строки)
+- Пагинация: через параметр `dateFrom` (используется MAX(`lastChangeDate`) из страницы минус 1 секунда для overlap)
+- Защита от зацикливания: максимум 200 страниц за запуск, проверка прогресса по датам
+- Инкрементальная загрузка: overlap window 2 минуты от MAX(`last_change_date`) в БД
 - Данные обновляются каждые ~30 минут
 - Лимит ответа: ~60 000 строк на запрос
 
@@ -146,13 +148,18 @@ curl -X POST "http://localhost:8000/api/v1/ingest/supplier-stocks"
 # Проверить количество записей в БД
 docker compose exec -T postgres psql -U wb -d wb -c "SELECT COUNT(*) FROM supplier_stock_snapshots;"
 
+# Проверить диапазон дат (min/max last_change_date)
+docker compose exec -T postgres psql -U wb -d wb -c "SELECT MIN(last_change_date) AS min_date, MAX(last_change_date) AS max_date, COUNT(*) AS total FROM supplier_stock_snapshots;"
+
 # Посмотреть последние записи
 curl -s "http://localhost:8000/api/v1/supplier-stocks/latest?limit=5" | python3 -m json.tool
 ```
 
 **Настройка:**
 - Начальная дата по умолчанию: `2019-06-20T00:00:00Z` (можно переопределить через `WB_STOCKS_DATE_FROM_DEFAULT`)
-- Инкрементальная загрузка: если в БД уже есть данные, ingestion продолжит с `MAX(last_change_date)`
+- Инкрементальная загрузка: если в БД уже есть данные, ingestion продолжит с `MAX(last_change_date) - 2 минуты` (overlap window для защиты от потери данных)
+- Пагинация: на каждой странице вычисляется MAX(`lastChangeDate`), следующий `dateFrom = MAX - 1 секунда` (overlap для пограничных записей)
+- Защита от зацикливания: максимум 200 страниц за запуск, проверка прогресса по датам
 - Требуется токен с категорией "Статистика" (Statistics API)
 
 ## Запуск
