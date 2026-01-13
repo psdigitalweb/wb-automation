@@ -162,6 +162,40 @@ curl -s "http://localhost:8000/api/v1/supplier-stocks/latest?limit=5" | python3 
 - Защита от зацикливания: максимум 200 страниц за запуск, проверка прогресса по датам
 - Требуется токен с категорией "Статистика" (Statistics API)
 
+## Доступ к Adminer
+
+Adminer доступен через nginx по пути `/adminer/` и защищён basic authentication.
+
+**Настройка пароля:**
+
+1. Установить `apache2-utils` (если не установлен):
+   ```bash
+   apt-get update && apt-get install -y apache2-utils
+   ```
+
+2. Создать файл с паролем:
+   ```bash
+   htpasswd -c nginx/.htpasswd admin
+   ```
+   Команда запросит пароль для пользователя `admin`.
+
+3. Перезапустить nginx:
+   ```bash
+   docker compose restart nginx
+   ```
+
+**Доступ:**
+- URL: `http://<IP>/adminer/`
+- Порт 8080 не публикуется наружу (доступ только через nginx)
+- При первом запросе браузер попросит ввести логин и пароль
+
+**Подключение к БД в Adminer:**
+- System: `PostgreSQL`
+- Server: `postgres`
+- Username: `wb`
+- Password: значение из `.env` (переменная `POSTGRES_PASSWORD`)
+- Database: `wb`
+
 ## Запуск
 
 ```bash
