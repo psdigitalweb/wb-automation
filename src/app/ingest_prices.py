@@ -1,9 +1,10 @@
 """Ingestion endpoint for prices."""
 
 import asyncio
+import json
 import os
 from decimal import Decimal, ROUND_HALF_UP
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks
 from sqlalchemy import text
@@ -21,6 +22,13 @@ def round_to_49_99(value: Decimal) -> Decimal:
     candidates = [base + 49, base + 99, base + 149, base + 199]
     best = min(candidates, key=lambda x: abs(x - v))
     return Decimal(best)
+
+
+def _serialize_json_field(value: Any) -> Optional[str]:
+    """Convert Python objects to JSON strings for JSONB fields."""
+    if value is None:
+        return None
+    return json.dumps(value, ensure_ascii=False)
 
 
 async def ingest_prices() -> None:
@@ -54,19 +62,44 @@ async def ingest_prices() -> None:
     print(f"ingest_prices: received prices for {len(prices_data)} products")
 
     # Prepare rows for insertion
-    insert_sql = text("""
-        INSERT INTO price_snapshots (nm_id, wb_price, wb_discount, spp, customer_price, rrc)
-        VALUES (:nm_id, :wb_price, :wb_discount, :spp, :customer_price, :rrc)
+    # Проверяем, есть ли колонка raw в таблице
+    check_raw_sql = text("""
+        SELECT column_name 
+        FROM information_schema.columns 
+        WHERE table_name = 'price_snapshots' AND column_name = 'raw'
     """)
+    has_raw_column = False
+    with engine.connect() as conn:
+        result = conn.execute(check_raw_sql).scalar_one_or_none()
+        has_raw_column = result is not None
+    
+    if has_raw_column:
+        insert_sql = text("""
+            INSERT INTO price_snapshots (nm_id, wb_price, wb_discount, spp, customer_price, rrc, raw)
+            VALUES (:nm_id, :wb_price, :wb_discount, :spp, :customer_price, :rrc, :raw)
+        """)
+    else:
+        insert_sql = text("""
+            INSERT INTO price_snapshots (nm_id, wb_price, wb_discount, spp, customer_price, rrc)
+            VALUES (:nm_id, :wb_price, :wb_discount, :spp, :customer_price, :rrc)
+        """)
 
     rows: List[Dict[str, Any]] = []
     for nm_id in nm_ids:
-        raw = prices_data.get(nm_id, {})
-        if not raw:
+        price_info = prices_data.get(nm_id, {})
+        if not price_info:
+            print(f"ingest_prices: no price data for nm_id={nm_id}, skipping")
             continue
 
-        wb_price = Decimal(str(raw.get("price", 0)))
-        wb_discount = Decimal(str(raw.get("discount", 0)))
+        # Извлекаем данные из ответа WB
+        raw_product = price_info.get("raw", {})
+        wb_price = Decimal(str(price_info.get("price", 0)))
+        wb_discount = Decimal(str(price_info.get("discount", 0)))
+        
+        if wb_price == 0:
+            print(f"ingest_prices: zero price for nm_id={nm_id}, skipping")
+            continue
+
         spp = Decimal("0")
         customer_price = (wb_price * (Decimal(1) - wb_discount / Decimal(100))) * (
             Decimal(1) - spp / Decimal(100)
@@ -74,16 +107,17 @@ async def ingest_prices() -> None:
         customer_price = customer_price.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         rrc = round_to_49_99(wb_price)
 
-        rows.append(
-            {
-                "nm_id": int(nm_id),
-                "wb_price": float(wb_price),
-                "wb_discount": float(wb_discount),
-                "spp": float(spp),
-                "customer_price": float(customer_price),
-                "rrc": float(rrc),
-            }
-        )
+        row_data = {
+            "nm_id": int(nm_id),
+            "wb_price": float(wb_price),
+            "wb_discount": float(wb_discount),
+            "spp": float(spp),
+            "customer_price": float(customer_price),
+            "rrc": float(rrc),
+        }
+        if has_raw_column:
+            row_data["raw"] = _serialize_json_field(raw_product if raw_product else price_info)
+        rows.append(row_data)
 
     if rows:
         with engine.begin() as conn:
