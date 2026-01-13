@@ -119,118 +119,98 @@ class WBClient:
         
         return []
 
-    async def fetch_stocks(self, warehouse_id: Optional[int] = None) -> List[Dict[str, Any]]:
-        """Fetch stock balances from WB API.
-        
+    async def fetch_stocks(self, warehouse_id: int, chrt_ids: List[int]) -> List[Dict[str, Any]]:
+        """Fetch stock balances for given chrtIds on a specific warehouse.
+
         According to WB API docs, stocks endpoint is POST /api/v3/stocks/{warehouseId}
-        and requires warehouseId and array of chrtIds. For full ingestion, we need to:
-        1. Get list of warehouses
-        2. For each warehouse, get stocks
-        
-        Args:
-            warehouse_id: Specific warehouse ID. If None, fetches stocks for all warehouses.
+        and requires:
+        - warehouseId (path)
+        - body: {"chrtIds": [ ... ]}
         """
         if (self.token or "").upper() == "MOCK":
             print("fetch_stocks: MOCK mode, returning empty list")
             return []
-        
-        all_stocks = []
-        
-        # If warehouse_id not specified, get all warehouses first
-        if warehouse_id is None:
-            warehouses = await self.fetch_warehouses()
-            if not warehouses:
-                print("fetch_stocks: no warehouses found, cannot fetch stocks")
-                return []
-            
-            print(f"fetch_stocks: found {len(warehouses)} warehouses, fetching stocks for each")
-            # Fetch stocks for each warehouse
-            for wh in warehouses:
-                wh_id = wh.get("id") or wh.get("officeId")
-                if wh_id:
-                    stocks = await self._fetch_stocks_for_warehouse(wh_id)
-                    all_stocks.extend(stocks)
-        else:
-            stocks = await self._fetch_stocks_for_warehouse(warehouse_id)
-            all_stocks.extend(stocks)
-        
-        if len(all_stocks) == 0:
-            print("fetch_stocks: WB API returned empty list for all warehouses")
-        else:
-            print(f"fetch_stocks: WB API returned {len(all_stocks)} total stock records")
-        
-        return all_stocks
-    
-    async def _fetch_stocks_for_warehouse(self, warehouse_id: int) -> List[Dict[str, Any]]:
-        """Fetch stocks for a specific warehouse.
-        
-        Note: WB API requires POST with chrtIds array. Without chrtIds, we may get empty result.
-        This is a limitation - we need to know chrtIds to get stocks.
-        """
-        # According to WB API docs: POST /api/v3/stocks/{warehouseId}
-        # Requires body with chrtIds array. Without it, returns empty or error.
+
+        if not chrt_ids:
+            print(f"fetch_stocks: empty chrt_ids for warehouse {warehouse_id}, skipping request")
+            return []
+
         url = f"{self.marketplace_base_url}/api/v3/stocks/{warehouse_id}"
-        
-        # Try with empty chrtIds array first (may return all or nothing)
-        # In real scenario, you'd need to get chrtIds from products first
-        body = {"chrtIds": []}
-        
-        print(f"fetch_stocks: URL: {url}, warehouse_id={warehouse_id}")
-        print(f"fetch_stocks: method=POST, body={{'chrtIds': []}} (empty - may need actual chrtIds)")
-        print(f"fetch_stocks: headers={{'Authorization': 'Bearer <token_present>' if self.token else 'None'}}")
-        
+        body = {"chrtIds": chrt_ids}
+
+        print(f"fetch_stocks: URL={url}, warehouse_id={warehouse_id}")
+        print(f"fetch_stocks: method=POST, body.chrtIds.len={len(chrt_ids)}")
+        print(
+            f"fetch_stocks: headers={{'Authorization': 'Bearer <token_present>' if self.token else 'None'}}"
+        )
+
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             try:
-                r = await self._request_with_retry(client, "POST", url, headers=self.headers, json=body)
-                if r:
-                    print(f"fetch_stocks: HTTP status={r.status_code}")
-                    response_text = r.text[:500] if r.text else "(empty)"
-                    print(f"fetch_stocks: response preview (first 500 chars): {response_text}")
-                    
-                    if r.status_code == 200:
-                        try:
-                            data = r.json()
-                            print(f"fetch_stocks: response type={type(data)}, keys={list(data.keys()) if isinstance(data, dict) else 'list'}")
-                            
-                            if isinstance(data, list):
-                                if len(data) == 0:
-                                    print(f"fetch_stocks: WB API returned empty list for warehouse {warehouse_id} (may need chrtIds)")
-                                else:
-                                    print(f"fetch_stocks: WB API returned {len(data)} stock records for warehouse {warehouse_id}")
-                                # Add warehouse_id to each stock record
-                                for stock in data:
-                                    stock["warehouseId"] = warehouse_id
-                                return data
-                            elif isinstance(data, dict) and "data" in data:
-                                result = data["data"]
-                                if len(result) == 0:
-                                    print(f"fetch_stocks: WB API returned empty list in data field for warehouse {warehouse_id}")
-                                for stock in result:
-                                    stock["warehouseId"] = warehouse_id
-                                return result
-                            elif isinstance(data, dict):
-                                data["warehouseId"] = warehouse_id
-                                return [data]
-                            print("fetch_stocks: WB API returned unexpected format")
-                            return []
-                        except Exception as e:
-                            print(f"fetch_stocks: JSON parse error: {e}")
-                            return []
-                    elif r.status_code == 401:
-                        print("fetch_stocks: HTTP 401 Unauthorized - check token validity and permissions")
-                        return []
-                    elif r.status_code == 403:
-                        print("fetch_stocks: HTTP 403 Forbidden - token may lack required scopes/permissions (need 'Маркетплейс' category)")
-                        return []
-                    elif r.status_code == 400:
-                        print(f"fetch_stocks: HTTP 400 Bad Request - may need to provide chrtIds array (warehouse {warehouse_id})")
-                        return []
-                    else:
-                        print(f"fetch_stocks: HTTP {r.status_code} error")
-                        return []
-                else:
+                r = await self._request_with_retry(
+                    client, "POST", url, headers=self.headers, json=body
+                )
+                if not r:
                     print("fetch_stocks: request returned None (no response)")
+                    return []
+
+                print(f"fetch_stocks: HTTP status={r.status_code}")
+                response_text = r.text[:500] if r.text else "(empty)"
+                print(
+                    f"fetch_stocks: response preview (first 500 chars): {response_text}"
+                )
+
+                if r.status_code == 200:
+                    try:
+                        data = r.json()
+                        print(
+                            "fetch_stocks: response type="
+                            f"{type(data)}, keys={list(data.keys()) if isinstance(data, dict) else 'list'}"
+                        )
+
+                        # WB API возвращает список остатков
+                        if isinstance(data, list):
+                            if len(data) == 0:
+                                print(
+                                    f"fetch_stocks: WB API returned empty list for warehouse {warehouse_id}"
+                                )
+                            else:
+                                print(
+                                    f"fetch_stocks: WB API returned {len(data)} stock records for warehouse {warehouse_id}"
+                                )
+                            return data
+                        elif isinstance(data, dict) and "data" in data:
+                            result = data["data"]
+                            if len(result) == 0:
+                                print(
+                                    f"fetch_stocks: WB API returned empty list in data field for warehouse {warehouse_id}"
+                                )
+                            return result
+                        elif isinstance(data, dict):
+                            return [data]
+
+                        print("fetch_stocks: WB API returned unexpected format")
+                        return []
+                    except Exception as e:
+                        print(f"fetch_stocks: JSON parse error: {e}")
+                        return []
+                elif r.status_code == 401:
+                    print(
+                        "fetch_stocks: HTTP 401 Unauthorized - check token validity and permissions"
+                    )
+                    return []
+                elif r.status_code == 403:
+                    print(
+                        "fetch_stocks: HTTP 403 Forbidden - token may lack required scopes/permissions (need 'Маркетплейс' category)"
+                    )
+                    return []
+                elif r.status_code == 400:
+                    print(
+                        f"fetch_stocks: HTTP 400 Bad Request - check chrtIds/body for warehouse {warehouse_id}"
+                    )
+                    return []
+                else:
+                    print(f"fetch_stocks: HTTP {r.status_code} error")
+                    return []
             except Exception as e:
                 print(f"fetch_stocks: exception during request: {type(e).__name__}: {e}")
-        
-        return []
+                return []

@@ -12,7 +12,7 @@ Constraints:
 
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, Iterator, List
+from typing import Any, Dict, Iterable, Iterator, List, Optional
 
 from sqlalchemy import text
 
@@ -59,7 +59,7 @@ def ensure_schema() -> None:
     """)
     
     create_indexes_sql: List = []
-    
+
     with engine.begin() as conn:
         conn.execute(create_table_sql)
         
@@ -183,6 +183,47 @@ def upsert_products(rows: List[Dict[str, Any]]) -> Dict[str, int]:
     )
 
     return {"inserted": total_inserted, "updated": total_updated}
+
+
+def get_chrt_ids(limit: Optional[int] = None) -> List[int]:
+    """Return unique chrtIds (WB size IDs) from products.
+
+    chrtId обычно хранится в массиве sizes либо в raw->'sizes', например:
+    raw->'sizes' = [
+      {"skus": ["..."], "chrtID": 827988305, ...},
+      ...
+    ]
+
+    Args:
+        limit: Optional maximum number of chrtIds to return.
+
+    Returns:
+        List of unique chrtIds as integers. Empty list if данных нет.
+    """
+    # Извлекаем chrtID из sizes или raw->'sizes'
+    sql = """
+        SELECT DISTINCT (elem->>'chrtID')::bigint AS chrt_id
+        FROM products
+        CROSS JOIN LATERAL jsonb_array_elements(
+            COALESCE(sizes, raw->'sizes')
+        ) AS elem
+        WHERE elem ? 'chrtID'
+          AND (elem->>'chrtID') ~ '^[0-9]+'
+    """
+
+    params: Dict[str, Any] = {}
+    if limit is not None and limit > 0:
+        sql += " LIMIT :limit"
+        params["limit"] = limit
+
+    stmt = text(sql)
+
+    with engine.connect() as conn:
+        result = conn.execute(stmt, params)
+        chrt_ids = [int(row[0]) for row in result if row[0] is not None]
+
+    print(f"get_chrt_ids: returned {len(chrt_ids)} unique chrtIds")
+    return chrt_ids
 
 
 if __name__ == "__main__":

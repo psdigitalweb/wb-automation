@@ -108,11 +108,17 @@ curl -X POST "http://localhost:8000/api/v1/ingest/warehouses"
 ### Загрузка остатков
 
 ```bash
-# Проверить статус конфигурации
+# Проверить статус конфигурации (нужен токен категории «Маркетплейс»)
 curl "http://localhost:8000/api/v1/ingest/stocks"
 
-# Запустить загрузку остатков
+# Запустить загрузку остатков (использует POST /api/v3/stocks/{warehouseId} WB API)
 curl -X POST "http://localhost:8000/api/v1/ingest/stocks"
+
+# Проверить, что снимки остатков появились в БД
+docker compose exec -T postgres psql -U wb -d wb -c "SELECT COUNT(*) FROM stock_snapshots;"
+
+# Быстрый просмотр последних остатков
+curl -s "http://localhost:8000/api/v1/stocks/latest?limit=5" | python3 -m json.tool
 ```
 
 **Примечание:** В режиме MOCK (когда `WB_TOKEN=MOCK` или не установлен) ingestion будет пропущен с соответствующим сообщением.
