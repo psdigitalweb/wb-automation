@@ -101,13 +101,15 @@ async def ingest_stocks() -> None:
     )
 
     with engine.connect() as conn:
-        warehouses = [dict(row) for row in conn.execute(select_warehouses_sql)]
+        result = conn.execute(select_warehouses_sql).mappings().all()
+        warehouses = [dict(row) for row in result]
 
     if not warehouses:
         print("ingest_stocks: wb_warehouses is empty, running ingest_warehouses first")
         await ingest_warehouses()
         with engine.connect() as conn:
-            warehouses = [dict(row) for row in conn.execute(select_warehouses_sql)]
+            result = conn.execute(select_warehouses_sql).mappings().all()
+            warehouses = [dict(row) for row in result]
 
     if not warehouses:
         print("ingest_stocks: no warehouses available after ingest_warehouses, aborting")
@@ -124,7 +126,7 @@ async def ingest_stocks() -> None:
         )
         return
 
-    print(f"ingest_stocks: got {len(chrt_ids)} unique chrtIds from products")
+    print(f"ingest_stocks: chrtIds total = {len(chrt_ids)} (first 5: {chrt_ids[:5] if len(chrt_ids) >= 5 else chrt_ids})")
 
     client = WBClient()
 
@@ -150,9 +152,9 @@ async def ingest_stocks() -> None:
     )
 
     with engine.connect() as conn:
-        mapping_rows = conn.execute(chrt_to_nm_sql)
+        mapping_rows = conn.execute(chrt_to_nm_sql).mappings().all()
         chrt_to_nm: Dict[int, int] = {
-            int(row.chrt_id): int(row.nm_id) for row in mapping_rows if row.chrt_id is not None
+            int(row["chrt_id"]): int(row["nm_id"]) for row in mapping_rows if row.get("chrt_id") is not None
         }
 
     print(f"ingest_stocks: built chrtId->nm_id mapping for {len(chrt_to_nm)} sizes")
@@ -187,11 +189,13 @@ async def ingest_stocks() -> None:
 
             rows: List[Dict[str, Any]] = []
             for stock in stocks:
+                # WB API возвращает chrtId (с маленькой 'd')
                 chrt_id = (
                     stock.get("chrtId")
                     or stock.get("chrtID")
                     or stock.get("chrt_id")
                 )
+                # nm_id может быть в ответе или через mapping chrtId->nm_id
                 nm_id = (
                     stock.get("nmId")
                     or stock.get("nm_id")
@@ -309,7 +313,8 @@ async def get_latest_stocks(limit: int = Query(5, ge=1, le=1000)):
     )
 
     with engine.connect() as conn:
-        rows = [dict(row) for row in conn.execute(sql, {"limit": limit})]
+        result = conn.execute(sql, {"limit": limit}).mappings().all()
+        rows = [dict(row) for row in result]
 
     return rows
 

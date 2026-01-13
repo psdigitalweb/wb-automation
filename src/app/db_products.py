@@ -219,8 +219,8 @@ def get_chrt_ids(limit: Optional[int] = None) -> List[int]:
     stmt = text(sql)
 
     with engine.connect() as conn:
-        result = conn.execute(stmt, params)
-        chrt_ids = [int(row[0]) for row in result if row[0] is not None]
+        result = conn.execute(stmt, params).mappings().all()
+        chrt_ids = [int(row["chrt_id"]) for row in result if row.get("chrt_id") is not None]
 
     print(f"get_chrt_ids: returned {len(chrt_ids)} unique chrtIds")
     return chrt_ids

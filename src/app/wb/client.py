@@ -167,7 +167,7 @@ class WBClient:
                             f"{type(data)}, keys={list(data.keys()) if isinstance(data, dict) else 'list'}"
                         )
 
-                        # WB API возвращает список остатков
+                        # WB API возвращает {"stocks": [...]} или список напрямую
                         if isinstance(data, list):
                             if len(data) == 0:
                                 print(
@@ -178,6 +178,17 @@ class WBClient:
                                     f"fetch_stocks: WB API returned {len(data)} stock records for warehouse {warehouse_id}"
                                 )
                             return data
+                        elif isinstance(data, dict) and "stocks" in data:
+                            result = data["stocks"]
+                            if len(result) == 0:
+                                print(
+                                    f"fetch_stocks: WB API returned empty list in stocks field for warehouse {warehouse_id}"
+                                )
+                            else:
+                                print(
+                                    f"fetch_stocks: WB API returned {len(result)} stock records for warehouse {warehouse_id}"
+                                )
+                            return result
                         elif isinstance(data, dict) and "data" in data:
                             result = data["data"]
                             if len(result) == 0:
