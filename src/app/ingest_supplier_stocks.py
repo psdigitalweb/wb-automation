@@ -291,8 +291,11 @@ async def start_ingest_supplier_stocks(background_tasks: BackgroundTasks):
 
 
 @supplier_stocks_router.get("/supplier-stocks/latest")
-async def get_latest_supplier_stocks(limit: int = Query(5, ge=1, le=1000)):
-    """Return latest supplier stock snapshots.
+async def get_latest_supplier_stocks(
+    limit: int = Query(50, ge=1, le=1000),
+    offset: int = Query(0, ge=0)
+):
+    """Return latest supplier stock snapshots with pagination.
     
     Возвращает последние записи из supplier_stock_snapshots,
     отсортированные по last_change_date DESC.
@@ -305,12 +308,28 @@ async def get_latest_supplier_stocks(limit: int = Query(5, ge=1, le=1000)):
             price, discount
         FROM supplier_stock_snapshots
         ORDER BY last_change_date DESC, nm_id
-        LIMIT :limit
+        LIMIT :limit OFFSET :offset
     """)
     
-    with engine.connect() as conn:
-        result = conn.execute(sql, {"limit": limit}).mappings().all()
-        rows = [dict(row) for row in result]
-    
-    return rows
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(sql, {"limit": limit, "offset": offset}).mappings().all()
+            rows = [dict(row) for row in result]
+        
+        return {
+            "data": rows,
+            "limit": limit,
+            "offset": offset,
+            "count": len(rows)
+        }
+    except Exception as e:
+        # Handle case when table doesn't exist
+        print(f"get_latest_supplier_stocks: error: {e}")
+        return {
+            "data": [],
+            "limit": limit,
+            "offset": offset,
+            "count": 0,
+            "error": "Table not found or error occurred"
+        }
 
