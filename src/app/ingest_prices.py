@@ -53,7 +53,7 @@ async def ingest_prices() -> None:
     if has_raw_column:
         insert_sql = text("""
             INSERT INTO price_snapshots (nm_id, wb_price, wb_discount, spp, customer_price, rrc, raw)
-            VALUES (:nm_id, :wb_price, :wb_discount, :spp, :customer_price, :rrc, :raw::jsonb)
+            VALUES (:nm_id, :wb_price, :wb_discount, :spp, :customer_price, :rrc, CAST(:raw AS jsonb))
         """)
     else:
         insert_sql = text("""
