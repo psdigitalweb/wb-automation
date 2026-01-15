@@ -221,11 +221,22 @@ async def ingest_frontend_brand_prices_task(
             print(f"ingest_frontend_brand_prices_task: page {page} - HTTP status: no response, stopping")
             break
         
-        # Extract total pages on first page if available
+        # Extract total pages and total count on first page if available
         if pages_fetched == 1 and total_pages is None:
+            first_page_data = data
             total_pages = extract_total_pages(data)
             if total_pages:
                 print(f"ingest_frontend_brand_prices_task: detected total_pages={total_pages} from first page")
+            
+            # Extract expected_total (total products count)
+            if isinstance(data, dict):
+                expected_total = data.get("total") or data.get("totalCount")
+                if expected_total:
+                    try:
+                        expected_total = int(expected_total)
+                        print(f"ingest_frontend_brand_prices_task: detected expected_total={expected_total} from first page")
+                    except (ValueError, TypeError):
+                        expected_total = None
         
         # Extract products
         products = extract_products_from_response(data)
@@ -283,24 +294,23 @@ async def ingest_frontend_brand_prices_task(
             vendor_code = product.get("supplierVendorCode") or product.get("vendorCode")
             name = product.get("name")
             
-            # Extract prices from sizes[0]
-            sizes = product.get("sizes", [])
-            if not sizes:
-                continue
-            
-            first_size = sizes[0]
-            price_obj = first_size.get("price", {})
-            
-            # Prices are in kopecks, convert to rubles
+            # Extract prices from sizes[0] - but don't skip if sizes/price missing
             price_basic = None
             price_product = None
-            if isinstance(price_obj, dict):
-                basic_kopecks = price_obj.get("basic")
-                product_kopecks = price_obj.get("product")
-                if basic_kopecks is not None:
-                    price_basic = Decimal(str(basic_kopecks)) / 100
-                if product_kopecks is not None:
-                    price_product = Decimal(str(product_kopecks)) / 100
+            sizes = product.get("sizes", [])
+            if sizes and len(sizes) > 0:
+                first_size = sizes[0]
+                price_obj = first_size.get("price", {})
+                
+                # Prices are in kopecks, convert to rubles
+                if isinstance(price_obj, dict):
+                    basic_kopecks = price_obj.get("basic")
+                    product_kopecks = price_obj.get("product")
+                    if basic_kopecks is not None:
+                        price_basic = Decimal(str(basic_kopecks)) / 100
+                    if product_kopecks is not None:
+                        price_product = Decimal(str(product_kopecks)) / 100
+            # If no sizes, price_basic and price_product remain None - still insert row
             
             # Sale percent
             sale_percent = product.get("sale")
@@ -316,6 +326,7 @@ async def ingest_frontend_brand_prices_task(
                 discount_calc = (1 - price_product / price_basic) * 100
                 discount_calc_percent = int(round(discount_calc))
             
+            # Insert row even if price_basic/price_product are None
             row = {
                 "query_value": str(brand_id),
                 "page": page,
@@ -329,6 +340,9 @@ async def ingest_frontend_brand_prices_task(
                 "raw": json.dumps(product, ensure_ascii=False),
             }
             rows.append(row)
+        
+        if skipped_no_nm_id > 0:
+            print(f"ingest_frontend_brand_prices_task: page {page} - skipped {skipped_no_nm_id} products without nm_id")
         
         # Bulk insert
         if rows:
@@ -349,11 +363,61 @@ async def ingest_frontend_brand_prices_task(
             print(f"ingest_frontend_brand_prices_task: reached total_pages={total_pages}, stopping")
             break
     
-    print(f"ingest_frontend_brand_prices_task: finished, pages_fetched={pages_fetched}, total_pages={total_pages}, total_products={total_products}, total_inserted={total_inserted}")
+    # Check completeness
+    run_started_at_sql = text("""
+        SELECT MIN(snapshot_at) AS run_start
+        FROM frontend_catalog_price_snapshots
+        WHERE query_value = :query_value
+        AND snapshot_at >= NOW() - INTERVAL '10 minutes'
+    """)
+    
+    run_started_at = None
+    uniq_nm_id = 0
+    with engine.connect() as conn:
+        result = conn.execute(run_started_at_sql, {"query_value": str(brand_id)}).scalar_one_or_none()
+        if result:
+            run_started_at = result
+        
+        # Count unique nm_id for this run
+        if run_started_at:
+            uniq_sql = text("""
+                SELECT COUNT(DISTINCT nm_id) AS cnt
+                FROM frontend_catalog_price_snapshots
+                WHERE query_value = :query_value
+                AND snapshot_at >= :run_start
+            """)
+            uniq_result = conn.execute(uniq_sql, {"query_value": str(brand_id), "run_start": run_started_at}).scalar_one_or_none()
+            if uniq_result:
+                uniq_nm_id = uniq_result
+    
+    # Completeness check
+    expected_total = None
+    if first_page_data and isinstance(first_page_data, dict):
+        expected_total = first_page_data.get("total") or first_page_data.get("totalCount")
+        if expected_total:
+            try:
+                expected_total = int(expected_total)
+            except (ValueError, TypeError):
+                expected_total = None
+    
+    print(f"ingest_frontend_brand_prices_task: COMPLETENESS CHECK - expected_total={expected_total}, uniq_nm_id={uniq_nm_id}, pages_fetched={pages_fetched}, total_pages={total_pages}")
+    if expected_total and uniq_nm_id < expected_total:
+        coverage_percent = (uniq_nm_id / expected_total) * 100
+        print(f"ingest_frontend_brand_prices_task: WARNING - coverage={coverage_percent:.1f}% ({uniq_nm_id}/{expected_total})")
+        if coverage_percent < 80:
+            print(f"ingest_frontend_brand_prices_task: WARNING - coverage is less than 80%, ingestion may be incomplete")
+            if pages_fetched < total_pages if total_pages else True:
+                print(f"ingest_frontend_brand_prices_task: WARNING - stopped at page {page}, but total_pages={total_pages}")
+    elif expected_total and uniq_nm_id >= expected_total:
+        print(f"ingest_frontend_brand_prices_task: SUCCESS - coverage=100% ({uniq_nm_id}/{expected_total})")
+    
+    print(f"ingest_frontend_brand_prices_task: finished, pages_fetched={pages_fetched}, total_pages={total_pages}, total_products={total_products}, total_inserted={total_inserted}, uniq_nm_id={uniq_nm_id}, expected_total={expected_total}")
     
     return {
         "pages_fetched": pages_fetched,
         "total_products": total_products,
         "inserted": total_inserted,
+        "uniq_nm_id": uniq_nm_id,
+        "expected_total": expected_total,
     }
 
