@@ -1,14 +1,45 @@
-﻿.env
-__pycache__/
-*.pyc
-.venv/
-pgdata/
-redisdata/
-.alembic_cache/
-*.pyc
-__pycache__/
+﻿# Environment files
 .env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
 .venv/
+venv/
+ENV/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+.next/
+.nuxt/
+dist/
+build/
+
+# Logs
+*.log
+logs/
+
+# Database
 pgdata/
 redisdata/
+
+# IDE
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Alembic
+.alembic_cache/
+
+# Nginx secrets
 nginx/.htpasswd
