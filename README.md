@@ -211,3 +211,34 @@ docker compose exec api alembic upgrade head
 docker compose exec api alembic upgrade head
 ```
 
+## Деплой на сервер
+
+**Важно:** Никаких правок кода напрямую на сервере, кроме аварийных хотфиксов с обязательным push.
+
+### Процедура деплоя:
+
+```bash
+cd /home/deploy/wb-automation
+git pull origin main
+docker compose up -d --build
+docker compose exec -T api alembic upgrade head
+```
+
+### Локальная разработка:
+
+1. Клонировать репозиторий на локальный ПК:
+   ```bash
+   git clone git@github.com:<USER>/<REPO>.git
+   ```
+
+2. Открывать проект в Cursor из локальной папки
+
+3. После изменений:
+   ```bash
+   git add .
+   git commit -m "описание изменений"
+   git push origin main
+   ```
+
+4. На сервере выполнить процедуру деплоя (см. выше)
+
