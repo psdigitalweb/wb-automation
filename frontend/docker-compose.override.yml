@@ -1,0 +1,8 @@
+version: '3.8'
+services:
+  frontend:
+    profiles: ['skip']
+  nginx:
+    depends_on:
+      - api
+      - adminer

@@ -6,11 +6,13 @@ import os
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Query
+from fastapi import APIRouter, BackgroundTasks, Query, Path, Depends
 from sqlalchemy import text
 
 from app.db import engine
 from app.wb.client import WBClient
+from app.deps import get_current_active_user, get_project_membership
+from app.utils.get_project_marketplace_token import get_wb_credentials_for_project
 
 router = APIRouter(prefix="/api/v1/ingest", tags=["ingest"])
 # Отдельный роутер для витринных эндпоинтов по supplier stocks
@@ -52,7 +54,7 @@ def _parse_rfc3339_to_datetime(date_str: str) -> datetime:
     raise ValueError(f"Unable to parse RFC3339 date: {date_str}")
 
 
-async def ingest_supplier_stocks() -> None:
+async def ingest_supplier_stocks(project_id: int) -> None:
     """Fetch and insert supplier stock snapshots from WB Statistics API.
     
     Алгоритм:
@@ -69,7 +71,14 @@ async def ingest_supplier_stocks() -> None:
        - 429: backoff 60-90 секунд и повторить
        - 5xx: retry с exponential backoff
     """
-    token = os.getenv("WB_TOKEN", "") or ""
+    # Prefer per-project credentials; fallback to env for backward compatibility
+    try:
+        credentials = get_wb_credentials_for_project(project_id)
+        token = credentials.get("token", "") if credentials else (os.getenv("WB_TOKEN", "") or "")
+    except ValueError as e:
+        print(f"ingest_supplier_stocks: {str(e)}, skipping")
+        return
+
     if not token or token.upper() == "MOCK":
         print("ingest_supplier_stocks: skipped (MOCK mode or no token)")
         return
@@ -106,7 +115,7 @@ async def ingest_supplier_stocks() -> None:
         date_from = default_date_from
         print(f"ingest_supplier_stocks: full mode, starting from {date_from}")
     
-    client = WBClient()
+    client = WBClient(token=token)
     
     insert_sql = text("""
         INSERT INTO supplier_stock_snapshots (
@@ -276,17 +285,65 @@ async def get_supplier_stocks_info():
     }
 
 
+@router.post("/projects/{project_id}/supplier-stocks")
+async def start_ingest_supplier_stocks_for_project(
+    project_id: int = Path(..., description="Project ID"),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+    current_user: dict = Depends(get_current_active_user),
+    membership: dict = Depends(get_project_membership),
+):
+    """Start supplier stocks ingestion for a project.
+
+    Matches frontend dashboard button:
+      POST /api/v1/ingest/projects/{project_id}/supplier-stocks
+    """
+    # Check credentials early for a better UX (don't start a background task that immediately skips)
+    try:
+        credentials = get_wb_credentials_for_project(project_id)
+        token = credentials.get("token", "") if credentials else (os.getenv("WB_TOKEN", "") or "")
+    except ValueError as e:
+        from fastapi import HTTPException, status
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    if not token or token.upper() == "MOCK":
+        return {
+            "status": "skipped",
+            "message": "Supplier stocks ingestion skipped (MOCK mode or no token configured)",
+        }
+
+    background_tasks.add_task(ingest_supplier_stocks, project_id)
+    return {"status": "started", "message": f"Supplier stocks ingestion started in background for project {project_id}"}
+
+
+# Backward-compatible alias: some clients may use underscore in the path.
+@router.post("/projects/{project_id}/supplier_stocks")
+async def start_ingest_supplier_stocks_for_project_alias(
+    project_id: int = Path(..., description="Project ID"),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+    current_user: dict = Depends(get_current_active_user),
+    membership: dict = Depends(get_project_membership),
+):
+    return await start_ingest_supplier_stocks_for_project(
+        project_id=project_id,
+        background_tasks=background_tasks,
+        current_user=current_user,
+        membership=membership,
+    )
+
+
+# Backward-compatible unscoped endpoint (kept for older clients)
 @router.post("/supplier-stocks")
 async def start_ingest_supplier_stocks(background_tasks: BackgroundTasks):
-    """Start ingestion of supplier stock balances from WB Statistics API."""
+    """Start supplier stocks ingestion (uses env token, no project scoping)."""
     token = os.getenv("WB_TOKEN", "") or ""
     if not token or token.upper() == "MOCK":
         return {
             "status": "skipped",
-            "message": "Supplier stocks ingestion skipped (MOCK mode or no token configured)"
+            "message": "Supplier stocks ingestion skipped (MOCK mode or no token configured)",
         }
-    
-    background_tasks.add_task(ingest_supplier_stocks)
+
+    # Use Legacy project_id=1 as a neutral scope (token comes from env anyway)
+    background_tasks.add_task(ingest_supplier_stocks, 1)
     return {"status": "started", "message": "Supplier stocks ingestion started in background"}
 
 
@@ -313,6 +370,12 @@ async def get_latest_supplier_stocks(
     
     try:
         with engine.connect() as conn:
+            # Get total count
+            count_sql = text("SELECT COUNT(*) as total FROM supplier_stock_snapshots")
+            total_result = conn.execute(count_sql).scalar()
+            total = int(total_result) if total_result else 0
+            
+            # Get paginated data
             result = conn.execute(sql, {"limit": limit, "offset": offset}).mappings().all()
             rows = [dict(row) for row in result]
         
@@ -320,7 +383,8 @@ async def get_latest_supplier_stocks(
             "data": rows,
             "limit": limit,
             "offset": offset,
-            "count": len(rows)
+            "count": len(rows),
+            "total": total
         }
     except Exception as e:
         # Handle case when table doesn't exist

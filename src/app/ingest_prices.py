@@ -5,11 +5,12 @@ import os
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, List
 
-from fastapi import APIRouter, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, Path, Depends
 from sqlalchemy import text
 
 from app.db import engine
 from app.wb.client import WBClient
+from app.deps import get_current_active_user, get_project_membership
 
 router = APIRouter(prefix="/api/v1/ingest", tags=["ingest"])
 
@@ -23,13 +24,29 @@ def round_to_49_99(value: Decimal) -> Decimal:
     return Decimal(best)
 
 
-async def ingest_prices() -> None:
-    """Fetch and insert price snapshots from WB Prices and Discounts API.
+async def ingest_prices(project_id: int) -> None:
+    """Fetch and insert price snapshots from WB Prices and Discounts API for a specific project.
     
     Uses GET /api/v2/list/goods/filter with pagination via offset.
     Iterates until listGoods becomes empty.
+    
+    Args:
+        project_id: Project ID to associate price snapshots with (required).
     """
-    token = os.getenv("WB_TOKEN", "") or ""
+    from app.utils.get_project_marketplace_token import get_wb_credentials_for_project
+    
+    # Get credentials from project_marketplaces (preferred) or fallback to env
+    try:
+        credentials = get_wb_credentials_for_project(project_id)
+        if credentials:
+            token = credentials.get("token", "")
+        else:
+            # Not enabled or no connection - use env fallback
+            token = os.getenv("WB_TOKEN", "") or ""
+    except ValueError as e:
+        # Enabled but not connected - log error and skip (error already checked at endpoint level)
+        print(f"ingest_prices: {str(e)}, skipping")
+        return
     if not token or token.upper() == "MOCK":
         print("ingest_prices: skipped (MOCK mode or no token)")
         return
@@ -52,16 +69,16 @@ async def ingest_prices() -> None:
     # Prepare insert SQL
     if has_raw_column:
         insert_sql = text("""
-            INSERT INTO price_snapshots (nm_id, wb_price, wb_discount, spp, customer_price, rrc, raw)
-            VALUES (:nm_id, :wb_price, :wb_discount, :spp, :customer_price, :rrc, CAST(:raw AS jsonb))
+            INSERT INTO price_snapshots (nm_id, wb_price, wb_discount, spp, customer_price, rrc, raw, project_id)
+            VALUES (:nm_id, :wb_price, :wb_discount, :spp, :customer_price, :rrc, CAST(:raw AS jsonb), :project_id)
         """)
     else:
         insert_sql = text("""
-            INSERT INTO price_snapshots (nm_id, wb_price, wb_discount, spp, customer_price, rrc)
-            VALUES (:nm_id, :wb_price, :wb_discount, :spp, :customer_price, :rrc)
+            INSERT INTO price_snapshots (nm_id, wb_price, wb_discount, spp, customer_price, rrc, project_id)
+            VALUES (:nm_id, :wb_price, :wb_discount, :spp, :customer_price, :rrc, :project_id)
         """)
 
-    client = WBClient()
+    client = WBClient(token=token)
     limit = 1000
     offset = 0
     total_inserted = 0
@@ -136,6 +153,7 @@ async def ingest_prices() -> None:
                 "spp": float(spp),
                 "customer_price": float(customer_price),
                 "rrc": float(rrc),
+                "project_id": project_id,
             }
             
             # Add raw data if column exists
@@ -176,9 +194,31 @@ async def get_prices_info():
     }
 
 
-@router.post("/prices")
-async def start_ingest_prices(background_tasks: BackgroundTasks):
-    """Start ingestion of prices from Wildberries API."""
+@router.post("/projects/{project_id}/prices")
+async def start_ingest_prices(
+    project_id: int = Path(..., description="Project ID"),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+    current_user: dict = Depends(get_current_active_user),
+    membership: dict = Depends(get_project_membership)
+):
+    """Start ingestion of prices from Wildberries API for a specific project.
+    
+    Requires project membership.
+    """
+    # Check credentials before starting background task
+    try:
+        credentials = get_wb_credentials_for_project(project_id)
+        if credentials is None:
+            # Not enabled or no connection - allow env fallback
+            pass
+    except ValueError as e:
+        # Enabled but not connected - return error
+        from fastapi import HTTPException, status
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    
     token = os.getenv("WB_TOKEN", "") or ""
     if not token or token.upper() == "MOCK":
         return {
@@ -186,6 +226,6 @@ async def start_ingest_prices(background_tasks: BackgroundTasks):
             "message": "Prices ingestion skipped (MOCK mode or no token configured)",
         }
 
-    background_tasks.add_task(ingest_prices)
-    return {"status": "started", "message": "Prices ingestion started in background"}
+    background_tasks.add_task(ingest_prices, project_id)
+    return {"status": "started", "message": f"Prices ingestion started in background for project {project_id}"}
 

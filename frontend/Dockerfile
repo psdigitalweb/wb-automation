@@ -2,11 +2,14 @@ FROM node:20-alpine AS base
 
 # Install dependencies only when needed
 FROM base AS deps
-RUN apk add --no-cache libc6-compat
+# libc6-compat не требуется для Next.js standalone режима (Next.js 14+)
+# Убрано из-за проблем с DNS в Docker Desktop на Windows
 WORKDIR /app
 
 COPY package.json ./
-RUN npm install
+# Простая установка без сложных настроек
+# Используем только необходимые флаги для ускорения
+RUN npm install --no-audit --legacy-peer-deps
 
 # Rebuild the source code only when needed
 FROM base AS builder

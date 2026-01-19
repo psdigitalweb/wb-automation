@@ -22,15 +22,27 @@ from app.models import Product, PriceSnapshot
 target_metadata = Base.metadata
 
 # Override sqlalchemy.url from DATABASE_URL environment variable
+# Если DATABASE_URL не задан, формируем из POSTGRES_* переменных
 database_url = os.getenv("DATABASE_URL")
+if not database_url:
+    # Формируем из переменных окружения
+    postgres_user = os.getenv("POSTGRES_USER", "wb")
+    postgres_password = os.getenv("POSTGRES_PASSWORD", "wbpass")
+    postgres_host = os.getenv("POSTGRES_HOST", "postgres")
+    postgres_port = os.getenv("POSTGRES_PORT", "5432")
+    postgres_db = os.getenv("POSTGRES_DB", "wb")
+    database_url = f"postgresql+psycopg2://{postgres_user}:{postgres_password}@{postgres_host}:{postgres_port}/{postgres_db}"
+
 if database_url:
-    # Ensure psycopg2 driver is used
-    if "psycopg://" in database_url:
-        database_url = database_url.replace("psycopg://", "postgresql+psycopg2://", 1)
-    elif database_url.startswith("postgresql://"):
+    # Ensure psycopg2 driver is used (исправляем все варианты)
+    if "psycopg://" in database_url or "postgresql+psycopg://" in database_url:
+        database_url = database_url.replace("psycopg://", "psycopg2://", 1).replace("postgresql+psycopg://", "postgresql+psycopg2://", 1)
+    elif database_url.startswith("postgresql://") and "+psycopg2" not in database_url:
         database_url = database_url.replace("postgresql://", "postgresql+psycopg2://", 1)
     elif database_url.startswith("postgres://"):
         database_url = database_url.replace("postgres://", "postgresql+psycopg2://", 1)
+    # Исправляем хост если указан неправильно
+    database_url = database_url.replace("@db:", "@postgres:")
     config.set_main_option("sqlalchemy.url", database_url)
 
 # other values from the config, defined by the needs of env.py,

@@ -1,0 +1,26 @@
+# Docker Compose Override for Development
+# Copy this file to docker-compose.override.yml and adjust values for your environment
+#
+# Usage:
+#   cp docker-compose.override.yml.example docker-compose.override.yml
+#   # Edit docker-compose.override.yml with your values
+
+version: '3.8'
+
+services:
+  api:
+    environment:
+      # Bootstrap: Enable automatic admin user and Legacy project creation (dev only)
+      BOOTSTRAP_ENABLED: "true"
+      
+      # Admin user password (REQUIRED if BOOTSTRAP_ENABLED=true)
+      # Change this to a secure password in your local environment
+      ADMIN_PASSWORD: "dev_password_change_me"
+      
+      # Secrets encryption key (REQUIRED for token encryption)
+      # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+      # This is a development key - DO NOT use in production!
+      PROJECT_SECRETS_KEY: "fb4603fc1d831699133c2a68fb4603fc1d831699133c2a68fb4603fc1d831699133c2a68=="
+
+# Note: docker-compose.override.yml is automatically loaded by docker-compose
+# Values here override docker-compose.yml defaults

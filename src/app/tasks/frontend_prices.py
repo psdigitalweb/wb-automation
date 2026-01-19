@@ -48,20 +48,28 @@ def release_lock(lock_key: str) -> None:
         print(f"release_lock: error releasing lock {lock_key}: {e}")
 
 
-def get_setting(key: str, default: Any = None) -> Optional[Any]:
-    """Get setting from app_settings table."""
-    sql = text(f"""
-        SELECT value->>'{key.split(".")[-1]}' AS value
+def get_setting(key: str, field: str, default: Any = None) -> Optional[Any]:
+    """Get a JSON setting from app_settings table.
+
+    NOTE: legacy helper. Prefer using dedicated settings keys like:
+      - frontend_prices.brand_base_url (value.url)
+      - frontend_prices.sleep_ms (value.value)
+    This function is kept for backward compatibility.
+    """
+    sql = text(
+        """
+        SELECT value ->> :field AS value
         FROM app_settings
         WHERE key = :key
-    """)
-    
+        """
+    )
+
     try:
         with engine.connect() as conn:
-            result = conn.execute(sql, {"key": key}).scalar_one_or_none()
-            return result if result else default
+            result = conn.execute(sql, {"key": key, "field": field}).scalar_one_or_none()
+            return result if result is not None and result != "" else default
     except Exception as e:
-        print(f"get_setting: error getting {key}: {e}")
+        print(f"get_setting: error getting {key}.{field}: {e}")
         return default
 
 
@@ -88,24 +96,29 @@ def sync_frontend_prices_brand() -> Dict[str, Any]:
         }
     
     try:
-        # Get settings
-        brand_id_str = get_setting("frontend_prices.brand_id", "brand_id")
-        base_url = get_setting("frontend_prices.brand_base_url", "url")
-        sleep_ms_str = get_setting("frontend_prices.sleep_ms", "value", "800")
-        
-        if not brand_id_str:
-            print("sync_frontend_prices_brand: brand_id not configured in app_settings")
-            return {
-                "status": "error",
-                "reason": "brand_id_not_configured",
-            }
-        
+        # Get global settings (brand_base_url + sleep_ms)
+        base_url_sql = text(
+            """
+            SELECT value->>'url' AS url
+            FROM app_settings
+            WHERE key = 'frontend_prices.brand_base_url'
+            """
+        )
+        sleep_ms_sql = text(
+            """
+            SELECT value->>'value' AS value
+            FROM app_settings
+            WHERE key = 'frontend_prices.sleep_ms'
+            """
+        )
+
+        with engine.connect() as conn:
+            base_url = conn.execute(base_url_sql).scalar_one_or_none()
+            sleep_ms_str = conn.execute(sleep_ms_sql).scalar_one_or_none()
+
         if not base_url:
-            print("sync_frontend_prices_brand: brand_base_url not configured in app_settings")
-            return {
-                "status": "error",
-                "reason": "brand_base_url_not_configured",
-            }
+            print("sync_frontend_prices_brand: brand_base_url not configured in app_settings (frontend_prices.brand_base_url)")
+            return {"status": "error", "reason": "brand_base_url_not_configured"}
         
         try:
             brand_id = int(brand_id_str)
@@ -121,24 +134,49 @@ def sync_frontend_prices_brand() -> Dict[str, Any]:
         except (ValueError, TypeError):
             sleep_ms = 800
             print(f"sync_frontend_prices_brand: invalid sleep_ms, using default 800")
-        
-        print(f"sync_frontend_prices_brand: starting, brand_id={brand_id}, sleep_ms={sleep_ms}")
-        
-        # Run async ingestion
-        result = asyncio.run(
-            ingest_frontend_brand_prices_task(
-                brand_id=brand_id,
-                base_url=base_url,
-                max_pages=0,  # Until empty
-                sleep_ms=sleep_ms,
-            )
+
+        # For periodic job: iterate all enabled WB project brand_ids
+        brand_ids_sql = text(
+            """
+            SELECT DISTINCT pm.settings_json->>'brand_id' AS brand_id
+            FROM project_marketplaces pm
+            JOIN marketplaces m ON m.id = pm.marketplace_id
+            WHERE m.code = 'wildberries'
+              AND pm.is_enabled = true
+              AND pm.settings_json ? 'brand_id'
+              AND (pm.settings_json->>'brand_id') IS NOT NULL
+              AND (pm.settings_json->>'brand_id') != ''
+            """
         )
-        
-        print(f"sync_frontend_prices_brand: completed, result={result}")
-        return {
-            "status": "completed",
-            **result,
-        }
+        with engine.connect() as conn:
+            brand_id_rows = conn.execute(brand_ids_sql).all()
+
+        brand_ids: list[int] = []
+        for (bid,) in brand_id_rows:
+            try:
+                brand_ids.append(int(bid))
+            except Exception:
+                continue
+
+        if not brand_ids:
+            print("sync_frontend_prices_brand: no enabled WB projects with settings_json.brand_id; skipping")
+            return {"status": "skipped", "reason": "no_brand_ids"}
+
+        print(f"sync_frontend_prices_brand: starting for {len(brand_ids)} brand_id(s), sleep_ms={sleep_ms}")
+
+        results: dict[str, Any] = {"per_brand": {}}
+        for bid in brand_ids:
+            r = asyncio.run(
+                ingest_frontend_brand_prices_task(
+                    brand_id=bid,
+                    base_url=base_url,
+                    max_pages=0,
+                    sleep_ms=sleep_ms,
+                )
+            )
+            results["per_brand"][str(bid)] = r
+
+        return {"status": "completed", **results}
     
     except Exception as e:
         print(f"sync_frontend_prices_brand: error: {type(e).__name__}: {e}")
@@ -286,9 +324,11 @@ async def ingest_frontend_brand_prices_task(
         
         # Process products
         rows: list[Dict[str, Any]] = []
+        skipped_no_nm_id = 0
         for product in products:
             nm_id = product.get("id") or product.get("nmId") or product.get("nm_id")
             if not nm_id:
+                skipped_no_nm_id += 1
                 continue
             
             vendor_code = product.get("supplierVendorCode") or product.get("vendorCode")

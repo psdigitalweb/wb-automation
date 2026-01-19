@@ -15,6 +15,7 @@ REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT = os.getenv("REDIS_PORT", "6379")
 
 WB_TOKEN = os.getenv("WB_TOKEN", "MOCK")
+WB_VALIDATE_TOKEN = os.getenv("WB_VALIDATE_TOKEN", "true").lower() in ("true", "1", "yes")
 JWT_SECRET = os.getenv("JWT_SECRET", "devsecret")
 TZ = os.getenv("TZ", "Europe/Moscow")
 

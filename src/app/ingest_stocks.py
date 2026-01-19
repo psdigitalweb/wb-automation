@@ -5,12 +5,14 @@ import json
 import os
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Query
+from fastapi import APIRouter, BackgroundTasks, Query, Path, Depends
 from sqlalchemy import text
 
 from app.db import engine
 from app.wb.client import WBClient
 from app import db_products
+from app.deps import get_current_active_user, get_project_membership
+from app.utils.get_project_marketplace_token import get_wb_credentials_for_project
 
 router = APIRouter(prefix="/api/v1/ingest", tags=["ingest"])
 # Отдельный роутер для витринных эндпоинтов по остаткам
@@ -81,8 +83,11 @@ async def ingest_warehouses() -> None:
         print("ingest_warehouses: no valid warehouses to upsert")
 
 
-async def ingest_stocks() -> None:
-    """Fetch and insert stock snapshots from WB API.
+async def ingest_stocks(project_id: int) -> None:
+    """Fetch and insert stock snapshots from WB API for a specific project.
+    
+    Args:
+        project_id: Project ID to associate stock snapshots with (required).
 
     Алгоритм:
     1. Получаем список складов из wb_warehouses (если нет — дергаем ingest_warehouses).
@@ -91,7 +96,18 @@ async def ingest_stocks() -> None:
        POST /api/v3/stocks/{warehouseId} с body {"chrtIds": [...]}
     4. Сохраняем результаты в stock_snapshots (append-only).
     """
-    token = os.getenv("WB_TOKEN", "") or ""
+    # Get credentials from project_marketplaces (preferred) or fallback to env
+    try:
+        credentials = get_wb_credentials_for_project(project_id)
+        if credentials:
+            token = credentials.get("token", "")
+        else:
+            # Not enabled or no connection - use env fallback
+            token = os.getenv("WB_TOKEN", "") or ""
+    except ValueError as e:
+        # Enabled but not connected - log error and skip (error already checked at endpoint level)
+        print(f"ingest_stocks: {str(e)}, skipping")
+        return
     if not token or token.upper() == "MOCK":
         print("ingest_stocks: skipped (MOCK mode or no token)")
         return
@@ -132,12 +148,12 @@ async def ingest_stocks() -> None:
 
     insert_sql = text(
         """
-        INSERT INTO stock_snapshots (nm_id, warehouse_wb_id, quantity, snapshot_at, raw)
-        VALUES (:nm_id, :warehouse_wb_id, :quantity, now(), :raw)
+        INSERT INTO stock_snapshots (nm_id, warehouse_wb_id, quantity, snapshot_at, raw, project_id)
+        VALUES (:nm_id, :warehouse_wb_id, :quantity, now(), :raw, :project_id)
         """
     )
 
-    # Для сопоставления chrtId -> nm_id используем products.raw->'sizes'
+    # Для сопоставления chrtId -> nm_id используем products.raw->'sizes' из данного проекта
     chrt_to_nm_sql = text(
         """
         SELECT (elem->>'chrtID')::bigint AS chrt_id,
@@ -148,11 +164,12 @@ async def ingest_stocks() -> None:
         ) AS elem
         WHERE elem ? 'chrtID'
           AND (elem->>'chrtID') ~ '^[0-9]+'
+          AND products.project_id = :project_id
         """
     )
 
     with engine.connect() as conn:
-        mapping_rows = conn.execute(chrt_to_nm_sql).mappings().all()
+        mapping_rows = conn.execute(chrt_to_nm_sql, {"project_id": project_id}).mappings().all()
         chrt_to_nm: Dict[int, int] = {
             int(row["chrt_id"]): int(row["nm_id"]) for row in mapping_rows if row.get("chrt_id") is not None
         }
@@ -230,6 +247,7 @@ async def ingest_stocks() -> None:
                         else None,
                         "quantity": int(quantity),
                         "raw": _serialize_json_field(stock),
+                        "project_id": project_id,
                     }
                 )
 
@@ -283,9 +301,31 @@ async def get_stocks_info():
     }
 
 
-@router.post("/stocks")
-async def start_ingest_stocks(background_tasks: BackgroundTasks):
-    """Start ingestion of stock balances from Wildberries API."""
+@router.post("/projects/{project_id}/stocks")
+async def start_ingest_stocks(
+    project_id: int = Path(..., description="Project ID"),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+    current_user: dict = Depends(get_current_active_user),
+    membership: dict = Depends(get_project_membership)
+):
+    """Start ingestion of stock balances from Wildberries API for a specific project.
+    
+    Requires project membership.
+    """
+    # Check credentials before starting background task
+    try:
+        credentials = get_wb_credentials_for_project(project_id)
+        if credentials is None:
+            # Not enabled or no connection - allow env fallback
+            pass
+    except ValueError as e:
+        # Enabled but not connected - return error
+        from fastapi import HTTPException, status
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    
     token = os.getenv("WB_TOKEN", "") or ""
     if not token or token.upper() == "MOCK":
         return {
@@ -293,23 +333,28 @@ async def start_ingest_stocks(background_tasks: BackgroundTasks):
             "message": "Stocks ingestion skipped (MOCK mode or no token configured)"
         }
     
-    background_tasks.add_task(ingest_stocks)
-    return {"status": "started", "message": "Stocks ingestion started in background"}
+    background_tasks.add_task(ingest_stocks, project_id)
+    return {"status": "started", "message": f"Stocks ingestion started in background for project {project_id}"}
 
 
-@stocks_router.get("/stocks/latest")
+@stocks_router.get("/projects/{project_id}/stocks/latest")
 async def get_latest_stocks(
+    project_id: int = Path(..., description="Project ID"),
     limit: int = Query(50, ge=1, le=1000),
-    offset: int = Query(0, ge=0)
+    offset: int = Query(0, ge=0),
+    current_user: dict = Depends(get_current_active_user),
+    membership: dict = Depends(get_project_membership)
 ):
-    """Return latest stock snapshots with pagination.
+    """Return latest stock snapshots with pagination for a specific project.
 
-    Возвращает последние записи из stock_snapshots, отсортированные по snapshot_at DESC.
+    Возвращает последние записи из stock_snapshots для проекта, отсортированные по snapshot_at DESC.
+    Requires project membership.
     """
     sql = text(
         """
         SELECT nm_id, warehouse_wb_id, quantity, snapshot_at
         FROM stock_snapshots
+        WHERE project_id = :project_id
         ORDER BY snapshot_at DESC, nm_id
         LIMIT :limit OFFSET :offset
         """
@@ -317,14 +362,21 @@ async def get_latest_stocks(
 
     try:
         with engine.connect() as conn:
-            result = conn.execute(sql, {"limit": limit, "offset": offset}).mappings().all()
+            # Get total count filtered by project_id
+            count_sql = text("SELECT COUNT(*) as total FROM stock_snapshots WHERE project_id = :project_id")
+            total_result = conn.execute(count_sql, {"project_id": project_id}).scalar()
+            total = int(total_result) if total_result else 0
+            
+            # Get paginated data
+            result = conn.execute(sql, {"project_id": project_id, "limit": limit, "offset": offset}).mappings().all()
             rows = [dict(row) for row in result]
 
         return {
             "data": rows,
             "limit": limit,
             "offset": offset,
-            "count": len(rows)
+            "count": len(rows),
+            "total": total
         }
     except Exception as e:
         # Handle case when table doesn't exist

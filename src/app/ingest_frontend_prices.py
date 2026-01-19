@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse, parse_qs
@@ -223,7 +224,13 @@ async def ingest_frontend_brand_prices(
     
     start_page = extract_page_from_url(base_url)
     
-    print(f"ingest_frontend_prices: starting, brand_id={brand_id}, start_page={start_page}, max_pages={max_pages}, sleep_ms={sleep_ms}")
+    run_at = datetime.now(timezone.utc)
+    run_at_iso = run_at.isoformat()
+
+    print(
+        f"ingest_frontend_prices: starting, brand_id={brand_id}, start_page={start_page}, "
+        f"max_pages={max_pages}, sleep_ms={sleep_ms}, run_at={run_at_iso}"
+    )
     
     client = CatalogClient()
     
@@ -250,7 +257,7 @@ async def ingest_frontend_brand_prices(
         (snapshot_at, source, query_type, query_value, page, nm_id, vendor_code, name, 
          price_basic, price_product, sale_percent, discount_calc_percent, raw)
         VALUES 
-        (now(), 'catalog_wb', 'brand', :query_value, :page, :nm_id, :vendor_code, :name,
+        (:snapshot_at, 'catalog_wb', 'brand', :query_value, :page, :nm_id, :vendor_code, :name,
          :price_basic, :price_product, :sale_percent, :discount_calc_percent, CAST(:raw AS jsonb))
     """)
     
@@ -260,6 +267,8 @@ async def ingest_frontend_brand_prices(
     page = start_page
     total_pages: Optional[int] = None
     empty_pages_count = 0  # Count consecutive empty pages
+    seen_nm_ids: set[int] = set()
+    dup_in_run = 0
     
     while True:
         pages_fetched += 1
@@ -382,6 +391,17 @@ async def ingest_frontend_brand_prices(
             if not nm_id:
                 skipped_no_nm_id += 1
                 continue
+            try:
+                nm_id_int = int(nm_id)
+            except Exception:
+                skipped_no_nm_id += 1
+                continue
+
+            # De-duplicate within a single run (WB catalog pages may overlap for popular sorting)
+            if nm_id_int in seen_nm_ids:
+                dup_in_run += 1
+                continue
+            seen_nm_ids.add(nm_id_int)
             
             vendor_code = product.get("supplierVendorCode") or product.get("vendorCode")
             name = product.get("name")
@@ -419,9 +439,10 @@ async def ingest_frontend_brand_prices(
             
             # Insert row even if price_basic/price_product are None
             row = {
+                "snapshot_at": run_at,
                 "query_value": str(brand_id),
                 "page": page,
-                "nm_id": int(nm_id),
+                "nm_id": nm_id_int,
                 "vendor_code": vendor_code,
                 "name": name,
                 "price_basic": float(price_basic) if price_basic else None,
@@ -440,7 +461,10 @@ async def ingest_frontend_brand_prices(
             with engine.begin() as conn:
                 conn.execute(insert_sql, rows)
             total_inserted += len(rows)
-            print(f"ingest_frontend_prices: inserted {len(rows)} records from page {page} (total: {total_inserted})")
+            print(
+                f"ingest_frontend_prices: inserted {len(rows)} records from page {page} "
+                f"(total_saved={total_inserted}, distinct_nm_id={len(seen_nm_ids)}, dup_in_run={dup_in_run})"
+            )
         
         # Sleep between pages
         if sleep_ms > 0:
@@ -454,12 +478,20 @@ async def ingest_frontend_brand_prices(
             print(f"ingest_frontend_prices: reached total_pages={total_pages}, stopping")
             break
     
-    print(f"ingest_frontend_prices: finished, pages_fetched={pages_fetched}, total_pages={total_pages}, total_products={total_products}, total_inserted={total_inserted}")
+    print(
+        f"ingest_frontend_prices: finished, run_at={run_at_iso}, pages_fetched={pages_fetched}, "
+        f"total_pages={total_pages}, items_fetched={total_products}, items_saved={total_inserted}, "
+        f"distinct_nm_id={len(seen_nm_ids)}, dup_in_run={dup_in_run}"
+    )
     
     return {
-        "pages_fetched": pages_fetched,
-        "total_products": total_products,
-        "inserted": total_inserted
+        "run_at": run_at_iso,
+        "pages_processed": pages_fetched,
+        "total_pages": total_pages,
+        "items_fetched": total_products,
+        "items_saved": total_inserted,
+        "distinct_nm_id": len(seen_nm_ids),
+        "dup_in_run": dup_in_run,
     }
 
 

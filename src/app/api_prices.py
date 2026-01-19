@@ -3,11 +3,12 @@
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Path, Depends
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from app.db import engine
+from app.deps import get_current_active_user, get_project_membership
 
 router = APIRouter(prefix="/api/v1", tags=["prices"])
 
@@ -34,51 +35,24 @@ def _serialize_row(row: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
-@router.get("/prices/latest")
+@router.get("/projects/{project_id}/prices/latest")
 async def get_latest_prices(
+    project_id: int = Path(..., description="Project ID"),
     limit: int = Query(50, ge=1, le=1000, description="Maximum number of records to return"),
     offset: int = Query(0, ge=0, description="Number of records to skip"),
+    current_user: dict = Depends(get_current_active_user),
+    membership: dict = Depends(get_project_membership)
 ):
-    """Get latest prices for all products with pagination.
+    """Get latest prices for all products with pagination for a specific project.
     
-    Returns the most recent price snapshot for each product (nm_id),
+    Returns the most recent price snapshot for each product (nm_id) in the project,
     sorted by created_at DESC (most recent first), then by nm_id.
     Uses CTE to get latest prices if VIEW doesn't exist.
+    Requires project membership.
     """
     try:
-        # Try to use VIEW first (if it exists)
-        query = text("""
-            SELECT 
-                nm_id,
-                wb_price,
-                wb_discount,
-                spp,
-                customer_price,
-                rrc,
-                price_at AS snapshot_at
-            FROM v_products_latest_price
-            ORDER BY price_at DESC, nm_id
-            LIMIT :limit OFFSET :offset
-        """)
-        
-        with engine.connect() as conn:
-            result = conn.execute(query, {"limit": limit, "offset": offset})
-            rows = [dict(row._mapping) for row in result]
-        
-        # Get total count from VIEW
-        count_query = text("SELECT COUNT(*) AS cnt FROM v_products_latest_price")
-        with engine.connect() as conn:
-            count_result = conn.execute(count_query).scalar_one()
-        
-        return {
-            "data": [_serialize_row(row) for row in rows],
-            "limit": limit,
-            "offset": offset,
-            "count": len(rows),
-            "total": count_result if count_result else len(rows)
-        }
-    except Exception:
-        # Fallback to CTE if VIEW doesn't exist
+        # Try to use VIEW first (if it exists), but filter by project_id from price_snapshots
+        # Since VIEW might not have project_id, we'll use CTE with project_id filter
         query = text("""
             WITH latest AS (
                 SELECT DISTINCT ON (nm_id)
@@ -90,6 +64,7 @@ async def get_latest_prices(
                     rrc,
                     created_at AS snapshot_at
                 FROM price_snapshots
+                WHERE project_id = :project_id
                 ORDER BY nm_id, created_at DESC
             )
             SELECT * FROM latest
@@ -102,6 +77,7 @@ async def get_latest_prices(
                 SELECT DISTINCT ON (nm_id)
                     nm_id
                 FROM price_snapshots
+                WHERE project_id = :project_id
                 ORDER BY nm_id, created_at DESC
             )
             SELECT COUNT(*) AS cnt FROM latest
@@ -109,10 +85,10 @@ async def get_latest_prices(
         
         try:
             with engine.connect() as conn:
-                result = conn.execute(query, {"limit": limit, "offset": offset})
+                result = conn.execute(query, {"project_id": project_id, "limit": limit, "offset": offset})
                 rows = [dict(row._mapping) for row in result]
                 
-                count_result = conn.execute(count_query).scalar_one()
+                count_result = conn.execute(count_query, {"project_id": project_id}).scalar_one()
             
             return {
                 "data": [_serialize_row(row) for row in rows],
@@ -131,6 +107,16 @@ async def get_latest_prices(
                 "total": 0,
                 "error": "Table not found or error occurred"
             }
+    except Exception as e:
+        print(f"get_latest_prices: error: {e}")
+        return {
+            "data": [],
+            "limit": limit,
+            "offset": offset,
+            "count": 0,
+            "total": 0,
+            "error": "Table not found or error occurred"
+        }
 
 
 @router.get("/products/with-latest-price")

@@ -21,13 +21,20 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     # Create app_settings table for storing application settings
-    op.create_table(
-        'app_settings',
-        sa.Column('key', sa.Text(), nullable=False),
-        sa.Column('value', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
-        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
-        sa.PrimaryKeyConstraint('key')
-    )
+    # Проверяем, не существует ли уже таблица (на случай если была создана миграцией ea2d9ac02904)
+    from sqlalchemy import inspect
+    conn = op.get_bind()
+    inspector = inspect(conn)
+    tables = inspector.get_table_names()
+    
+    if 'app_settings' not in tables:
+        op.create_table(
+            'app_settings',
+            sa.Column('key', sa.Text(), nullable=False),
+            sa.Column('value', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+            sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+            sa.PrimaryKeyConstraint('key')
+        )
     
     # Insert default settings
     op.execute("""

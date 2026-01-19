@@ -3,8 +3,9 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import '../globals.css'
+import { getApiBase } from '@/lib/api'
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || '/api'
+const API_BASE = getApiBase()
 const PAGE_SIZE = 50
 
 interface FrontendPrice {
@@ -44,7 +45,6 @@ export default function FrontendPricesPage() {
   const [maxPages, setMaxPages] = useState('2')
   const [sleepMs, setSleepMs] = useState('800')
   const [ingesting, setIngesting] = useState(false)
-  const [savingUrl, setSavingUrl] = useState(false)
   const [savingUrl, setSavingUrl] = useState(false)
   const [urlLoaded, setUrlLoaded] = useState(false)
 

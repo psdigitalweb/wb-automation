@@ -3,8 +3,9 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import '../globals.css'
+import { getApiBase } from '@/lib/api'
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || '/api'
+const API_BASE = getApiBase()
 
 interface StockRecord {
   nm_id: number
@@ -18,6 +19,7 @@ export default function StocksPage() {
   const [loading, setLoading] = useState(true)
   const [limit] = useState(50)
   const [offset, setOffset] = useState(0)
+  const [total, setTotal] = useState(0)
 
   useEffect(() => {
     loadData()
@@ -27,8 +29,12 @@ export default function StocksPage() {
     try {
       setLoading(true)
       const res = await fetch(`${API_BASE}/v1/stocks/latest?limit=${limit}&offset=${offset}`)
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+      }
       const result = await res.json()
       setData(result.data || [])
+      setTotal(result.total || 0)
       setLoading(false)
     } catch (error) {
       console.error('Failed to load stocks:', error)
@@ -74,8 +80,8 @@ export default function StocksPage() {
             <button onClick={() => setOffset(Math.max(0, offset - limit))} disabled={offset === 0}>
               Previous
             </button>
-            <span>Page {Math.floor(offset / limit) + 1} (offset: {offset})</span>
-            <button onClick={() => setOffset(offset + limit)} disabled={data.length < limit}>
+            <span>Page {Math.floor(offset / limit) + 1} of {Math.ceil(total / limit)} (Total: {total}, Showing: {data.length})</span>
+            <button onClick={() => setOffset(offset + limit)} disabled={offset + limit >= total}>
               Next
             </button>
           </div>

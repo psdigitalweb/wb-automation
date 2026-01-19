@@ -1,171 +1,95 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import Link from 'next/link'
+import { useRouter } from 'next/navigation'
+import { apiPostData, apiGetData } from '../lib/apiClient'
+import { saveTokens, saveUser, isAuthenticated } from '../lib/auth'
 import './globals.css'
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || '/api'
-
-interface Metrics {
-  counts: {
-    products: number
-    warehouses: number
-    stock_snapshots: number
-    supplier_stock_snapshots: number
-    prices: number
-    frontend_prices: number
-  }
-  max_dates: {
-    stock_snapshots: string | null
-    supplier_stock_snapshots: string | null
-    price_snapshots: string | null
-    frontend_price_snapshots: string | null
-  }
-}
-
-export default function Dashboard() {
-  const [metrics, setMetrics] = useState<Metrics | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [toast, setToast] = useState<string | null>(null)
+export default function LoginPage() {
+  const router = useRouter()
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // Redirect if already authenticated
   useEffect(() => {
-    loadMetrics()
-    // Refresh metrics every 30 seconds
-    const interval = setInterval(loadMetrics, 30000)
-    return () => clearInterval(interval)
-  }, [])
+    if (isAuthenticated()) {
+      router.push('/app/projects')
+    }
+  }, [router])
 
-  const loadMetrics = async () => {
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault()
+    console.log('handleLogin called', { username: username ? '***' : '', password: password ? '***' : '' })
+    setError(null)
+    
+    // Validate inputs
+    if (!username.trim() || !password.trim()) {
+      setError('Username and password are required')
+      return
+    }
+    
+    setLoading(true)
+
     try {
-      setError(null)
-      setLoading(true)
-      const res = await fetch(`${API_BASE}/v1/dashboard/metrics`)
-      
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}: ${res.statusText}`)
-      }
-      
-      const data = await res.json()
-      setMetrics(data)
-      setLoading(false)
-    } catch (error) {
-      console.error('Failed to load metrics:', error)
-      setError(error instanceof Error ? error.message : 'Failed to load metrics')
+      console.log('Attempting login with username:', username)
+      const loginPayload = { username: username.trim(), password }
+      console.log('Sending POST to /v1/auth/login with payload:', { username: loginPayload.username, password: '***' })
+      // Login
+      const tokens = await apiPostData<{ access_token: string; refresh_token: string; token_type: string }>(
+        '/v1/auth/login',
+        loginPayload
+      )
+      console.log('Login successful, tokens received')
+      saveTokens(tokens)
+
+      // Get user info
+      const user = await apiGetData<any>('/v1/auth/me')
+      saveUser(user)
+
+      // Redirect to projects page
+      router.push('/app/projects')
+    } catch (err: any) {
+      console.error('Login error:', err)
+      setError(err?.detail || err?.message || 'Login failed')
+    } finally {
       setLoading(false)
     }
-  }
-
-  const triggerIngest = async (type: string) => {
-    try {
-      setToast(`Starting ${type} ingestion...`)
-      const res = await fetch(`${API_BASE}/v1/ingest/${type}`, {
-        method: 'POST'
-      })
-      const data = await res.json()
-      setToast(data.message || `Ingestion ${type} started`)
-      setTimeout(() => setToast(null), 3000)
-      // Reload metrics after a delay
-      setTimeout(loadMetrics, 2000)
-    } catch (error) {
-      setToast(`Error: ${error}`)
-      setTimeout(() => setToast(null), 3000)
-    }
-  }
-
-  const formatDate = (dateStr: string | null) => {
-    if (!dateStr) return 'N/A'
-    return new Date(dateStr).toLocaleString('ru-RU')
   }
 
   return (
-    <div className="container">
-      <h1>WB Automation Dashboard</h1>
-
-      {toast && <div className="toast">{toast}</div>}
-
-      <div className="card">
-        <h2>Metrics</h2>
-        {loading ? (
-          <p>Loading...</p>
-        ) : error ? (
-          <div>
-            <p style={{ color: 'red' }}>Error: {error}</p>
-            <button onClick={loadMetrics}>Retry</button>
+    <div className="login-container">
+      <div className="login-card">
+        <h1>E-com Core</h1>
+        <h2>Login</h2>
+        {error && <div className="error-message">{error}</div>}
+        <form onSubmit={handleLogin}>
+          <div className="form-group">
+            <label>Username</label>
+            <input
+              type="text"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              required
+              autoFocus
+            />
           </div>
-        ) : metrics ? (
-          <div className="metrics">
-            <div className="metric-card">
-              <div className="metric-value">{metrics.counts.products}</div>
-              <div className="metric-label">Products</div>
-            </div>
-            <div className="metric-card">
-              <div className="metric-value">{metrics.counts.warehouses}</div>
-              <div className="metric-label">Warehouses</div>
-            </div>
-            <div className="metric-card">
-              <div className="metric-value">{metrics.counts.stock_snapshots}</div>
-              <div className="metric-label">Stock Snapshots</div>
-            </div>
-            <div className="metric-card">
-              <div className="metric-value">{metrics.counts.supplier_stock_snapshots}</div>
-              <div className="metric-label">Supplier Stock Snapshots</div>
-            </div>
-            <div className="metric-card">
-              <div className="metric-value">{metrics.counts.prices}</div>
-              <div className="metric-label">Latest Prices</div>
-            </div>
-            <div className="metric-card">
-              <div className="metric-value">{metrics.counts.frontend_prices}</div>
-              <div className="metric-label">Frontend Prices</div>
-            </div>
+          <div className="form-group">
+            <label>Password</label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+            />
           </div>
-        ) : (
-          <p>Failed to load metrics</p>
-        )}
-
-        {metrics && (
-          <div style={{ marginTop: '20px' }}>
-            <p><strong>Last Stock Snapshot:</strong> {formatDate(metrics.max_dates.stock_snapshots)}</p>
-            <p><strong>Last Supplier Stock:</strong> {formatDate(metrics.max_dates.supplier_stock_snapshots)}</p>
-            <p><strong>Last Price Snapshot:</strong> {formatDate(metrics.max_dates.price_snapshots)}</p>
-            <p><strong>Last Frontend Price Snapshot:</strong> {formatDate(metrics.max_dates.frontend_price_snapshots)}</p>
-          </div>
-        )}
+          <button type="submit" disabled={loading}>
+            {loading ? 'Logging in...' : 'Login'}
+          </button>
+        </form>
       </div>
-
-      <div className="card">
-        <h2>Ingestion Controls</h2>
-        <button onClick={() => triggerIngest('warehouses')}>
-          Run Warehouses Ingestion
-        </button>
-        <button onClick={() => triggerIngest('stocks')}>
-          Run Stocks Ingestion
-        </button>
-        <button onClick={() => triggerIngest('supplier-stocks')}>
-          Run Supplier Stocks Ingestion
-        </button>
-        <button onClick={() => triggerIngest('prices')}>
-          Run Prices Ingestion
-        </button>
-      </div>
-
-                  <div className="card">
-                    <h2>Navigation</h2>
-                    <Link href="/stocks">
-                      <button>View Stocks</button>
-                    </Link>
-                    <Link href="/supplier-stocks">
-                      <button>View Supplier Stocks</button>
-                    </Link>
-                    <Link href="/prices">
-                      <button>View Prices</button>
-                    </Link>
-                    <Link href="/frontend-prices">
-                      <button>Frontend Prices</button>
-                    </Link>
-                  </div>
     </div>
   )
 }
-

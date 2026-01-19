@@ -6,6 +6,10 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: wb
     env_file: .env
+    volumes:
+      # Persistent volume для данных PostgreSQL
+      # Без этого volume данные теряются при docker compose down
+      - postgres_data:/var/lib/postgresql/data
     # Не публикуем порт наружу
     expose:
       - "5432"
@@ -23,10 +27,13 @@ services:
       - PYTHONPATH=/app/src
     volumes:
       - ./:/app
+      - ./test.xml:/app/test.xml:ro  # Монтируем test.xml для RRP ingestion
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --app-dir /app/src
     depends_on:
       - postgres
-    # Не публикуем порт наружу, только expose для nginx
+    # Публикуем порт для прямого доступа к API (удобно для разработки)
+    ports:
+      - "8000:8000"
     expose:
       - "8000"
     dns:
@@ -69,14 +76,24 @@ services:
   frontend:
     build:
       context: ./frontend
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.dev  # Используем dev версию для локальной разработки
     environment:
       - NEXT_PUBLIC_API_BASE=/api
-    # Не публикуем порт наружу, только expose для nginx
+      - NEXT_PUBLIC_API_URL=http://api:8000/api  # URL для rewrites в Next.js (внутренний Docker)
+      - NODE_ENV=development
+      - HOSTNAME=0.0.0.0  # Явно указываем, что Next.js должен слушать на всех интерфейсах
+      - PORT=3000
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules  # Изолируем node_modules от хоста
+      - /app/.next  # Изолируем .next от хоста
+    ports:
+      - "3000:3000"  # Публикуем порт для прямого доступа
     expose:
       - "3000"
     depends_on:
       - api
+    command: npm run dev  # Явно указываем dev режим
 
   nginx:
     image: nginx:alpine
@@ -90,3 +107,7 @@ services:
       - api
       - adminer
     restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local

@@ -35,7 +35,9 @@ def ensure_schema() -> None:
             vendor_code     TEXT,
             title           TEXT,
             brand           TEXT,
+            subject_id      INTEGER,
             subject_name    TEXT,
+            description     TEXT,
             price_u         BIGINT,
             sale_price_u    BIGINT,
             rating          NUMERIC(3, 2),
@@ -43,6 +45,10 @@ def ensure_schema() -> None:
             sizes           JSONB,
             colors          JSONB,
             pics            JSONB,
+            dimensions      JSONB,
+            characteristics JSONB,
+            created_at_api  TIMESTAMPTZ,
+            need_kiz        BOOLEAN,
             raw             JSONB,
             updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
             first_seen_at   TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -72,6 +78,8 @@ def ensure_schema() -> None:
             create_indexes_sql.append(text("CREATE INDEX IF NOT EXISTS idx_products_brand ON products(brand);"))
         if 'subject_name' in existing_columns:
             create_indexes_sql.append(text("CREATE INDEX IF NOT EXISTS idx_products_subject ON products(subject_name);"))
+        if 'subject_id' in existing_columns:
+            create_indexes_sql.append(text("CREATE INDEX IF NOT EXISTS idx_products_subject_id ON products(subject_id);"))
         if 'nm_id' in existing_columns:
             create_indexes_sql.append(text("CREATE INDEX IF NOT EXISTS idx_products_nm_id ON products(nm_id);"))
         if 'vendor_code' in existing_columns:
@@ -101,13 +109,15 @@ def _chunked(iterable: Iterable[Dict[str, Any]], size: int) -> Iterator[List[Dic
         yield batch
 
 
-def upsert_products(rows: List[Dict[str, Any]]) -> Dict[str, int]:
+def upsert_products(rows: List[Dict[str, Any]], project_id: int) -> Dict[str, int]:
     """Insert or update product rows by `nm_id` in batches of 200.
 
     Args:
         rows: List of dicts with keys: nm_id, vendor_code, title, brand,
-              subject_name, price_u, sale_price_u, rating, feedbacks,
-              sizes, colors, pics, raw. Values may be None.
+              subject_id, subject_name, description, price_u, sale_price_u, 
+              rating, feedbacks, sizes, colors, pics, dimensions, 
+              characteristics, created_at_api, need_kiz, raw. Values may be None.
+        project_id: Project ID to associate products with (required).
 
     Returns:
         Dict with approximate counts: {"inserted": X, "updated": Y}.
@@ -122,7 +132,9 @@ def upsert_products(rows: List[Dict[str, Any]]) -> Dict[str, int]:
             vendor_code,
             title,
             brand,
+            subject_id,
             subject_name,
+            description,
             price_u,
             sale_price_u,
             rating,
@@ -130,13 +142,20 @@ def upsert_products(rows: List[Dict[str, Any]]) -> Dict[str, int]:
             sizes,
             colors,
             pics,
-            raw
+            dimensions,
+            characteristics,
+            created_at_api,
+            need_kiz,
+            raw,
+            project_id
         ) VALUES (
             :nm_id,
             :vendor_code,
             :title,
             :brand,
+            :subject_id,
             :subject_name,
+            :description,
             :price_u,
             :sale_price_u,
             :rating,
@@ -144,13 +163,20 @@ def upsert_products(rows: List[Dict[str, Any]]) -> Dict[str, int]:
             :sizes,
             :colors,
             :pics,
-            :raw
+            :dimensions,
+            :characteristics,
+            :created_at_api,
+            :need_kiz,
+            :raw,
+            :project_id
         )
-        ON CONFLICT (nm_id) DO UPDATE SET
+        ON CONFLICT (project_id, nm_id) DO UPDATE SET
             vendor_code = EXCLUDED.vendor_code,
             title = EXCLUDED.title,
             brand = EXCLUDED.brand,
+            subject_id = EXCLUDED.subject_id,
             subject_name = EXCLUDED.subject_name,
+            description = EXCLUDED.description,
             price_u = EXCLUDED.price_u,
             sale_price_u = EXCLUDED.sale_price_u,
             rating = EXCLUDED.rating,
@@ -158,13 +184,22 @@ def upsert_products(rows: List[Dict[str, Any]]) -> Dict[str, int]:
             sizes = EXCLUDED.sizes,
             colors = EXCLUDED.colors,
             pics = EXCLUDED.pics,
+            dimensions = EXCLUDED.dimensions,
+            characteristics = EXCLUDED.characteristics,
+            created_at_api = EXCLUDED.created_at_api,
+            need_kiz = EXCLUDED.need_kiz,
             raw = EXCLUDED.raw,
+            project_id = EXCLUDED.project_id,
             updated_at = now();
         """
     )
 
     total_inserted = 0
     total_updated = 0
+
+    # Add project_id to all rows
+    for row in rows:
+        row["project_id"] = project_id
 
     with engine.begin() as conn:
         for batch in _chunked(rows, 200):
