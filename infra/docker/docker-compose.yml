@@ -1,3 +1,5 @@
+name: ecomcore
+
 services:
   postgres:
     image: postgres:16
@@ -5,7 +7,9 @@ services:
       POSTGRES_USER: wb
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: wb
-    env_file: .env
+    env_file: ../../.env
+    networks:
+      - ecomcore-network
     volumes:
       # Persistent volume для данных PostgreSQL
       # Без этого volume данные теряются при docker compose down
@@ -19,15 +23,19 @@ services:
     # Не публикуем порт наружу
     expose:
       - "6379"
+    networks:
+      - ecomcore-network
 
   api:
-    build: .
-    env_file: .env
+    build:
+        context: ../../
+        dockerfile: Dockerfile
+    env_file: ../../.env
     environment:
       - PYTHONPATH=/app/src
     volumes:
-      - ./:/app
-      - ./test.xml:/app/test.xml:ro  # Монтируем test.xml для RRP ingestion
+      - ../../:/app
+      - ../../test.xml:/app/test.xml:ro  # Монтируем test.xml для RRP ingestion
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --app-dir /app/src
     depends_on:
       - postgres
@@ -39,30 +47,40 @@ services:
     dns:
       - 1.1.1.1
       - 8.8.8.8
+    networks:
+      - ecomcore-network
 
   worker:
-    build: .
-    env_file: .env
-    environment:
-      - PYTHONPATH=/app/src
-    volumes:
-      - ./:/app
-    command: celery -A app.celery_app worker -l info
-    depends_on:
-      - redis
-      - postgres
+      build:
+        context: ../../
+        dockerfile: Dockerfile
+      env_file: ../../.env
+      environment:
+        - PYTHONPATH=/app/src
+      volumes:
+        - ../../:/app
+      command: celery -A app.celery_app worker -l info
+      depends_on:
+        - redis
+        - postgres
+      networks:
+        - ecomcore-network
 
   beat:
-    build: .
-    env_file: .env
-    environment:
-      - PYTHONPATH=/app/src
-    volumes:
-      - ./:/app
-    command: celery -A app.celery_app beat -l info
-    depends_on:
-      - redis
-      - postgres
+      build:
+        context: ../../
+        dockerfile: Dockerfile
+      env_file: ../../.env
+      environment:
+        - PYTHONPATH=/app/src
+      volumes:
+        - ../../:/app
+      command: celery -A app.celery_app beat -l info
+      depends_on:
+        - redis
+        - postgres
+      networks:
+        - ecomcore-network
 
   adminer:
     image: adminer
@@ -72,10 +90,12 @@ services:
       - "8080"
     depends_on:
       - postgres
+    networks:
+      - ecomcore-network
 
   frontend:
     build:
-      context: ./frontend
+      context: ../../frontend
       dockerfile: Dockerfile.dev  # Используем dev версию для локальной разработки
     environment:
       - NEXT_PUBLIC_API_BASE=/api
@@ -84,7 +104,7 @@ services:
       - HOSTNAME=0.0.0.0  # Явно указываем, что Next.js должен слушать на всех интерфейсах
       - PORT=3000
     volumes:
-      - ./frontend:/app
+      - ../../frontend:/app
       - /app/node_modules  # Изолируем node_modules от хоста
       - /app/.next  # Изолируем .next от хоста
     ports:
@@ -94,20 +114,28 @@ services:
     depends_on:
       - api
     command: npm run dev  # Явно указываем dev режим
+    networks:
+      - ecomcore-network
 
   nginx:
     image: nginx:alpine
     ports:
       - "80:80"
     volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./nginx/.htpasswd:/etc/nginx/.htpasswd:ro
+      - ../../nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ../../nginx/.htpasswd:/etc/nginx/.htpasswd:ro
     depends_on:
       - frontend
       - api
       - adminer
     restart: unless-stopped
+    networks:
+      - ecomcore-network
 
 volumes:
   postgres_data:
     driver: local
+
+networks:
+  ecomcore-network:
+    driver: bridge
