@@ -16,6 +16,8 @@ from app.api_settings import router as settings_router
 from app.api_dashboard import router as dashboard_router
 from app.api_articles import router as articles_router
 from app.api_rrp import router as rrp_router
+from app.api_wb_price_discrepancies import router as wb_price_discrepancies_router
+from app.api_wb_stock_without_photos import router as wb_stock_without_photos_router
 from app.api_articles_base import router as articles_base_router
 from app.routers.auth import router as auth_router
 from app.routers.admin_tasks import router as admin_tasks_router
@@ -76,6 +78,8 @@ app.include_router(dashboard_router)
 app.include_router(articles_router)
 app.include_router(rrp_router)
 app.include_router(articles_base_router)
+app.include_router(wb_price_discrepancies_router)
+app.include_router(wb_stock_without_photos_router)
 
 # Читаем URL из окружения или формируем из POSTGRES_* переменных
 DATABASE_URL = os.getenv("DATABASE_URL")

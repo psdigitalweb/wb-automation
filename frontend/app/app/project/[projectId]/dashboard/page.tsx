@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { apiGet, apiPost } from '../../../../../lib/apiClient'
+import { apiGet, apiPost, apiGetData } from '../../../../../lib/apiClient'
 import type { ApiDebug, ApiError } from '../../../../../lib/apiClient'
 import '../../../../globals.css'
 import WBFinancesSection from '../../../../../components/WBFinancesSection'
@@ -66,6 +66,8 @@ export default function ProjectDashboard() {
   const [otherMarketplacesEnabled, setOtherMarketplacesEnabled] = useState(false)
   const [checkingWb, setCheckingWb] = useState(true)
   const [project, setProject] = useState<Project | null>(null)
+  const [priceDiscrepanciesCount, setPriceDiscrepanciesCount] = useState<number | null>(null)
+  const [loadingDiscrepancies, setLoadingDiscrepancies] = useState(false)
   const DEBUG_UI = process.env.NEXT_PUBLIC_DEBUG === 'true'
 
   // Reset state when projectId changes to prevent showing data from previous project
@@ -85,6 +87,12 @@ export default function ProjectDashboard() {
     const interval = setInterval(loadKpis, 30000)
     return () => clearInterval(interval)
   }, [projectId]) // Include projectId in dependencies
+
+  useEffect(() => {
+    if (wbEnabled && projectId) {
+      loadPriceDiscrepanciesCount()
+    }
+  }, [wbEnabled, projectId])
 
   const loadProject = async () => {
     try {
@@ -132,6 +140,21 @@ export default function ProjectDashboard() {
   const formatDate = (dateStr: string | null) => {
     if (!dateStr) return 'N/A'
     return new Date(dateStr).toLocaleString('ru-RU')
+  }
+
+  const loadPriceDiscrepanciesCount = async () => {
+    try {
+      setLoadingDiscrepancies(true)
+      const resp = await apiGetData<{ meta: { total_count: number } }>(
+        `/v1/projects/${projectId}/wildberries/price-discrepancies?only_below_rrp=true&page_size=1`
+      )
+      setPriceDiscrepanciesCount(resp.meta?.total_count || 0)
+    } catch (error) {
+      console.error('Failed to load price discrepancies count:', error)
+      setPriceDiscrepanciesCount(0)
+    } finally {
+      setLoadingDiscrepancies(false)
+    }
   }
 
   return (
@@ -203,11 +226,13 @@ export default function ProjectDashboard() {
               <div className="metrics">
                 <div className="metric-card" style={{ flex: '2 1 200px' }}>
                   <div className="metric-label" style={{ fontSize: 12, textTransform: 'uppercase', color: '#0d6efd' }}>
-                    Товары в наличии (1C XML)
+                    Товары в наличии
                   </div>
-                  <div className="metric-value" style={{ fontSize: 28, color: '#0d6efd' }}>
-                    {kpis.rrp_xml.with_stock}
-                  </div>
+                  <Link href={`/app/project/${projectId}/rrp-snapshots`} style={{ textDecoration: 'none', color: 'inherit' }}>
+                    <div className="metric-value" style={{ fontSize: 28, color: '#0d6efd', cursor: 'pointer', textDecoration: 'underline', opacity: 1, transition: 'opacity 0.2s' }} onMouseEnter={(e) => e.currentTarget.style.opacity = '0.7'} onMouseLeave={(e) => e.currentTarget.style.opacity = '1'}>
+                      {kpis.rrp_xml.with_stock}
+                    </div>
+                  </Link>
                   <div style={{ fontSize: 12, color: '#666', marginTop: 4 }}>
                     Всего товаров: {kpis.rrp_xml.total}
                   </div>
@@ -218,9 +243,9 @@ export default function ProjectDashboard() {
               </div>
             </div>
 
-            {/* Wildberries */}
-            <div style={{ marginBottom: 20 }}>
-              <h3 style={{ marginTop: 0, marginBottom: 10 }}>Wildberries</h3>
+            {/* Wildberries — Данные */}
+            <div style={{ marginBottom: 32 }}>
+              <h3 style={{ marginTop: 0, marginBottom: 12, color: '#374151', fontWeight: 500 }}>Wildberries — Данные</h3>
               <div className="metrics">
                 {/* Каталог / Витрина */}
                 <div className="metric-card">
@@ -246,15 +271,19 @@ export default function ProjectDashboard() {
                   <div style={{ display: 'flex', gap: 16, marginTop: 4 }}>
                     <div>
                       <div style={{ fontSize: 11, textTransform: 'uppercase', color: '#6c757d' }}>FBS</div>
-                      <div className="metric-value" style={{ fontSize: 20 }}>
-                        {kpis.stock.fbs_in_stock_products}
-                      </div>
+                      <Link href={`/app/project/${projectId}/stocks`} style={{ textDecoration: 'none', color: 'inherit' }}>
+                        <div className="metric-value" style={{ fontSize: 20, cursor: 'pointer', textDecoration: 'underline', opacity: 1, transition: 'opacity 0.2s' }} onMouseEnter={(e) => e.currentTarget.style.opacity = '0.7'} onMouseLeave={(e) => e.currentTarget.style.opacity = '1'}>
+                          {kpis.stock.fbs_in_stock_products}
+                        </div>
+                      </Link>
                     </div>
                     <div>
                       <div style={{ fontSize: 11, textTransform: 'uppercase', color: '#6c757d' }}>FBO</div>
-                      <div className="metric-value" style={{ fontSize: 20 }}>
-                        {kpis.stock.fbo_in_stock_products}
-                      </div>
+                      <Link href={`/app/project/${projectId}/supplier-stocks`} style={{ textDecoration: 'none', color: 'inherit' }}>
+                        <div className="metric-value" style={{ fontSize: 20, cursor: 'pointer', textDecoration: 'underline', opacity: 1, transition: 'opacity 0.2s' }} onMouseEnter={(e) => e.currentTarget.style.opacity = '0.7'} onMouseLeave={(e) => e.currentTarget.style.opacity = '1'}>
+                          {kpis.stock.fbo_in_stock_products}
+                        </div>
+                      </Link>
                     </div>
                   </div>
                   <div style={{ fontSize: 12, color: '#888', marginTop: 4 }}>
@@ -270,18 +299,170 @@ export default function ProjectDashboard() {
                   <div className="metric-label" style={{ fontSize: 12, textTransform: 'uppercase', color: '#6c757d' }}>
                     Цены
                   </div>
-                  <div className="metric-value" style={{ fontSize: 22 }}>
-                    {kpis.prices.wb_prices_products}
-                  </div>
+                  <Link href={`/app/project/${projectId}/frontend-prices`} style={{ textDecoration: 'none', color: 'inherit' }}>
+                    <div className="metric-value" style={{ fontSize: 22, cursor: 'pointer', textDecoration: 'underline', opacity: 1, transition: 'opacity 0.2s' }} onMouseEnter={(e) => e.currentTarget.style.opacity = '0.7'} onMouseLeave={(e) => e.currentTarget.style.opacity = '1'}>
+                      {kpis.storefront.storefront_products}
+                    </div>
+                  </Link>
                   <div style={{ fontSize: 12, color: '#666', marginTop: 4 }}>
-                    товаров c загруженными ценами WB
+                    товаров с ценами на витрине
                   </div>
                   <div style={{ fontSize: 12, color: '#888', marginTop: 4 }}>
-                    Обновлено: {formatDate(kpis.last_snapshots.wb_prices_at)}
+                    Обновлено: {formatDate(kpis.last_snapshots.storefront_at)}
                   </div>
+                  {wbEnabled && priceDiscrepanciesCount !== null && priceDiscrepanciesCount > 0 && (
+                    <div style={{ fontSize: 12, color: '#6b7280', marginTop: 6 }}>
+                      <span style={{ fontSize: 11, marginRight: 4 }}>⚠</span>
+                      <span>{priceDiscrepanciesCount} товаров ниже РРЦ — </span>
+                      <Link
+                        href={`/app/project/${projectId}/wildberries/price-discrepancies?only_below_rrp=true`}
+                        style={{ color: '#2563eb', textDecoration: 'none' }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.textDecoration = 'underline'
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.textDecoration = 'none'
+                        }}
+                      >
+                        Расхождения →
+                      </Link>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
+
+            {/* Инструменты */}
+            {wbEnabled && (
+              <div style={{ marginBottom: 32 }}>
+                <h3 style={{ marginTop: 0, marginBottom: 12, color: '#374151', fontWeight: 500 }}>Инструменты</h3>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16 }}>
+                  <Link
+                    href={`/app/project/${projectId}/wildberries/price-discrepancies?only_below_rrp=true`}
+                    style={{ textDecoration: 'none', color: 'inherit' }}
+                  >
+                    <div
+                      className="card"
+                      style={{
+                        padding: 16,
+                        border: '1px solid #e5e7eb',
+                        borderRadius: 8,
+                        background: '#fff',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 8,
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.borderColor = '#d1d5db'
+                        e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.05)'
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.borderColor = '#e5e7eb'
+                        e.currentTarget.style.boxShadow = 'none'
+                      }}
+                    >
+                      <div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+                          <div style={{ fontSize: 20, flexShrink: 0 }}>📊</div>
+                          <div style={{ fontSize: 18, fontWeight: 600, color: '#111827' }}>
+                            Расхождения цен
+                          </div>
+                        </div>
+                        <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6, marginLeft: 30 }}>
+                          РРЦ vs витрина Wildberries
+                        </div>
+                        <div style={{ fontSize: 13, color: '#374151', marginBottom: 8, marginLeft: 30 }}>
+                          Контроль соблюдения РРЦ
+                        </div>
+                        {priceDiscrepanciesCount !== null && priceDiscrepanciesCount > 0 && (
+                          <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4, marginLeft: 30 }}>
+                            <span style={{ fontSize: 11, marginRight: 4 }}>⚠</span>
+                            <strong style={{ fontWeight: 600 }}>{priceDiscrepanciesCount}</strong> товаров ниже РРЦ
+                          </div>
+                        )}
+                      </div>
+                      <div
+                        style={{
+                          marginTop: 'auto',
+                          fontSize: 13,
+                          color: '#2563eb',
+                          fontWeight: 500,
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.textDecoration = 'underline'
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.textDecoration = 'none'
+                        }}
+                      >
+                        Посмотреть расхождения →
+                      </div>
+                    </div>
+                  </Link>
+
+                  <Link
+                    href={`/app/project/${projectId}/wildberries/stock-without-photos`}
+                    style={{ textDecoration: 'none', color: 'inherit' }}
+                  >
+                    <div
+                      className="card"
+                      style={{
+                        padding: 16,
+                        border: '1px solid #e5e7eb',
+                        borderRadius: 8,
+                        background: '#fff',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 8,
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.borderColor = '#d1d5db'
+                        e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.05)'
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.borderColor = '#e5e7eb'
+                        e.currentTarget.style.boxShadow = 'none'
+                      }}
+                    >
+                      <div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+                          <div style={{ fontSize: 20, flexShrink: 0 }}>📷</div>
+                          <div style={{ fontSize: 18, fontWeight: 600, color: '#111827' }}>
+                            Остаток WB без фото
+                          </div>
+                        </div>
+                        <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6, marginLeft: 30 }}>
+                          Товары, которые лежат на складах WB, но в карточке нет фото
+                        </div>
+                        <div style={{ fontSize: 13, color: '#374151', marginBottom: 8, marginLeft: 30 }}>
+                          Контроль наличия фото для товаров с остатком
+                        </div>
+                      </div>
+                      <div
+                        style={{
+                          marginTop: 'auto',
+                          fontSize: 13,
+                          color: '#2563eb',
+                          fontWeight: 500,
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.textDecoration = 'underline'
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.textDecoration = 'none'
+                        }}
+                      >
+                        Посмотреть товары →
+                      </div>
+                    </div>
+                  </Link>
+                </div>
+              </div>
+            )}
 
             {/* Другие маркетплейсы */}
             {otherMarketplacesEnabled && (
@@ -303,28 +484,6 @@ export default function ProjectDashboard() {
         ) : (
           <p>Failed to load metrics</p>
         )}
-      </div>
-
-      <div className="card">
-        <h2>Navigation</h2>
-        <Link href={`/app/project/${projectId}/stocks`}>
-          <button>View FBS Stock</button>
-        </Link>
-        <Link href={`/app/project/${projectId}/supplier-stocks`}>
-          <button>View FBO Stock</button>
-        </Link>
-        <Link href={`/app/project/${projectId}/prices`}>
-          <button>View Prices</button>
-        </Link>
-        <Link href={`/app/project/${projectId}/frontend-prices`}>
-          <button>Frontend Prices</button>
-        </Link>
-        <Link href={`/app/project/${projectId}/articles-base`}>
-          <button>Article Base</button>
-        </Link>
-        <Link href={`/app/project/${projectId}/rrp-snapshots`}>
-          <button>RRP Snapshots (1C)</button>
-        </Link>
       </div>
 
       <WBFinancesSection

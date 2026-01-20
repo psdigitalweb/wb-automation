@@ -437,6 +437,24 @@ class WBClient:
                 print(f"fetch_stocks: exception during request: {type(e).__name__}: {e}")
                 return []
 
+    async def fetch_fbw_stocks_current(self) -> List[Dict[str, Any]]:
+        """Fetch current FBW (FBO) stock balances from WB Statistics API.
+        
+        This is a convenience method that calls fetch_supplier_stocks with a recent date
+        (7 days ago) to get current stock balances. Returns all stocks that changed
+        in the last 7 days, which effectively gives us current stock levels.
+        
+        Returns:
+            List of stock records with nmId, warehouseName, quantity, etc.
+        """
+        from datetime import datetime, timedelta, timezone
+        
+        # Use 7 days ago to get all current stocks
+        date_from_dt = datetime.now(timezone.utc) - timedelta(days=7)
+        date_from = date_from_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        
+        return await self.fetch_supplier_stocks(date_from)
+
     async def fetch_supplier_stocks(self, date_from: str) -> List[Dict[str, Any]]:
         """Fetch supplier stock balances from WB Statistics API (Reports).
         

@@ -16,6 +16,8 @@ const LABELS: Record<string, string> = {
   'rrp-snapshots': 'RRP',
   'frontend-prices': 'Frontend цены',
   'articles-base': 'База артикулов',
+  wildberries: 'Wildberries',
+  'price-discrepancies': 'Расхождения цен',
   settings: 'Настройки',
   marketplaces: 'Маркетплейсы',
 }
