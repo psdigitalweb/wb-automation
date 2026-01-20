@@ -65,12 +65,13 @@ export default function Topbar() {
       <div className="topbar-left">
         <Link href="/" className="topbar-brand" aria-label="Главная">
           <Image
-            src="/header_logo.jpg"
+            src="/header_logo.jpg?v=3"
             alt="E-com Core"
             width={200}
             height={48}
             priority
             className="topbar-logo"
+            unoptimized
           />
         </Link>
         <div className="topbar-project-selector">
@@ -95,6 +96,11 @@ export default function Topbar() {
         </div>
       </div>
       <div className="topbar-right">
+        {user.is_superuser && (
+          <Link href="/app/admin/marketplaces/wildberries/tariffs" className="topbar-admin-link">
+            Admin: WB Tariffs
+          </Link>
+        )}
         <span className="topbar-user">{user.email || user.username}</span>
         <button onClick={handleLogout} className="btn-logout">
           Logout

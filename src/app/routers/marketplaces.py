@@ -1,8 +1,8 @@
 """Marketplaces router with membership checks and secret masking."""
 
-from typing import List
-from datetime import datetime
-from fastapi import APIRouter, HTTPException, status, Depends, Path
+from typing import List, Optional
+from datetime import datetime, date
+from fastapi import APIRouter, HTTPException, status, Depends, Path, Query
 
 from app.db_marketplaces import (
     ensure_schema,
@@ -32,6 +32,9 @@ from app.schemas.marketplaces import (
     WBCredentialsStatus,
     WBSettingsStatus,
     WBMarketplaceUpdate,
+    WBFinancesIngestRequest,
+    WBFinancesIngestResponse,
+    WBFinanceReportResponse,
 )
 from app.utils.wb_token_validator import validate_wb_token
 from app.deps import (
@@ -39,6 +42,7 @@ from app.deps import (
     get_project_membership,
     require_project_admin,
 )
+from app.db_marketplace_tariffs import get_latest_snapshot
 
 router = APIRouter(prefix="/api/v1", tags=["marketplaces"])
 
@@ -712,4 +716,163 @@ async def disconnect_wb_marketplace_endpoint(
             )
     
     return None
+
+
+@router.get("/marketplaces/wildberries/tariffs/latest")
+async def get_wb_tariffs_latest(
+    type: str = Query(..., regex="^(commission|box|pallet|return|acceptance_coefficients)$"),
+    date_param: Optional[date] = Query(
+        None,
+        alias="date",
+        description="Date for box/pallet/return tariffs (YYYY-MM-DD, UTC)",
+    ),
+    locale: Optional[str] = Query(
+        None,
+        description="Locale for commission tariffs (e.g. 'ru')",
+    ),
+    current_user: dict = Depends(get_current_active_user),
+):
+    """Return latest WB tariffs snapshot for given type/date/locale.
+
+    This is marketplace-level data (not project-scoped).
+    """
+    data_type = type
+
+    # Validate parameter combinations
+    if data_type in {"box", "pallet", "return"} and date_param is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Parameter 'date' is required for box/pallet/return tariffs",
+        )
+    if data_type == "commission":
+        if locale is None:
+            locale = "ru"
+        date_for_query = None
+    elif data_type == "acceptance_coefficients":
+        date_for_query = None
+        locale = None
+    else:
+        # box / pallet / return
+        date_for_query = date_param
+        locale = None
+
+    snapshot = get_latest_snapshot(
+        marketplace_code="wildberries",
+        data_domain="tariffs",
+        data_type=data_type,
+        as_of_date=date_for_query,
+        locale=locale,
+    )
+
+    if not snapshot:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Tariffs snapshot not found",
+        )
+
+    return {
+        "fetched_at": snapshot["fetched_at"],
+        "request_params": snapshot.get("request_params"),
+        "payload": snapshot.get("payload"),
+        "http_status": snapshot.get("http_status"),
+        "error": snapshot.get("error"),
+    }
+
+
+# WB Finances endpoints
+@router.post(
+    "/projects/{project_id}/marketplaces/wildberries/finances/ingest",
+    response_model=WBFinancesIngestResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Start WB finances ingestion",
+    description=(
+        "Enqueue Celery task to ingest Wildberries finance reports (project-level). "
+        "Requires project membership. WB must be connected with token."
+    ),
+)
+async def start_wb_finances_ingest(
+    body: WBFinancesIngestRequest,
+    project_id: int = Path(..., description="Project ID"),
+    current_user: dict = Depends(get_current_active_user),
+    membership: dict = Depends(get_project_membership),  # Any member can trigger ingestion
+):
+    """Start WB finances ingestion for a project and date range."""
+    from app.tasks.wb_finances import ingest_wb_finance_reports_by_period_task
+    from app.utils.get_project_marketplace_token import get_wb_credentials_for_project
+
+    # Check if WB is connected and has token
+    try:
+        credentials = get_wb_credentials_for_project(project_id)
+        if not credentials or not credentials.get("token"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="WB not connected or token missing. Please configure Wildberries in project marketplaces first.",
+            )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+    # Validate date format
+    try:
+        from datetime import datetime
+        datetime.strptime(body.date_from, "%Y-%m-%d")
+        datetime.strptime(body.date_to, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid date format. Use YYYY-MM-DD",
+        )
+
+    # Start Celery task
+    try:
+        result = ingest_wb_finance_reports_by_period_task.delay(
+            project_id=project_id,
+            date_from=body.date_from,
+            date_to=body.date_to,
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to start ingestion task: {str(e)}",
+        )
+
+    return WBFinancesIngestResponse(
+        status="started",
+        task_id=getattr(result, "id", None),
+        date_from=body.date_from,
+        date_to=body.date_to,
+    )
+
+
+@router.get(
+    "/projects/{project_id}/marketplaces/wildberries/finances/reports",
+    response_model=List[WBFinanceReportResponse],
+    summary="List WB finance reports",
+    description="Get list of finance reports for a project, sorted by last_seen_at desc.",
+)
+async def list_wb_finances_reports(
+    project_id: int = Path(..., description="Project ID"),
+    current_user: dict = Depends(get_current_active_user),
+    membership: dict = Depends(get_project_membership),  # Any member can view
+):
+    """List all finance reports for a project."""
+    from app.db_wb_finances import list_reports
+
+    reports = list_reports(project_id=project_id, marketplace_code="wildberries")
+    
+    return [
+        WBFinanceReportResponse(
+            report_id=r["report_id"],
+            period_from=r["period_from"],
+            period_to=r["period_to"],
+            currency=r["currency"],
+            total_amount=float(r["total_amount"]) if r["total_amount"] is not None else None,
+            rows_count=r["rows_count"],
+            first_seen_at=r["first_seen_at"],
+            last_seen_at=r["last_seen_at"],
+        )
+        for r in reports
+    ]
 

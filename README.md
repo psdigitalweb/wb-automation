@@ -21,6 +21,123 @@ The repository is transitioning from a monolithic wb-automation layout to a modu
 
 Docker Compose файл находится в `infra/docker/docker-compose.yml`.
 
+### Первый запуск / Создание администратора
+
+После `docker compose down/up` таблица `users` может быть пустой, что приводит к ошибке 401 при попытке входа.
+
+**⚠️ ВАЖНО: Расположение .env файла**
+
+Файл `.env` **ОБЯЗАТЕЛЬНО** должен находиться в корне репозитория:
+- Windows: `D:\Work\EcomCore\.env`
+- Linux: `/root/apps/ecomcore/.env` (или путь к корню репозитория)
+
+Docker Compose использует `env_file: ../../.env` (относительно `infra/docker/`), что указывает на корневой `.env` файл.
+
+**Полный .env файл для локальной разработки:**
+
+Создайте/откройте `.env` файл в корне репозитория (`D:\Work\EcomCore\.env`):
+
+```env
+# Database credentials (REQUIRED)
+POSTGRES_DB=wb
+POSTGRES_USER=wb
+POSTGRES_PASSWORD=wbpassword
+
+# Auto-apply migrations in dev mode (OPTIONAL, recommended)
+# Если AUTO_MIGRATE=1, миграции применяются автоматически при старте API
+AUTO_MIGRATE=1
+
+# Bootstrap admin user (OPTIONAL, for automatic admin creation)
+# Если BOOTSTRAP_ADMIN=1, admin создаётся автоматически если таблица users пуста
+BOOTSTRAP_ADMIN=1
+BOOTSTRAP_ADMIN_USERNAME=admin
+BOOTSTRAP_ADMIN_PASSWORD=admin123
+BOOTSTRAP_ADMIN_EMAIL=admin@local.dev
+```
+
+**Запуск с автоматическими миграциями (рекомендуется для dev):**
+
+```powershell
+# Перейти в директорию docker-compose (ОБЯЗАТЕЛЬНО из этой директории!)
+cd D:\Work\EcomCore\infra\docker
+
+# Остановить контейнеры
+docker compose down
+
+# Запустить контейнеры с пересборкой
+docker compose up -d --build
+
+# Подождать инициализации (15 секунд для PostgreSQL + миграций + API)
+Start-Sleep -Seconds 15
+```
+
+**Что происходит автоматически:**
+- Если `AUTO_MIGRATE=1` → миграции применяются автоматически (создаются таблицы `users`, `projects`, `project_members`, и другие)
+- Если `BOOTSTRAP_ADMIN=1` → admin пользователь создаётся автоматически (если таблица `users` пуста)
+
+**Запуск без автоматических миграций (если AUTO_MIGRATE=0):**
+
+```powershell
+cd D:\Work\EcomCore\infra\docker
+docker compose down
+docker compose up -d --build
+Start-Sleep -Seconds 10
+docker compose exec api alembic upgrade head
+Start-Sleep -Seconds 5
+```
+
+Bootstrap создаст пользователя **только если таблица `users` пуста** (безопасно и идемпотентно).
+
+**Проверка bootstrap в логах:**
+
+```powershell
+docker compose logs api | Select-String -Pattern "Bootstrap"
+```
+
+**Проверка входа (Windows PowerShell):**
+
+```powershell
+# Проверка API Docs
+curl http://localhost:8000/docs
+curl http://localhost/api/docs
+
+# Проверка входа (одна строка)
+curl -X POST http://localhost:8000/api/v1/auth/login -H "Content-Type: application/json" -d '{\"username\":\"admin\",\"password\":\"admin123\"}'
+```
+
+**Ручное создание (fallback):**
+
+```powershell
+# Из директории infra/docker (ОБЯЗАТЕЛЬНО!)
+cd D:\Work\EcomCore\infra\docker
+
+# Использовать существующий скрипт (создаст или обновит admin)
+docker compose exec api python /app/scripts/create_admin_user.py admin123
+```
+
+**Troubleshooting:**
+
+**Ошибка "relation 'projects' does not exist":**
+- Миграции не применены. Решение:
+  1. Добавьте `AUTO_MIGRATE=1` в `.env` и перезапустите: `docker compose restart api`
+  2. Или примените вручную: `docker compose exec api alembic upgrade head`
+
+**Ошибка "dockerDesktopLinuxEngine pipe missing":**
+- Docker Desktop engine не запущен. Решение: перезапустите Docker Desktop (если WSL2: `wsl --shutdown`, затем перезапустите Docker Desktop).
+
+**Ошибка 401 при входе:**
+1. Проверьте логи: `docker compose logs api | Select-String -Pattern "Bootstrap"`
+2. Создайте пользователя вручную: `docker compose exec api python /app/scripts/create_admin_user.py admin123`
+
+**Проверка таблиц в БД:**
+```powershell
+docker compose exec postgres psql -U wb -d wb -c "\dt"
+```
+
+Должны быть таблицы: `users`, `projects`, `project_members`, и другие.
+
+Подробнее см. `infra/docker/README.md`.
+
 ### Быстрый запуск (рекомендуется)
 
 Используйте скрипт для автоматической обработки конфликтов портов:

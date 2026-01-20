@@ -2,7 +2,8 @@
 
 import React, { useState, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { apiGet, apiPatch, apiPut } from '../../../../../lib/apiClient'
+import { apiGet, apiPatch, apiPost, apiPut, ApiError } from '../../../../../lib/apiClient'
+import { User } from '../../../../../lib/auth'
 import '../../../../globals.css'
 
 interface Marketplace {
@@ -37,6 +38,17 @@ export default function ProjectMarketplacesPage() {
   const [allMarketplaces, setAllMarketplaces] = useState<Marketplace[]>([])
   const [projectMarketplaces, setProjectMarketplaces] = useState<ProjectMarketplace[]>([])
   const [loading, setLoading] = useState(true)
+  const [currentUser, setCurrentUser] = useState<User | null>(null)
+  const [loadingUser, setLoadingUser] = useState(true)
+
+  // Admin WB tariffs state (global, marketplace-level)
+  const [wbTariffsStatus, setWbTariffsStatus] = useState<any | null>(null)
+  const [wbTariffsLoading, setWbTariffsLoading] = useState(false)
+  const [wbTariffsIngesting, setWbTariffsIngesting] = useState(false)
+  const [wbTariffsCooldown, setWbTariffsCooldown] = useState(false)
+  const [wbTariffsDaysAhead, setWbTariffsDaysAhead] = useState<number>(14)
+  const [wbTariffsError, setWbTariffsError] = useState<string | null>(null)
+
   
   // WB-specific state
   const [wbStatus, setWbStatus] = useState<WBMarketplaceStatus | null>(null)
@@ -82,6 +94,75 @@ export default function ProjectMarketplacesPage() {
     } catch (error) {
       console.error('Failed to load data:', error)
       setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    const loadMe = async () => {
+      try {
+        setLoadingUser(true)
+        const { data } = await apiGet<User>('/v1/auth/me')
+        setCurrentUser(data)
+      } catch {
+        setCurrentUser(null)
+      } finally {
+        setLoadingUser(false)
+      }
+    }
+    loadMe()
+  }, [])
+
+  const isAdmin = currentUser?.is_superuser ?? false
+
+  const loadWBTariffsStatus = async () => {
+    if (!isAdmin) return
+    setWbTariffsLoading(true)
+    setWbTariffsError(null)
+    try {
+      const { data } = await apiGet<any>('/v1/admin/marketplaces/wildberries/tariffs/status')
+      setWbTariffsStatus(data)
+    } catch (e: any) {
+      const err = e as ApiError
+      if (err.status === 401 || err.status === 403) {
+        setWbTariffsError('Недостаточно прав (требуется admin/superuser).')
+      } else {
+        setWbTariffsError(err.detail || 'Не удалось загрузить статус тарифов.')
+      }
+    } finally {
+      setWbTariffsLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!loadingUser && isAdmin) {
+      loadWBTariffsStatus()
+    }
+  }, [loadingUser, isAdmin])
+
+  const handleWBTariffsIngest = async () => {
+    if (!isAdmin) return
+    setWbTariffsIngesting(true)
+    setWbTariffsError(null)
+    try {
+      const payloadDays = Math.min(30, Math.max(0, wbTariffsDaysAhead || 0))
+      await apiPost<any>(
+        '/v1/admin/marketplaces/wildberries/tariffs/ingest',
+        { days_ahead: payloadDays }
+      )
+      setWbTariffsCooldown(true)
+      setTimeout(() => setWbTariffsCooldown(false), 10000)
+      setTimeout(() => {
+        loadWBTariffsStatus()
+      }, 2500)
+    } catch (e: any) {
+      const err = e as ApiError
+      if (err.status === 401 || err.status === 403) {
+        setWbTariffsError('Недостаточно прав (требуется admin/superuser).')
+      } else {
+        setWbTariffsError(err.detail || 'Не удалось запустить обновление тарифов.')
+      }
+    } finally {
+      setWbTariffsIngesting(false)
     }
   }
 
@@ -397,9 +478,57 @@ export default function ProjectMarketplacesPage() {
           </table>
         )}
       </div>
+
+      {isAdmin && (
+        <div className="card" style={{ marginTop: '24px', borderTop: '2px dashed #ccc' }}>
+          <h2>🔒 Admin (глобально, для всех проектов)</h2>
+          <h3>Wildberries — Tariffs</h3>
+          {wbTariffsLoading ? (
+            <p>Загрузка статуса тарифов...</p>
+          ) : wbTariffsError ? (
+            <p style={{ color: 'red' }}>{wbTariffsError}</p>
+          ) : (
+            <p>
+              <strong>Последнее обновление (любой тип):</strong>{' '}
+              {wbTariffsStatus?.latest_fetched_at || 'нет данных'}
+            </p>
+          )}
+
+          <div className="form-group" style={{ maxWidth: '220px', marginTop: '8px' }}>
+            <label>Days ahead (0–30)</label>
+            <input
+              type="number"
+              min={0}
+              max={30}
+              value={wbTariffsDaysAhead}
+              onChange={(e) => setWbTariffsDaysAhead(Number(e.target.value))}
+            />
+          </div>
+
+          <div style={{ marginTop: '12px', display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <button
+              onClick={handleWBTariffsIngest}
+              disabled={wbTariffsIngesting || wbTariffsCooldown}
+            >
+              {wbTariffsIngesting
+                ? 'Запуск...'
+                : wbTariffsCooldown
+                ? 'Подождите...'
+                : 'Обновить тарифы WB'}
+            </button>
+            <button onClick={loadWBTariffsStatus} disabled={wbTariffsLoading}>
+              {wbTariffsLoading ? 'Обновляем статус...' : 'Обновить статус'}
+            </button>
+          </div>
+
+          {wbTariffsStatus && (
+            <p style={{ marginTop: '8px', color: '#555' }}>
+              Admin (глобально): эти тарифы используются всеми проектами с подключённым Wildberries.
+            </p>
+          )}
+        </div>
+      )}
     </div>
   )
 }
-
-
 

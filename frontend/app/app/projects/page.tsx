@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { apiGetData, apiPostData } from '../../../lib/apiClient'
 
@@ -18,13 +18,21 @@ export default function ProjectsPage() {
   const router = useRouter()
   const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
-  const [showCreateModal, setShowCreateModal] = useState(false)
+  const [isCreateFormOpen, setIsCreateFormOpen] = useState(false)
   const [newProjectName, setNewProjectName] = useState('')
   const [newProjectDesc, setNewProjectDesc] = useState('')
+  const projectNameInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     loadProjects()
   }, [])
+
+  // Auto-focus on project name input when form opens
+  useEffect(() => {
+    if (isCreateFormOpen && projectNameInputRef.current) {
+      projectNameInputRef.current.focus()
+    }
+  }, [isCreateFormOpen])
 
   const loadProjects = async () => {
     try {
@@ -46,9 +54,9 @@ export default function ProjectsPage() {
         name: newProjectName,
         description: newProjectDesc || null,
       })
-      setShowCreateModal(false)
       setNewProjectName('')
       setNewProjectDesc('')
+      setIsCreateFormOpen(false)
       await loadProjects()
       // Navigate to new project dashboard
       router.push(`/app/project/${project.id}/dashboard`)
@@ -58,6 +66,12 @@ export default function ProjectsPage() {
       const errorMessage = error?.detail || error?.message || String(error) || 'Failed to create project'
       alert(errorMessage)
     }
+  }
+
+  const handleCancelCreate = () => {
+    setNewProjectName('')
+    setNewProjectDesc('')
+    setIsCreateFormOpen(false)
   }
 
   const handleProjectClick = (projectId: number) => {
@@ -72,10 +86,70 @@ export default function ProjectsPage() {
     <div className="container">
       <h1>Projects</h1>
 
+      {/* Create Project Form - shown only when isCreateFormOpen is true */}
+      {isCreateFormOpen && (
+        <div className="card" style={{ marginTop: '0', marginBottom: '32px', padding: '24px' }}>
+          <h3 style={{ marginBottom: '20px', fontSize: '1.5rem', fontWeight: '600', color: '#333' }}>Create New Project</h3>
+          <div className="form-group" style={{ marginBottom: '16px' }}>
+            <label style={{ display: 'block', marginBottom: '8px', fontWeight: '500' }}>Project Name *</label>
+            <input
+              ref={projectNameInputRef}
+              type="text"
+              value={newProjectName}
+              onChange={(e) => setNewProjectName(e.target.value)}
+              placeholder="Enter project name"
+              style={{
+                width: '100%',
+                padding: '10px 12px',
+                border: '1px solid #ddd',
+                borderRadius: '5px',
+                fontSize: '14px'
+              }}
+            />
+          </div>
+          <div className="form-group" style={{ marginBottom: '20px' }}>
+            <label style={{ display: 'block', marginBottom: '8px', fontWeight: '500' }}>Description</label>
+            <textarea
+              value={newProjectDesc}
+              onChange={(e) => setNewProjectDesc(e.target.value)}
+              placeholder="Enter project description (optional)"
+              rows={3}
+              style={{
+                width: '100%',
+                padding: '10px 12px',
+                border: '1px solid #ddd',
+                borderRadius: '5px',
+                fontSize: '14px',
+                fontFamily: 'inherit',
+                resize: 'vertical'
+              }}
+            />
+          </div>
+          <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+            <button
+              className="btn-secondary"
+              onClick={handleCancelCreate}
+            >
+              Cancel
+            </button>
+            <button
+              className="btn-primary"
+              onClick={handleCreateProject}
+              disabled={!newProjectName.trim()}
+            >
+              Create
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Projects List */}
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-          <h2>My Projects</h2>
-          <button onClick={() => setShowCreateModal(true)}>+ New Project</button>
+          <h2 style={{ marginBottom: '0' }}>My Projects</h2>
+          {!isCreateFormOpen && (
+            <button onClick={() => setIsCreateFormOpen(true)}>+ New Project</button>
+          )}
         </div>
 
         {loading ? (
@@ -120,39 +194,6 @@ export default function ProjectsPage() {
           </div>
         )}
       </div>
-
-      {showCreateModal && (
-        <div className="modal-overlay" onClick={() => setShowCreateModal(false)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <h3>Create New Project</h3>
-            <div className="form-group">
-              <label>Project Name *</label>
-              <input
-                type="text"
-                value={newProjectName}
-                onChange={(e) => setNewProjectName(e.target.value)}
-                placeholder="Enter project name"
-                autoFocus
-              />
-            </div>
-            <div className="form-group">
-              <label>Description</label>
-              <textarea
-                value={newProjectDesc}
-                onChange={(e) => setNewProjectDesc(e.target.value)}
-                placeholder="Enter project description (optional)"
-                rows={3}
-              />
-            </div>
-            <div className="modal-actions">
-              <button onClick={() => setShowCreateModal(false)}>Cancel</button>
-              <button onClick={handleCreateProject} disabled={!newProjectName.trim()}>
-                Create
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

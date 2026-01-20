@@ -27,7 +27,7 @@ database_url = os.getenv("DATABASE_URL")
 if not database_url:
     # Формируем из переменных окружения
     postgres_user = os.getenv("POSTGRES_USER", "wb")
-    postgres_password = os.getenv("POSTGRES_PASSWORD", "wbpass")
+    postgres_password = os.getenv("POSTGRES_PASSWORD", "wbpassword")
     postgres_host = os.getenv("POSTGRES_HOST", "postgres")
     postgres_port = os.getenv("POSTGRES_PORT", "5432")
     postgres_db = os.getenv("POSTGRES_DB", "wb")

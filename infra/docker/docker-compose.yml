@@ -7,6 +7,8 @@ services:
       POSTGRES_USER: wb
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: wb
+    # Load environment variables from root .env file (D:\Work\EcomCore\.env)
+    # This file must contain: POSTGRES_PASSWORD, BOOTSTRAP_ADMIN, etc.
     env_file: ../../.env
     networks:
       - ecomcore-network
@@ -30,12 +32,24 @@ services:
     build:
         context: ../../
         dockerfile: Dockerfile
+    # Load environment variables from root .env file (D:\Work\EcomCore\.env)
+    # Required vars: POSTGRES_PASSWORD
+    # Optional vars: BOOTSTRAP_ADMIN, BOOTSTRAP_ADMIN_USERNAME, BOOTSTRAP_ADMIN_PASSWORD, BOOTSTRAP_ADMIN_EMAIL
     env_file: ../../.env
     environment:
       - PYTHONPATH=/app/src
+      # Bootstrap admin user on startup (only if users table is empty)
+      # Set BOOTSTRAP_ADMIN=1 in .env to enable, along with BOOTSTRAP_ADMIN_USERNAME, BOOTSTRAP_ADMIN_PASSWORD, BOOTSTRAP_ADMIN_EMAIL
+      # Default: disabled (0) for security
+      - BOOTSTRAP_ADMIN=${BOOTSTRAP_ADMIN:-0}
+      - BOOTSTRAP_ADMIN_USERNAME=${BOOTSTRAP_ADMIN_USERNAME:-admin}
+      - BOOTSTRAP_ADMIN_PASSWORD=${BOOTSTRAP_ADMIN_PASSWORD:-}
+      - BOOTSTRAP_ADMIN_EMAIL=${BOOTSTRAP_ADMIN_EMAIL:-admin@local.dev}
     volumes:
       - ../../:/app
       - ../../test.xml:/app/test.xml:ro  # Монтируем test.xml для RRP ingestion
+    # Entrypoint waits for PostgreSQL, runs migrations (with advisory lock protection), then starts uvicorn
+    entrypoint: ["python", "/app/scripts/docker-entrypoint.py"]
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --app-dir /app/src
     depends_on:
       - postgres
@@ -54,6 +68,7 @@ services:
       build:
         context: ../../
         dockerfile: Dockerfile
+      # Load environment variables from root .env file
       env_file: ../../.env
       environment:
         - PYTHONPATH=/app/src
@@ -70,6 +85,7 @@ services:
       build:
         context: ../../
         dockerfile: Dockerfile
+      # Load environment variables from root .env file
       env_file: ../../.env
       environment:
         - PYTHONPATH=/app/src
@@ -88,6 +104,8 @@ services:
     # Не публикуем порт наружу
     expose:
       - "8080"
+    ports:
+    - "8080:8080"
     depends_on:
       - postgres
     networks:

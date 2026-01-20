@@ -19,6 +19,7 @@ from app.api_rrp import router as rrp_router
 from app.api_articles_base import router as articles_base_router
 from app.routers.auth import router as auth_router
 from app.routers.admin_tasks import router as admin_tasks_router
+from app.routers.admin_marketplaces import router as admin_marketplaces_router
 from app.routers.ingest_run import router as ingest_run_router
 from app.routers.projects import router as projects_router
 from app.routers.marketplaces import router as marketplaces_router
@@ -53,6 +54,9 @@ app.include_router(protected_router)
 
 # Admin tasks router (requires superuser)
 app.include_router(admin_tasks_router)
+
+# Admin marketplaces router (requires superuser)
+app.include_router(admin_marketplaces_router)
 
 # Unified ingestion runner (requires authentication and membership)
 app.include_router(ingest_run_router)
@@ -102,14 +106,15 @@ async def startup_event():
     This runs AFTER the application starts, ensuring tables exist (from migrations)
     before attempting to seed data.
     
-    Security checks:
+    Steps:
     1. Verifies PROJECT_SECRETS_KEY is set if encrypted tokens exist
-    2. Runs bootstrap if enabled (BOOTSTRAP_ENABLED=true)
+    2. Runs bootstrap admin user if enabled (BOOTSTRAP_ADMIN=1) and users table is empty
+    3. Runs full bootstrap if enabled (BOOTSTRAP_ENABLED=true)
        - Creates admin user (if ADMIN_PASSWORD is set)
        - Creates Legacy project
        - Seeds marketplaces
     """
-    from app.bootstrap import run_bootstrap_on_startup
+    from app.bootstrap import run_bootstrap_on_startup, bootstrap_admin_user
     
     try:
         # Security check: PROJECT_SECRETS_KEY must be set if encrypted tokens exist
@@ -137,7 +142,18 @@ async def startup_event():
         logger.warning(f"Security check failed: {e}")
     
     try:
-        # Run bootstrap (idempotent: creates admin, Legacy project, seeds marketplaces)
+        # Bootstrap admin user if users table is empty (idempotent, safe)
+        # Only runs if BOOTSTRAP_ADMIN=1 or CREATE_SUPERUSER_ON_START=true
+        bootstrap_admin_user()
+    except ProgrammingError as e:
+        # Tables don't exist yet (migrations not applied)
+        logger.debug(f"Bootstrap admin user skipped: users table not found yet: {e}")
+    except Exception as e:
+        # Other errors (connection issues, etc.)
+        logger.warning(f"Bootstrap admin user error: {e}")
+    
+    try:
+        # Run full bootstrap (idempotent: creates admin, Legacy project, seeds marketplaces)
         # Only runs if BOOTSTRAP_ENABLED=true
         run_bootstrap_on_startup()
     except ProgrammingError as e:

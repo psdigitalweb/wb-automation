@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
+import Image from 'next/image'
 import { apiPostData, apiGetData } from '../lib/apiClient'
 import { saveTokens, saveUser, isAuthenticated } from '../lib/auth'
 import './globals.css'
@@ -62,7 +63,16 @@ export default function LoginPage() {
   return (
     <div className="login-container">
       <div className="login-card">
-        <h1>E-com Core</h1>
+        <div className="login-logo">
+          <Image
+            src="/index_logo.jpg"
+            alt="E-com Core"
+            width={200}
+            height={48}
+            priority
+            className="login-logo-img"
+          />
+        </div>
         <h2>Login</h2>
         {error && <div className="error-message">{error}</div>}
         <form onSubmit={handleLogin}>

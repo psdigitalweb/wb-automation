@@ -98,6 +98,12 @@ export default function Breadcrumbs() {
         i += 2 // Skip both "project" and the ID
         continue
       }
+
+      // For dashboard route, do not add extra "Дашборд" segment;
+      // keep breadcrumb as "Проекты / {ProjectName}"
+      if (seg === 'dashboard') {
+        break
+      }
       
       // Regular segment
       href += `/${seg}`

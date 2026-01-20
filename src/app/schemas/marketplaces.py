@@ -2,7 +2,7 @@
 
 from typing import Optional, Dict, Any, List
 from pydantic import BaseModel, Field, field_validator
-from datetime import datetime
+from datetime import datetime, date
 
 
 class MarketplaceBase(BaseModel):
@@ -109,3 +109,92 @@ class WBMarketplaceUpdate(BaseModel):
         if v is not None and v <= 0:
             raise ValueError('brand_id must be greater than 0')
         return v
+
+
+class WBTariffsIngestRequest(BaseModel):
+    """Request body for starting WB tariffs ingestion."""
+
+    days_ahead: int = Field(
+        14,
+        ge=0,
+        le=30,
+        description="Number of days ahead (including today) for which to fetch tariffs",
+    )
+
+
+class WBTariffsIngestResponse(BaseModel):
+    """Response for WB tariffs ingestion start."""
+
+    status: str = Field(..., description="Ingestion start status (e.g. 'started')")
+    days_ahead: int = Field(..., description="Requested days ahead")
+    task: str = Field(..., description="Celery task name")
+    task_id: Optional[str] = Field(
+        None, description="Celery task identifier (result.id) if available"
+    )
+
+
+class WBTariffTypeStatus(BaseModel):
+    """Status for a single WB tariffs data_type."""
+
+    latest_fetched_at: Optional[datetime] = Field(
+        None, description="Timestamp of the latest snapshot for this type"
+    )
+    latest_as_of_date: Optional[date] = Field(
+        None,
+        description="Latest as_of_date present for this type (for box/pallet/return)",
+    )
+    locale: Optional[str] = Field(
+        None, description="Locale used for this type (for commission)"
+    )
+
+
+class WBTariffsStatusResponse(BaseModel):
+    """Aggregated WB tariffs snapshots status (marketplace-level)."""
+
+    marketplace_code: str = Field(..., description="Marketplace code (e.g. 'wildberries')")
+    data_domain: str = Field(..., description="Data domain (e.g. 'tariffs')")
+    latest_fetched_at: Optional[datetime] = Field(
+        None, description="Latest fetched_at across all tariffs types"
+    )
+    types: Dict[str, WBTariffTypeStatus] = Field(
+        ..., description="Per-type status for tariffs"
+    )
+
+
+# WB Finances schemas
+class WBFinancesIngestRequest(BaseModel):
+    """Request body for starting WB finances ingestion."""
+
+    date_from: str = Field(..., description="Start date in format YYYY-MM-DD")
+    date_to: str = Field(..., description="End date in format YYYY-MM-DD")
+
+
+class WBFinancesIngestResponse(BaseModel):
+    """Response for WB finances ingestion start."""
+
+    status: str = Field(..., description="Ingestion start status (e.g. 'started')")
+    task_id: Optional[str] = Field(
+        None, description="Celery task identifier if available"
+    )
+    date_from: str = Field(..., description="Requested start date")
+    date_to: str = Field(..., description="Requested end date")
+
+
+class WBFinanceReportResponse(BaseModel):
+    """Response model for a single finance report header."""
+
+    report_id: int = Field(..., description="Report ID from API")
+    period_from: Optional[date] = Field(None, description="Start date of report period")
+    period_to: Optional[date] = Field(None, description="End date of report period")
+    currency: Optional[str] = Field(None, description="Currency code")
+    total_amount: Optional[float] = Field(None, description="Total amount if available")
+    rows_count: int = Field(..., description="Number of lines in report")
+    first_seen_at: datetime = Field(..., description="When report was first seen")
+    last_seen_at: datetime = Field(..., description="When report was last seen")
+
+
+class WBFinancesReportsResponse(BaseModel):
+    """Response model for list of finance reports."""
+
+    reports: List[WBFinanceReportResponse] = Field(..., description="List of finance reports")
+

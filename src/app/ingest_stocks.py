@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Query, Path, Depends
@@ -146,10 +147,16 @@ async def ingest_stocks(project_id: int) -> None:
 
     client = WBClient()
 
+    # Один run_at для всего прогона, чтобы все строки snapshot'а имели одинаковый timestamp
+    run_at = datetime.now(timezone.utc)
+    print(
+        f"ingest_stocks: run_at={run_at.isoformat()} warehouses={len(warehouses)} chrtIds={len(chrt_ids)}"
+    )
+
     insert_sql = text(
         """
         INSERT INTO stock_snapshots (nm_id, warehouse_wb_id, quantity, snapshot_at, raw, project_id)
-        VALUES (:nm_id, :warehouse_wb_id, :quantity, now(), :raw, :project_id)
+        VALUES (:nm_id, :warehouse_wb_id, :quantity, :snapshot_at, :raw, :project_id)
         """
     )
 
@@ -246,6 +253,7 @@ async def ingest_stocks(project_id: int) -> None:
                         if warehouse_wb_id is not None
                         else None,
                         "quantity": int(quantity),
+                        "snapshot_at": run_at,
                         "raw": _serialize_json_field(stock),
                         "project_id": project_id,
                     }

@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, List
 
@@ -66,16 +67,19 @@ async def ingest_prices(project_id: int) -> None:
     if not has_raw_column:
         print("ingest_prices: WARNING - raw column not found in price_snapshots, will not save raw JSON")
     
-    # Prepare insert SQL
+    # Один run_at для всего прогона цен, чтобы все строки snapshot'а имели одинаковый created_at
+    run_at = datetime.now(timezone.utc)
+    
+    # Prepare insert SQL (explicit created_at for consistent KPI snapshots)
     if has_raw_column:
         insert_sql = text("""
-            INSERT INTO price_snapshots (nm_id, wb_price, wb_discount, spp, customer_price, rrc, raw, project_id)
-            VALUES (:nm_id, :wb_price, :wb_discount, :spp, :customer_price, :rrc, CAST(:raw AS jsonb), :project_id)
+            INSERT INTO price_snapshots (nm_id, wb_price, wb_discount, spp, customer_price, rrc, raw, project_id, created_at)
+            VALUES (:nm_id, :wb_price, :wb_discount, :spp, :customer_price, :rrc, CAST(:raw AS jsonb), :project_id, :created_at)
         """)
     else:
         insert_sql = text("""
-            INSERT INTO price_snapshots (nm_id, wb_price, wb_discount, spp, customer_price, rrc, project_id)
-            VALUES (:nm_id, :wb_price, :wb_discount, :spp, :customer_price, :rrc, :project_id)
+            INSERT INTO price_snapshots (nm_id, wb_price, wb_discount, spp, customer_price, rrc, project_id, created_at)
+            VALUES (:nm_id, :wb_price, :wb_discount, :spp, :customer_price, :rrc, :project_id, :created_at)
         """)
 
     client = WBClient(token=token)
@@ -85,7 +89,7 @@ async def ingest_prices(project_id: int) -> None:
     page_count = 0
     max_pages = 1000  # Safety limit
     
-    print(f"ingest_prices: starting pagination, limit={limit}")
+    print(f"ingest_prices: starting pagination, limit={limit}, run_at={run_at.isoformat()}")
     
     while page_count < max_pages:
         page_count += 1
@@ -154,6 +158,7 @@ async def ingest_prices(project_id: int) -> None:
                 "customer_price": float(customer_price),
                 "rrc": float(rrc),
                 "project_id": project_id,
+                "created_at": run_at,
             }
             
             # Add raw data if column exists

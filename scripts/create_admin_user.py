@@ -1,11 +1,24 @@
 #!/usr/bin/env python3
-"""Скрипт для создания/обновления пользователя admin с паролем admin123."""
+"""Script to create/update admin user with specified password.
+
+Usage:
+    python /app/scripts/create_admin_user.py [password]
+    
+If password is not provided, defaults to "admin123".
+Script is idempotent: creates user if missing, updates password if different.
+"""
 
 import sys
 import os
 
-# Добавляем путь к src
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+# Ensure we can import app modules
+# In container: PYTHONPATH=/app/src, script is at /app/scripts/create_admin_user.py
+# On host: script is at scripts/create_admin_user.py, need to add ../src
+if '/app/src' not in sys.path:
+    # Running from host, add src to path
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    src_dir = os.path.join(script_dir, '..', 'src')
+    sys.path.insert(0, os.path.abspath(src_dir))
 
 from sqlalchemy import text
 from app.db import engine
@@ -28,20 +41,20 @@ def create_or_update_admin(password: str = "admin123") -> None:
             return
         
         # Пароль не совпадает - обновляем
-        print(f"Пользователь '{username}' существует, обновляем пароль...")
+        print(f"Пользователь '{username}' существует, обновляем пароль и устанавливаем is_superuser=true...")
         new_hash = get_password_hash(password)
         
         with engine.begin() as conn:
             conn.execute(
                 text("""
                     UPDATE users 
-                    SET hashed_password = :password, updated_at = now()
+                    SET hashed_password = :password, is_superuser = true, updated_at = now()
                     WHERE username = :username
                 """),
                 {"username": username, "password": new_hash}
             )
         
-        print(f"✓ Пароль для пользователя '{username}' обновлен")
+        print(f"✓ Пароль для пользователя '{username}' обновлен, is_superuser=true установлен")
     else:
         # Пользователь не существует - создаем
         print(f"Создаем пользователя '{username}'...")

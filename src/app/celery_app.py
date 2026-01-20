@@ -20,6 +20,12 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.frontend_prices.sync_frontend_prices_brand",
         "schedule": crontab(minute=0, hour="*/4"),  # Every 4 hours at :00
     },
+    "ingest-wb-tariffs-all-daily": {
+        "task": "app.tasks.wb_tariffs.ingest_wb_tariffs_all",
+        # Once per day at 03:30 server time (UTC in our Celery config)
+        "schedule": crontab(minute=30, hour=3),
+        "options": {"queue": "default"},
+    },
 }
 
 celery_app.conf.timezone = "UTC"

@@ -7,13 +7,15 @@ load_dotenv(override=True)
 
 POSTGRES_DB = os.getenv("POSTGRES_DB", "wb")
 POSTGRES_USER = os.getenv("POSTGRES_USER", "wb")
-POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "wbpass")
+POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "wbpassword")
 POSTGRES_HOST = os.getenv("POSTGRES_HOST", "postgres")
 POSTGRES_PORT = os.getenv("POSTGRES_PORT", "5432")
 
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT = os.getenv("REDIS_PORT", "6379")
 
+# Service-level WB token for marketplace-wide operations (e.g. tariffs)
+WB_SERVICE_TOKEN = os.getenv("WB_SERVICE_TOKEN") or os.getenv("WB_TOKEN", "MOCK")
 WB_TOKEN = os.getenv("WB_TOKEN", "MOCK")
 WB_VALIDATE_TOKEN = os.getenv("WB_VALIDATE_TOKEN", "true").lower() in ("true", "1", "yes")
 JWT_SECRET = os.getenv("JWT_SECRET", "devsecret")

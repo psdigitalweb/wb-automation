@@ -13,27 +13,89 @@ import os
 import logging
 from typing import Optional
 
-from passlib.context import CryptContext
 from sqlalchemy import text
+from sqlalchemy.exc import ProgrammingError
 
 from app.db import engine
 from app.db_users import get_user_by_username, create_user as create_user_db
 from app.db_projects import get_project_by_id, create_project, get_project_member, add_project_member, ProjectRole
 from app.db_marketplaces import seed_marketplaces
+from app.core.security import get_password_hash
 
 logger = logging.getLogger(__name__)
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-
-def hash_password(password: str) -> str:
-    """Hash a password using bcrypt."""
-    return pwd_context.hash(password)
-
-
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a password against its hash."""
-    return pwd_context.verify(plain_password, hashed_password)
+def bootstrap_admin_user() -> Optional[dict]:
+    """Bootstrap admin user if users table is empty (idempotent).
+    
+    This function checks if the users table is empty, and if so, creates an admin user
+    when BOOTSTRAP_ADMIN is enabled. This is safe and idempotent - it only creates
+    a user if the table is completely empty.
+    
+    Environment variables:
+    - BOOTSTRAP_ADMIN: Enable bootstrap (default: disabled)
+    - BOOTSTRAP_ADMIN_USERNAME: Username for admin (default: "admin")
+    - BOOTSTRAP_ADMIN_PASSWORD: Password for admin (required if enabled)
+    - BOOTSTRAP_ADMIN_EMAIL: Email for admin (default: "{username}@local.dev")
+    
+    Returns:
+        dict: Created user or None if skipped/disabled
+    """
+    # Check if bootstrap is enabled
+    bootstrap_enabled = os.getenv("BOOTSTRAP_ADMIN", "0").lower() in ("true", "1", "yes") or \
+                        os.getenv("CREATE_SUPERUSER_ON_START", "false").lower() in ("true", "1", "yes")
+    
+    if not bootstrap_enabled:
+        logger.debug("Bootstrap admin user: disabled (BOOTSTRAP_ADMIN not set or false)")
+        return None
+    
+    logger.info("Bootstrap admin user: checking if users table is empty...")
+    
+    try:
+        # Check if users table is empty
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT COUNT(*) FROM users"))
+            user_count = result.scalar_one()
+        
+        if user_count > 0:
+            logger.info(f"Bootstrap admin user: skipped (users table not empty, {user_count} user(s) exist)")
+            return None
+        
+        # Table is empty, proceed with bootstrap
+        admin_username = os.getenv("BOOTSTRAP_ADMIN_USERNAME", os.getenv("ADMIN_USERNAME", "admin"))
+        admin_password = os.getenv("BOOTSTRAP_ADMIN_PASSWORD", os.getenv("ADMIN_PASSWORD"))
+        admin_email = os.getenv("BOOTSTRAP_ADMIN_EMAIL", os.getenv("ADMIN_EMAIL", f"{admin_username}@local.dev"))
+        
+        if not admin_password:
+            logger.warning("Bootstrap admin user: BOOTSTRAP_ADMIN enabled but BOOTSTRAP_ADMIN_PASSWORD not set, skipping")
+            logger.warning("Bootstrap admin user: Set BOOTSTRAP_ADMIN_PASSWORD in .env file to enable admin creation")
+            return None
+        
+        # Check if admin user already exists (double-check)
+        existing_user = get_user_by_username(admin_username)
+        if existing_user:
+            logger.info(f"Bootstrap admin user: skipped (admin user '{admin_username}' already exists, id={existing_user['id']})")
+            return existing_user
+        
+        # Create admin user (using same password hashing as auth system)
+        logger.info(f"Bootstrap admin user: creating admin user '{admin_username}'...")
+        hashed_password = get_password_hash(admin_password)
+        admin_user = create_user_db(
+            username=admin_username,
+            email=admin_email,
+            hashed_password=hashed_password,
+            is_superuser=True
+        )
+        logger.info(f"Bootstrap admin user: ✓ Created admin user '{admin_username}' (id={admin_user['id']}, email={admin_email})")
+        return admin_user
+        
+    except ProgrammingError as e:
+        # Table doesn't exist yet (migrations not applied)
+        logger.debug(f"Bootstrap admin user: skipped (users table not found yet, migrations may not be applied): {e}")
+        return None
+    except Exception as e:
+        logger.error(f"Bootstrap admin user: failed with error: {e}", exc_info=True)
+        return None
 
 
 def ensure_admin_user() -> Optional[dict]:
@@ -58,7 +120,7 @@ def ensure_admin_user() -> Optional[dict]:
     
     # Create admin user
     try:
-        hashed_password = hash_password(admin_password)
+        hashed_password = get_password_hash(admin_password)
         admin_user = create_user_db(
             username=admin_username,
             email=os.getenv("ADMIN_EMAIL", f"{admin_username}@example.com"),

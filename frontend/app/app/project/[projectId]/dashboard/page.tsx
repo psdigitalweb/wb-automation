@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { apiGet, apiPost } from '../../../../../lib/apiClient'
 import type { ApiDebug, ApiError } from '../../../../../lib/apiClient'
 import '../../../../globals.css'
+import WBFinancesSection from '../../../../../components/WBFinancesSection'
 
 interface Kpis {
   wb: {
@@ -62,6 +63,7 @@ export default function ProjectDashboard() {
   const [error, setError] = useState<ApiError | string | null>(null)
   const [debug, setDebug] = useState<ApiDebug | null>(null)
   const [wbEnabled, setWbEnabled] = useState(false)
+  const [otherMarketplacesEnabled, setOtherMarketplacesEnabled] = useState(false)
   const [checkingWb, setCheckingWb] = useState(true)
   const [project, setProject] = useState<Project | null>(null)
   const DEBUG_UI = process.env.NEXT_PUBLIC_DEBUG === 'true'
@@ -70,6 +72,7 @@ export default function ProjectDashboard() {
   useEffect(() => {
     setKpis(null)
     setWbEnabled(false)
+    setOtherMarketplacesEnabled(false)
     setCheckingWb(true)
     setError(null)
     setProject(null)
@@ -97,6 +100,10 @@ export default function ProjectDashboard() {
       const { data: marketplaces } = await apiGet<ProjectMarketplace[]>(`/v1/projects/${projectId}/marketplaces`)
       const wb = marketplaces.find(m => m.marketplace_code === 'wildberries')
       setWbEnabled(wb?.is_enabled || false)
+      const otherEnabled = marketplaces.some(
+        (m) => m.marketplace_code !== 'wildberries' && m.is_enabled
+      )
+      setOtherMarketplacesEnabled(otherEnabled)
       setCheckingWb(false)
     } catch (error) {
       console.error('Failed to check WB status:', error)
@@ -121,73 +128,6 @@ export default function ProjectDashboard() {
     }
   }
 
-  const triggerIngest = async (type: string) => {
-    if (!wbEnabled) {
-      setToast('WB marketplace is not enabled. Enable it in Marketplaces section.')
-      setTimeout(() => setToast(null), 5000)
-      return
-    }
-
-    try {
-      setToast(`Starting ${type} ingestion...`)
-      const domainMap: Record<string, string> = {
-        products: 'products',
-        warehouses: 'warehouses',
-        stocks: 'stocks',
-        'supplier-stocks': 'supplier_stocks',
-        prices: 'prices',
-      }
-      const domain = domainMap[type] || type
-      const { data: resp } = await apiPost<{ task_id: string; domain: string; status: string }>(
-        `/v1/projects/${projectId}/ingest/run`,
-        { domain }
-      )
-      setToast(`${resp.domain} queued (task: ${resp.task_id})`)
-      setTimeout(() => setToast(null), 3000)
-      setTimeout(loadKpis, 2000)
-    } catch (error: any) {
-      setToast(`Error (${type}): ${error.detail || error.message}`)
-      setTimeout(() => setToast(null), 3000)
-    }
-  }
-
-  const triggerFrontendPricesIngest = async () => {
-    if (!wbEnabled) {
-      setToast('WB marketplace is not enabled. Enable it in Marketplaces section.')
-      setTimeout(() => setToast(null), 5000)
-      return
-    }
-
-    try {
-      setToast('Queueing frontend_prices ingestion...')
-      const { data: resp } = await apiPost<{ task_id: string; domain: string; status: string }>(
-        `/v1/projects/${projectId}/ingest/run`,
-        { domain: 'frontend_prices' }
-      )
-      setToast(`${resp.domain} queued (task: ${resp.task_id})`)
-      setTimeout(() => setToast(null), 5000)
-      setTimeout(loadKpis, 2000)
-    } catch (error: any) {
-      setToast(`Error: ${error.detail || error.message}`)
-      setTimeout(() => setToast(null), 3000)
-    }
-  }
-
-  const triggerRrpXmlIngest = async () => {
-    try {
-      setToast('Starting RRP XML ingestion...')
-      const { data: resp } = await apiPost<{ task_id: string; domain: string; status: string }>(
-        `/v1/projects/${projectId}/ingest/run`,
-        { domain: 'rrp_xml' as any }
-      )
-      setToast(`${resp.domain} queued (task: ${resp.task_id})`)
-      setTimeout(() => setToast(null), 5000)
-      setTimeout(loadKpis, 2000)
-    } catch (error: any) {
-      setToast(`Error: ${error.detail || error.message}`)
-      setTimeout(() => setToast(null), 3000)
-    }
-  }
 
   const formatDate = (dateStr: string | null) => {
     if (!dateStr) return 'N/A'
@@ -245,7 +185,7 @@ export default function ProjectDashboard() {
       )}
 
       <div className="card">
-        <h2>KPIs</h2>
+        <h2>Сводка данных</h2>
         {loading ? (
           <p>Loading...</p>
         ) : error ? (
@@ -256,88 +196,113 @@ export default function ProjectDashboard() {
             <button onClick={loadKpis}>Retry</button>
           </div>
         ) : kpis ? (
-          <div className="metrics">
-            <div className="metric-card">
-              <div className="metric-value">{kpis.wb.products_total}</div>
-              <div className="metric-label">WB товары (карточки)</div>
-            </div>
-            <div className="metric-card">
-              <div className="metric-value">{kpis.wb.warehouses_fbs_total}</div>
-              <div className="metric-label">WB склад (FBS)</div>
-            </div>
-            <div className="metric-card">
-              <div className="metric-value">{kpis.stock.fbs_in_stock_products}</div>
-              <div className="metric-label">FBS товары в наличии</div>
-            </div>
-            <div className="metric-card">
-              <div className="metric-value">{kpis.stock.fbo_in_stock_products}</div>
-              <div className="metric-label">FBO товары в наличии</div>
-            </div>
-            <div className="metric-card">
-              <div className="metric-value">{kpis.prices.wb_prices_products}</div>
-              <div className="metric-label">WB цены (товаров)</div>
-            </div>
-            <div className="metric-card">
-              <div className="metric-value">{kpis.storefront.storefront_products}</div>
-              <div className="metric-label">Витрина WB (товаров)</div>
-              <div style={{ fontSize: 12, color: '#666', marginTop: 4 }}>
-                expected: {kpis.storefront.expected_storefront_products}
+          <>
+            {/* Внутренние данные */}
+            <div style={{ marginBottom: 20 }}>
+              <h3 style={{ marginTop: 0, marginBottom: 10 }}>Внутренние данные</h3>
+              <div className="metrics">
+                <div className="metric-card" style={{ flex: '2 1 200px' }}>
+                  <div className="metric-label" style={{ fontSize: 12, textTransform: 'uppercase', color: '#0d6efd' }}>
+                    Товары в наличии (1C XML)
+                  </div>
+                  <div className="metric-value" style={{ fontSize: 28, color: '#0d6efd' }}>
+                    {kpis.rrp_xml.with_stock}
+                  </div>
+                  <div style={{ fontSize: 12, color: '#666', marginTop: 4 }}>
+                    Всего товаров: {kpis.rrp_xml.total}
+                  </div>
+                  <div style={{ fontSize: 12, color: '#888', marginTop: 4 }}>
+                    Обновлено: {formatDate(kpis.last_snapshots.rrp_at)}
+                  </div>
+                </div>
               </div>
             </div>
-            <div className="metric-card">
-              <div className="metric-value">{kpis.rrp_xml.total}</div>
-              <div className="metric-label">Товары компании (1C XML)</div>
-              <div style={{ fontSize: 12, color: '#666', marginTop: 4 }}>
-                price: {kpis.rrp_xml.with_price} · stock: {kpis.rrp_xml.with_stock}
+
+            {/* Wildberries */}
+            <div style={{ marginBottom: 20 }}>
+              <h3 style={{ marginTop: 0, marginBottom: 10 }}>Wildberries</h3>
+              <div className="metrics">
+                {/* Каталог / Витрина */}
+                <div className="metric-card">
+                  <div className="metric-label" style={{ fontSize: 12, textTransform: 'uppercase', color: '#6c757d' }}>
+                    Каталог / Витрина
+                  </div>
+                  <div className="metric-value" style={{ fontSize: 22 }}>
+                    {kpis.wb.products_total}
+                  </div>
+                  <div style={{ fontSize: 12, color: '#666', marginTop: 4 }}>
+                    Витрина: {kpis.storefront.storefront_products} (ожидается {kpis.storefront.expected_storefront_products})
+                  </div>
+                  <div style={{ fontSize: 12, color: '#888', marginTop: 4 }}>
+                    Обновлено: {formatDate(kpis.last_snapshots.storefront_at)}
+                  </div>
+                </div>
+
+                {/* Наличие (FBS / FBO) */}
+                <div className="metric-card">
+                  <div className="metric-label" style={{ fontSize: 12, textTransform: 'uppercase', color: '#6c757d' }}>
+                    Наличие (FBS / FBO)
+                  </div>
+                  <div style={{ display: 'flex', gap: 16, marginTop: 4 }}>
+                    <div>
+                      <div style={{ fontSize: 11, textTransform: 'uppercase', color: '#6c757d' }}>FBS</div>
+                      <div className="metric-value" style={{ fontSize: 20 }}>
+                        {kpis.stock.fbs_in_stock_products}
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 11, textTransform: 'uppercase', color: '#6c757d' }}>FBO</div>
+                      <div className="metric-value" style={{ fontSize: 20 }}>
+                        {kpis.stock.fbo_in_stock_products}
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 12, color: '#888', marginTop: 4 }}>
+                    Обновлено (FBS): {formatDate(kpis.last_snapshots.fbs_stock_at)}
+                  </div>
+                  <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>
+                    Обновлено (FBO): {formatDate(kpis.last_snapshots.fbo_stock_at)}
+                  </div>
+                </div>
+
+                {/* Цены */}
+                <div className="metric-card">
+                  <div className="metric-label" style={{ fontSize: 12, textTransform: 'uppercase', color: '#6c757d' }}>
+                    Цены
+                  </div>
+                  <div className="metric-value" style={{ fontSize: 22 }}>
+                    {kpis.prices.wb_prices_products}
+                  </div>
+                  <div style={{ fontSize: 12, color: '#666', marginTop: 4 }}>
+                    товаров c загруженными ценами WB
+                  </div>
+                  <div style={{ fontSize: 12, color: '#888', marginTop: 4 }}>
+                    Обновлено: {formatDate(kpis.last_snapshots.wb_prices_at)}
+                  </div>
+                </div>
               </div>
             </div>
-          </div>
+
+            {/* Другие маркетплейсы */}
+            {otherMarketplacesEnabled && (
+              <div>
+                <h3 style={{ marginTop: 0, marginBottom: 10 }}>Другие маркетплейсы</h3>
+                <div className="metrics">
+                  <div className="metric-card" style={{ opacity: 0.8 }}>
+                    <div className="metric-label" style={{ fontSize: 12, textTransform: 'uppercase', color: '#6c757d' }}>
+                      Данные других маркетплейсов
+                    </div>
+                    <div style={{ fontSize: 13, color: '#666', marginTop: 4 }}>
+                      Метрики будут добавлены по мере подключения модулей для других маркетплейсов.
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </>
         ) : (
           <p>Failed to load metrics</p>
         )}
-
-        {kpis && (
-          <div style={{ marginTop: '20px' }}>
-            <p><strong>Last FBS Stock Snapshot:</strong> {formatDate(kpis.last_snapshots.fbs_stock_at)}</p>
-            <p><strong>Last FBO Stock Snapshot:</strong> {formatDate(kpis.last_snapshots.fbo_stock_at)}</p>
-            <p><strong>Last WB Prices Snapshot:</strong> {formatDate(kpis.last_snapshots.wb_prices_at)}</p>
-            <p><strong>Last Storefront Snapshot:</strong> {formatDate(kpis.last_snapshots.storefront_at)}</p>
-            <p><strong>Last RRP XML Snapshot:</strong> {formatDate(kpis.last_snapshots.rrp_at)}</p>
-          </div>
-        )}
-      </div>
-
-      <div className="card">
-        <h2>Ingestion Controls</h2>
-        {!wbEnabled && (
-          <p style={{ color: '#dc3545', marginBottom: '15px' }}>
-            WB not enabled. Enable in{' '}
-            <Link href={`/app/project/${projectId}/marketplaces`} style={{ color: '#0070f3' }}>
-              Marketplaces
-            </Link>
-          </p>
-        )}
-        <button onClick={() => triggerIngest('products')} disabled={!wbEnabled}>
-          Run Products Ingestion
-        </button>
-        <button onClick={() => triggerIngest('warehouses')} disabled={!wbEnabled}>
-          Run Warehouses Ingestion
-        </button>
-        <button onClick={() => triggerIngest('stocks')} disabled={!wbEnabled}>
-          Run FBS Stock Ingestion
-        </button>
-        <button onClick={() => triggerIngest('supplier-stocks')} disabled={!wbEnabled}>
-          Run FBO Stock Ingestion
-        </button>
-        <button onClick={() => triggerIngest('prices')} disabled={!wbEnabled}>
-          Run Prices Ingestion
-        </button>
-        <button onClick={triggerFrontendPricesIngest} disabled={!wbEnabled}>
-          Run Frontend Prices Ingestion
-        </button>
-        <button onClick={triggerRrpXmlIngest}>
-          Run RRP XML Ingestion (1C)
-        </button>
       </div>
 
       <div className="card">
@@ -361,6 +326,11 @@ export default function ProjectDashboard() {
           <button>RRP Snapshots (1C)</button>
         </Link>
       </div>
+
+      <WBFinancesSection
+        projectId={projectId}
+        title="Загрузка финансовых отчетов Wildberries"
+      />
     </div>
   )
 }

@@ -39,7 +39,6 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   if (!inApp)
     return (
       <>
-        <Breadcrumbs />
         {children}
       </>
     )

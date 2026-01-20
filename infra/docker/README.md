@@ -1,19 +1,119 @@
 # Docker Compose для EcomCore
 
-## Быстрый старт
+## Local Quickstart (Локальный быстрый старт)
+
+**Полный набор команд для первого запуска с нуля:**
+
+### Шаг 1: Создать .env файл
+
+**Расположение:** `D:\Work\EcomCore\.env` (корень репозитория, НЕ в `infra/docker/`)
 
 ```powershell
-cd D:\Work\EcomCore
-.\scripts\start-docker-compose.ps1 -Force
+# Создать/открыть .env файл
+notepad D:\Work\EcomCore\.env
 ```
 
-## Ручной запуск
+**Содержимое .env:**
+```env
+# Database credentials (REQUIRED)
+POSTGRES_DB=wb
+POSTGRES_USER=wb
+POSTGRES_PASSWORD=wbpassword
+
+# Auto-apply migrations in dev mode (OPTIONAL, recommended for local dev)
+AUTO_MIGRATE=1
+
+# Bootstrap admin user (OPTIONAL, for automatic admin creation)
+BOOTSTRAP_ADMIN=1
+BOOTSTRAP_ADMIN_USERNAME=admin
+BOOTSTRAP_ADMIN_PASSWORD=admin123
+BOOTSTRAP_ADMIN_EMAIL=admin@local.dev
+```
+
+### Шаг 2: Запустить контейнеры
+
+```powershell
+# Перейти в директорию docker-compose (ОБЯЗАТЕЛЬНО!)
+cd D:\Work\EcomCore\infra\docker
+
+# Остановить старые контейнеры
+docker compose down
+
+# Запустить контейнеры с пересборкой
+docker compose up -d --build
+
+# Подождать инициализации (15 секунд)
+Start-Sleep -Seconds 15
+```
+
+**Что происходит:**
+- Если `AUTO_MIGRATE=1` → миграции применяются автоматически при старте API
+- Если `BOOTSTRAP_ADMIN=1` → admin пользователь создаётся автоматически (если таблица users пуста)
+
+### Шаг 3: Проверить статус
+
+```powershell
+# Проверить статус контейнеров
+docker compose ps
+
+# Проверить логи API (должны быть сообщения о миграциях и bootstrap)
+docker compose logs api | Select-String -Pattern "migration|Bootstrap|PostgreSQL"
+
+# Проверить, что таблицы созданы
+docker compose exec postgres psql -U wb -d wb -c "\dt"
+```
+
+**Ожидаемые таблицы:** `users`, `projects`, `project_members`, и другие.
+
+### Шаг 4: Проверить вход
+
+```powershell
+# Проверить API Docs
+curl http://localhost:8000/docs
+
+# Проверить вход (одна строка)
+curl -X POST http://localhost:8000/api/v1/auth/login -H "Content-Type: application/json" -d '{\"username\":\"admin\",\"password\":\"admin123\"}'
+```
+
+**Ожидаемый ответ:**
+```json
+{
+  "access_token": "eyJ...",
+  "refresh_token": "eyJ...",
+  "token_type": "bearer"
+}
+```
+
+### Шаг 5: Создать проект (через UI или API)
+
+После успешного входа можно создать проект через фронтенд или API.
+
+**Проверка через API:**
+```powershell
+# Получить токен (сохранить в переменную)
+$response = curl -X POST http://localhost:8000/api/v1/auth/login -H "Content-Type: application/json" -d '{\"username\":\"admin\",\"password\":\"admin123\"}' | ConvertFrom-Json
+$token = $response.access_token
+
+# Создать проект
+curl -X POST http://localhost:8000/api/v1/projects `
+  -H "Content-Type: application/json" `
+  -H "Authorization: Bearer $token" `
+  -d '{\"name\":\"Test Project\",\"description\":\"Test\"}'
+```
+
+---
+
+## Ручной запуск (без AUTO_MIGRATE)
+
+Если `AUTO_MIGRATE=0` или не установлен, миграции нужно применять вручную:
 
 ```powershell
 cd D:\Work\EcomCore\infra\docker
 docker compose down
 docker compose up -d --build
+Start-Sleep -Seconds 10
 docker compose exec api alembic upgrade head
+Start-Sleep -Seconds 5
 ```
 
 ## Порты
@@ -25,7 +125,9 @@ docker compose exec api alembic upgrade head
 ## Структура
 
 - `docker-compose.yml` - основной файл конфигурации
-- `.env` - должен находиться в корне репозитория (`../../.env`)
+- `.env` - **ОБЯЗАТЕЛЬНО** в корне репозитория: `D:\Work\EcomCore\.env` (НЕ в `infra/docker/`)
+
+**Важно:** Docker Compose использует `env_file: ../../.env` (относительно `infra/docker/`), что указывает на корневой `.env` файл.
 
 ## Решение проблем
 
@@ -303,6 +405,355 @@ try {
 - ✅ Frontend доступен на http://localhost/
 - ✅ API доступен через nginx на http://localhost/api/v1/health
 - ✅ API Docs доступны на http://localhost:8000/docs (или 8001 если используется override)
+
+## Bootstrap Admin User (Автоматическое создание администратора)
+
+После `docker compose down/up` таблица `users` может быть пустой, что приводит к ошибке 401 при попытке входа.
+
+### ⚠️ ВАЖНО: Расположение .env файла
+
+**Файл `.env` ОБЯЗАТЕЛЬНО должен находиться в корне репозитория:**
+- Windows: `D:\Work\EcomCore\.env`
+- Linux: `/root/apps/ecomcore/.env` (или путь к корню репозитория)
+
+Docker Compose использует `env_file: ../../.env` (относительно `infra/docker/`), что указывает на корневой `.env` файл.
+
+**Если `.env` файл отсутствует или находится не в корне, Docker Compose выдаст ошибку:**
+```
+ERROR: .env file not found
+```
+
+### Автоматическое создание (рекомендуется)
+
+Добавьте в `.env` файл (`D:\Work\EcomCore\.env`):
+
+```env
+# Включить автоматическое создание admin пользователя при пустой таблице users
+BOOTSTRAP_ADMIN=1
+BOOTSTRAP_ADMIN_USERNAME=admin
+BOOTSTRAP_ADMIN_PASSWORD=admin123
+BOOTSTRAP_ADMIN_EMAIL=admin@local.dev
+```
+
+**Важно:**
+- Bootstrap создаёт пользователя **только если таблица `users` пуста** (0 строк)
+- Если пользователи уже существуют, bootstrap пропускается (безопасно)
+- По умолчанию `BOOTSTRAP_ADMIN=0` (отключено) для безопасности
+- Пароль хешируется с помощью bcrypt (та же функция, что используется в auth)
+- Bootstrap выполняется **после** применения миграций (в startup event)
+
+**После добавления переменных:**
+
+```powershell
+# Перейти в директорию docker-compose (ОБЯЗАТЕЛЬНО из этой директории!)
+cd D:\Work\EcomCore\infra\docker
+
+# Остановить контейнеры
+docker compose down
+
+# Запустить контейнеры с пересборкой
+docker compose up -d --build
+
+# Подождать инициализации PostgreSQL (10 секунд)
+Start-Sleep -Seconds 10
+
+# Применить миграции (создаст таблицу users и другие таблицы)
+docker compose exec api alembic upgrade head
+
+# Подождать запуска API (5 секунд)
+Start-Sleep -Seconds 5
+```
+
+**Проверка bootstrap в логах:**
+
+```powershell
+# Просмотр логов API с фильтром по слову "Bootstrap"
+docker compose logs api | Select-String -Pattern "Bootstrap"
+```
+
+**Ожидаемые сообщения в логах:**
+- Если bootstrap включен и таблица пуста: `Bootstrap admin user: ✓ Created admin user 'admin' (id=1, email=admin@local.dev)`
+- Если bootstrap включен, но пользователи уже есть: `Bootstrap admin user: skipped (users table not empty, X user(s) exist)`
+- Если bootstrap отключен: сообщений с "Bootstrap" не будет (или только debug-уровень)
+
+### Ручное создание (fallback)
+
+Если автоматический bootstrap не сработал, используйте существующий скрипт:
+
+```powershell
+# Из директории infra/docker (ОБЯЗАТЕЛЬНО!)
+cd D:\Work\EcomCore\infra\docker
+
+# Использовать существующий скрипт (создаст или обновит admin с указанным паролем)
+# Пароль по умолчанию: admin123
+docker compose exec api python /app/scripts/create_admin_user.py admin123
+
+# Или с другим паролем:
+docker compose exec api python /app/scripts/create_admin_user.py mypassword
+```
+
+**Скрипт идемпотентен:**
+- Если пользователь не существует → создаст с `is_superuser=true`
+- Если пользователь существует с тем же паролем → пропустит (не изменяет)
+- Если пользователь существует с другим паролем → обновит пароль и установит `is_superuser=true`
+
+**Альтернатива: создание через Python напрямую (одна строка):**
+
+```powershell
+docker compose exec api python -c "from app.core.security import get_password_hash; from app.db_users import create_user, get_user_by_username; username='admin'; password='admin123'; existing=get_user_by_username(username); hashed=get_password_hash(password) if not existing or not existing['hashed_password'].startswith('$2b$') else None; user=create_user(username, 'admin@local.dev', hashed, is_superuser=True) if not existing else existing; print(f'User: {user}')"
+```
+
+**Примечание:** Рекомендуется использовать скрипт `/app/scripts/create_admin_user.py` - он проще и надежнее.
+
+### Проверка входа
+
+После создания пользователя проверьте вход:
+
+**Windows PowerShell (многострочные команды):**
+
+```powershell
+# Проверка API Docs (прямой доступ)
+curl http://localhost:8000/docs
+
+# Проверка API Docs (через nginx)
+curl http://localhost/api/docs
+
+# Проверка входа (PowerShell - используйте обратные кавычки ` для переноса строк)
+curl -X POST http://localhost:8000/api/v1/auth/login `
+  -H "Content-Type: application/json" `
+  -d '{\"username\":\"admin\",\"password\":\"admin123\"}'
+
+# Или через nginx
+curl -X POST http://localhost/api/v1/auth/login `
+  -H "Content-Type: application/json" `
+  -d '{\"username\":\"admin\",\"password\":\"admin123\"}'
+```
+
+**Windows PowerShell (однострочные команды, без переноса):**
+
+```powershell
+# Проверка API Docs
+curl http://localhost:8000/docs
+curl http://localhost/api/docs
+
+# Проверка входа (одна строка)
+curl -X POST http://localhost:8000/api/v1/auth/login -H "Content-Type: application/json" -d '{\"username\":\"admin\",\"password\":\"admin123\"}'
+curl -X POST http://localhost/api/v1/auth/login -H "Content-Type: application/json" -d '{\"username\":\"admin\",\"password\":\"admin123\"}'
+```
+
+**Bash/Linux:**
+
+```bash
+# Проверка API Docs
+curl http://localhost:8000/docs
+curl http://localhost/api/docs
+
+# Проверка входа
+curl -X POST http://localhost:8000/api/v1/auth/login -H "Content-Type: application/json" -d '{"username":"admin","password":"admin123"}'
+curl -X POST http://localhost/api/v1/auth/login -H "Content-Type: application/json" -d '{"username":"admin","password":"admin123"}'
+```
+
+**Ожидаемый ответ (успешный вход):**
+```json
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "token_type": "bearer"
+}
+```
+
+**Ожидаемый ответ (ошибка 401 - пользователь не найден или неверный пароль):**
+```json
+{
+  "detail": "Incorrect username or password"
+}
+```
+
+**Примечание:** API доступен по двум адресам:
+- **Прямой доступ:** `http://localhost:8000/docs` и `http://localhost:8000/api/v1/auth/login`
+- **Через nginx:** `http://localhost/api/docs` и `http://localhost/api/v1/auth/login`
+
+## Troubleshooting (Решение проблем)
+
+### Docker CLI ошибка: "dockerDesktopLinuxEngine pipe missing"
+
+**Симптомы:**
+```
+error during connect: Get "http://%2F%2F.%2Fpipe%2FdockerDesktopLinuxEngine/v1.24/containers/json": open //./pipe/dockerDesktopLinuxEngine: The system cannot find the file specified.
+```
+
+**Причина:** Docker Desktop engine не запущен или завис.
+
+**Решение:**
+1. Откройте Docker Desktop
+2. Если Docker Desktop не отвечает:
+   - Закройте Docker Desktop полностью (через системный трей)
+   - Если используется WSL2: выполните `wsl --shutdown` в PowerShell
+   - Подождите 10 секунд
+   - Запустите Docker Desktop снова
+   - Дождитесь полной загрузки (иконка в трее должна быть зеленая)
+3. Повторите команду `docker compose`
+
+### Ошибка 401 при входе (Incorrect username or password)
+
+**Проверка 1: Существует ли пользователь в БД?**
+
+```powershell
+# Проверить количество пользователей
+docker compose exec postgres psql -U wb -d wb -c "SELECT COUNT(*) FROM users;"
+
+# Если 0 → пользователь не создан, нужно создать
+# Если > 0 → проверить username и пароль
+```
+
+**Проверка 2: Проверить логи bootstrap**
+
+```powershell
+docker compose logs api | Select-String -Pattern "Bootstrap"
+```
+
+Если bootstrap не сработал:
+- Убедитесь, что `BOOTSTRAP_ADMIN=1` в `.env` файле
+- Убедитесь, что `BOOTSTRAP_ADMIN_PASSWORD=admin123` в `.env` файле
+- Перезапустите API: `docker compose restart api`
+
+**Решение: Создать пользователя вручную**
+
+```powershell
+cd D:\Work\EcomCore\infra\docker
+docker compose exec api python /app/scripts/create_admin_user.py admin123
+```
+
+### Ошибка: "relation 'projects' does not exist" или "relation 'projects' does not exist"
+
+**Симптомы:**
+```
+psycopg2.errors.UndefinedTable: relation "projects" does not exist
+```
+
+**Причина:** Миграции Alembic не применены или применены не полностью.
+
+**Решение:**
+
+**Вариант 1: Автоматическое применение (рекомендуется для dev)**
+
+Добавьте в `.env` файл:
+```env
+AUTO_MIGRATE=1
+```
+
+Затем перезапустите API:
+```powershell
+cd D:\Work\EcomCore\infra\docker
+docker compose restart api
+```
+
+Миграции применятся автоматически при старте.
+
+**Вариант 2: Ручное применение**
+
+```powershell
+cd D:\Work\EcomCore\infra\docker
+
+# Проверить текущую ревизию
+docker compose exec api alembic current
+
+# Применить все миграции
+docker compose exec api alembic upgrade head
+
+# Проверить, что таблицы созданы
+docker compose exec postgres psql -U wb -d wb -c "\dt"
+```
+
+**Ожидаемые таблицы:** `users`, `projects`, `project_members`, `marketplaces`, и другие.
+
+**Проверка DATABASE_URL:**
+
+Убедитесь, что API и Alembic используют одну и ту же БД:
+
+```powershell
+# Проверить переменные окружения API
+docker compose exec api env | Select-String -Pattern "POSTGRES|DATABASE"
+
+# Проверить подключение к БД
+docker compose exec api python -c "from app.db import engine; from sqlalchemy import text; conn = engine.connect(); print('DB:', conn.execute(text('SELECT current_database()')).scalar())"
+```
+
+**Если миграции не применяются:**
+
+1. Проверить порядок миграций:
+   ```powershell
+   docker compose exec api alembic history
+   ```
+
+2. Проверить heads (не должно быть multiple heads):
+   ```powershell
+   docker compose exec api alembic heads
+   ```
+
+3. Если multiple heads → нужно merge или stamp:
+   ```powershell
+   # Посмотреть диагностику
+   docker compose exec api python /app/scripts/alembic_db_diagnose.py
+   ```
+
+### Ошибка: ".env file not found"
+
+**Причина:** Docker Compose не может найти `.env` файл.
+
+**Решение:**
+1. Убедитесь, что `.env` файл находится в корне репозитория:
+   - Windows: `D:\Work\EcomCore\.env`
+   - Linux: `/root/apps/ecomcore/.env` (или ваш путь к корню)
+2. Проверьте, что вы запускаете `docker compose` из директории `infra/docker`
+3. Проверьте содержимое `.env`:
+   ```powershell
+   # Windows
+   Get-Content D:\Work\EcomCore\.env
+   
+   # Linux
+   cat /root/apps/ecomcore/.env
+   ```
+
+### Миграции не применяются
+
+**Проверка:**
+
+```powershell
+# Проверить текущую ревизию
+docker compose exec api alembic current
+
+# Проверить доступные миграции
+docker compose exec api alembic heads
+```
+
+**Решение:**
+
+```powershell
+# Применить все миграции
+docker compose exec api alembic upgrade head
+
+# Если ошибка "Can't locate revision" → возможно нужно stamp
+docker compose exec api alembic stamp head
+docker compose exec api alembic upgrade head
+```
+
+### API не запускается или падает
+
+**Проверка логов:**
+
+```powershell
+# Посмотреть последние логи API
+docker compose logs api --tail=50
+
+# Следить за логами в реальном времени
+docker compose logs api -f
+```
+
+**Частые причины:**
+- База данных не готова: подождите 10-15 секунд после `docker compose up`
+- Неверные переменные окружения: проверьте `.env` файл
+- Порт 8000 занят: используйте `docker compose ps` для проверки
 
 ## How to run recovery script
 

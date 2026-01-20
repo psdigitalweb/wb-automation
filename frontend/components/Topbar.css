@@ -44,8 +44,9 @@
 
 .topbar-right {
   display: flex;
+  flex-direction: row;
   align-items: center;
-  gap: 15px;
+  gap: 14px;
 }
 
 .topbar-user {
