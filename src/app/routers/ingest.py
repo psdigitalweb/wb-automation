@@ -15,6 +15,7 @@ from app.schemas.ingest_schedule import (
 from app.schemas.ingest_run import (
     IngestRunResponse,
     IngestRunListResponse,
+    IngestRunMarkTimeoutRequest,
     RunStatus,
     WBIngestStatusResponse,
     WBIngestRunRequest,
@@ -319,6 +320,44 @@ async def get_run(
             detail="Run not found",
         )
     return IngestRunResponse(**run)
+
+
+@router.post(
+    "/projects/{project_id}/ingest/runs/{run_id}/mark-timeout",
+    response_model=IngestRunResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def mark_run_timeout_endpoint(
+    body: IngestRunMarkTimeoutRequest,
+    project_id: int = Path(..., description="Project ID"),
+    run_id: int = Path(..., description="Run ID"),
+    current_user: dict = Depends(get_current_active_user),
+    membership: dict = Depends(get_project_membership),
+):
+    run = runs_service.get_run(run_id)
+    if not run:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+    if run.get("project_id") != project_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+    if run.get("status") not in ("queued", "running"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Run is not active (queued/running)",
+        )
+
+    updated = runs_service.mark_run_timeout(
+        run_id,
+        reason_code=body.reason_code or "manual",
+        reason_text=body.reason_text or "Marked timeout manually",
+        actor=str(current_user.get("email") or "manual"),
+    )
+    if not updated:
+        # Status may have changed concurrently.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Run status changed",
+        )
+    return IngestRunResponse(**updated)
 
 
 @router.get(

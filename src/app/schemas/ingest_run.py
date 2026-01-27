@@ -47,6 +47,11 @@ class IngestRunListResponse(BaseModel):
   items: List[IngestRunResponse]
 
 
+class IngestRunMarkTimeoutRequest(BaseModel):
+    reason_code: str = "manual"
+    reason_text: Optional[str] = None
+
+
 class WBIngestStatusResponse(BaseModel):
     job_code: str
     title: str
