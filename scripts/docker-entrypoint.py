@@ -103,6 +103,11 @@ def run_migrations():
             env["PYTHONPATH"] = "/app/src"
         
         # Run migrations while holding the lock
+        #
+        # Note: If migrations fail with:
+        #   "value too long for type character varying(32)"
+        # it usually means alembic_version.version_num is VARCHAR(32) but revision ids are longer.
+        # Fix via migration that widens version_num to TEXT (no DB reset required).
         print("Running alembic upgrade head...")
         result = subprocess.run(
             ["alembic", "upgrade", "head"],
