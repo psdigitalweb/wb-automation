@@ -547,6 +547,16 @@ docker compose exec api alembic upgrade head
 docker compose exec api alembic upgrade head
 ```
 
+### Sanity-check: multiple heads
+
+Иногда при параллельной разработке Alembic может получить несколько heads, и тогда `alembic upgrade head` падает с ошибкой вида:
+`Multiple head revisions are present for given argument 'head'`.
+
+- **Проверка**:
+  - `docker compose exec api alembic heads`
+  - или локально: `python scripts/check_alembic_heads.py`
+- **Фикс (без drop/reset)**: создать *пустую merge-миграцию*, которая объединяет оба head'а (down_revision = (HEAD_A, HEAD_B)).
+
 ### Новые миграции (Спринт #1)
 
 1. **b1c2d3e4f5a6** - `add_rrp_snapshots_table`: таблица для данных из 1С XML
