@@ -278,15 +278,23 @@ async def list_project_runs(
                 detail=f"Unsupported marketplace_code '{marketplace_code}'",
             )
 
-    runs = runs_service.get_runs(
-        project_id=project_id,
-        marketplace_code=marketplace_code,
-        job_code=job_code,
-        status=status_param,
-        date_from=date_from,
-        date_to=date_to,
-        limit=limit,
-    )
+    try:
+        runs = runs_service.get_runs(
+            project_id=project_id,
+            marketplace_code=marketplace_code,
+            job_code=job_code,
+            status=status_param,
+            date_from=date_from,
+            date_to=date_to,
+            limit=limit,
+        )
+    except Exception as exc:
+        # We can't rely on host filesystem logging in Docker; surface safe error detail for debugging.
+        err_msg = f"{type(exc).__name__}: {str(exc)}"
+        raise HTTPException(
+            status_code=500,
+            detail=("Failed to list ingest runs. " + err_msg)[:500],
+        ) from exc
 
     items = [IngestRunResponse(**r) for r in runs]
     return IngestRunListResponse(items=items)

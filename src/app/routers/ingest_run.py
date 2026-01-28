@@ -2,19 +2,13 @@ from __future__ import annotations
 
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Path
+from fastapi import APIRouter, Depends, HTTPException, Path, status
 from pydantic import BaseModel, Field
 
 from app.deps import get_current_active_user, get_project_membership
-from app.tasks.ingestion import (
-    ingest_prices_task,
-    ingest_supplier_stocks_task,
-    ingest_products_task,
-    ingest_stocks_task,
-    ingest_warehouses_task,
-    ingest_frontend_prices_task,
-    ingest_rrp_xml_task,
-)
+from app.services.ingest.runs import create_run_queued, has_active_run, finish_run_failed
+from app.services.ingest.registry import get_job_definition, IngestJobNotFound
+from app.tasks.ingest_execute import execute_ingest
 
 
 IngestDomain = Literal[
@@ -34,6 +28,7 @@ class IngestRunRequest(BaseModel):
 
 class IngestRunResponse(BaseModel):
     task_id: str
+    run_id: int | None = None
     domain: IngestDomain
     status: Literal["queued"]
 
@@ -48,23 +43,43 @@ async def run_ingest(
     current_user: dict = Depends(get_current_active_user),
     membership: dict = Depends(get_project_membership),
 ):
-    if body.domain == "prices":
-        result = ingest_prices_task.delay(project_id)
-    elif body.domain == "supplier_stocks":
-        result = ingest_supplier_stocks_task.delay(project_id)
-    elif body.domain == "products":
-        result = ingest_products_task.delay(project_id)
-    elif body.domain == "stocks":
-        result = ingest_stocks_task.delay(project_id)
-    elif body.domain == "warehouses":
-        result = ingest_warehouses_task.delay(project_id)
-    elif body.domain == "frontend_prices":
-        result = ingest_frontend_prices_task.delay(project_id)
-    elif body.domain == "rrp_xml":
-        result = ingest_rrp_xml_task.delay(project_id)
-    else:
+    # Map legacy "domain" to new ingest job definition.
+    job_def = get_job_definition(body.domain)
+    if not job_def:
         # Literal should prevent this, but keep it safe.
         raise ValueError(f"Unsupported domain: {body.domain}")
 
-    return IngestRunResponse(task_id=result.id, domain=body.domain, status="queued")
+    marketplace_code = job_def["source_code"]
+    job_code = job_def["job_code"]
+
+    # Prevent spamming queued runs from legacy UI.
+    if has_active_run(project_id=project_id, marketplace_code=marketplace_code, job_code=job_code):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Job '{body.domain}' is already running or queued",
+        )
+
+    run = create_run_queued(
+        project_id=project_id,
+        marketplace_code=marketplace_code,
+        job_code=job_code,
+        schedule_id=None,
+        triggered_by="manual",
+    )
+
+    try:
+        result = execute_ingest.delay(run["id"])
+    except IngestJobNotFound as exc:
+        finish_run_failed(
+            run_id=run["id"],
+            error_message=str(exc),
+            error_trace=str(exc),
+            stats_json={"ok": False, "reason": "job_not_found"},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    return IngestRunResponse(task_id=result.id, run_id=run["id"], domain=body.domain, status="queued")
 

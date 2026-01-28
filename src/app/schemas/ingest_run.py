@@ -7,7 +7,10 @@ from pydantic import BaseModel, Field
 
 
 RunStatus = Literal["queued", "running", "success", "failed", "timeout", "skipped", "canceled"]
-RunTrigger = Literal["schedule", "manual", "api"]
+# Trigger source of a run (known values).
+# NOTE: Response schema must be forward/backward compatible with existing DB values
+# to avoid 500s on serialization (old data may contain unexpected strings).
+KnownRunTrigger = Literal["schedule", "manual", "api", "chained", "manual_smoke"]
 
 
 class IngestRunResponse(BaseModel):
@@ -16,7 +19,8 @@ class IngestRunResponse(BaseModel):
   project_id: int
   marketplace_code: str
   job_code: str
-  triggered_by: RunTrigger
+  # Keep as `str` for compatibility; see KnownRunTrigger for expected values.
+  triggered_by: str = Field(..., description="Run trigger source (e.g. schedule|manual|api|chained)")
   status: RunStatus
   started_at: Optional[datetime]
   finished_at: Optional[datetime]

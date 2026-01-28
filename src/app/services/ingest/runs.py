@@ -5,9 +5,11 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import ProgrammingError
 
 from app.db import engine
 from app.settings import INGEST_STUCK_TTL_SECONDS_DEFAULT
+import json as _json
 
 _JOB_TTL_SECONDS: Dict[tuple[str, str], int] = {
     # (marketplace_code, job_code): ttl_seconds
@@ -17,6 +19,53 @@ _JOB_TTL_SECONDS: Dict[tuple[str, str], int] = {
 
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
+
+
+_INGEST_RUNS_COLUMNS_CACHE: Optional[set[str]] = None
+_DEBUG_LOG_PATH = r"d:\Work\EcomCore\.cursor\debug.log"
+
+
+def _debug_log(location: str, message: str, data: Dict[str, Any], *, hypothesis_id: str) -> None:
+    """Write NDJSON debug log line (no secrets)."""
+    try:
+        payload = {
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(datetime.now().timestamp() * 1000),
+            "sessionId": "debug-session",
+            "runId": "run1",
+            "hypothesisId": hypothesis_id,
+        }
+        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(_json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def _get_ingest_runs_columns() -> set[str]:
+    """Fetch available columns for ingest_runs (cached)."""
+    global _INGEST_RUNS_COLUMNS_CACHE
+    if _INGEST_RUNS_COLUMNS_CACHE is not None:
+        return _INGEST_RUNS_COLUMNS_CACHE
+    sql = text(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_name = 'ingest_runs'
+        """
+    )
+    with engine.connect() as conn:
+        rows = conn.execute(sql).mappings().all()
+    cols = {r["column_name"] for r in rows if r.get("column_name")}
+    _INGEST_RUNS_COLUMNS_CACHE = cols
+    _debug_log(
+        "services/ingest/runs.py:_get_ingest_runs_columns",
+        "ingest_runs columns discovered",
+        {"columns_count": len(cols), "has_params_json": "params_json" in cols, "has_meta_json": "meta_json" in cols},
+        hypothesis_id="RUNS_SCHEMA",
+    )
+    return cols
 
 
 def _row_to_run(row: Any) -> Dict[str, Any]:
@@ -130,11 +179,23 @@ def get_run(run_id: int, *, conn=None) -> Optional[Dict[str, Any]]:
         WHERE id = :id
         """
     )
-    if conn is None:
-        with engine.connect() as _conn:
-            row = _conn.execute(sql, {"id": run_id}).mappings().first()
-    else:
-        row = conn.execute(sql, {"id": run_id}).mappings().first()
+    try:
+        if conn is None:
+            with engine.connect() as _conn:
+                row = _conn.execute(sql, {"id": run_id}).mappings().first()
+        else:
+            row = conn.execute(sql, {"id": run_id}).mappings().first()
+    except ProgrammingError as exc:
+        # If migrations weren't applied yet, ingest_runs may not exist.
+        if "ingest_runs" in str(exc).lower() and ("does not exist" in str(exc).lower() or "undefinedtable" in str(exc).lower()):
+            _debug_log(
+                "services/ingest/runs.py:get_run",
+                "ingest_runs table missing (return None)",
+                {"run_id": run_id},
+                hypothesis_id="RUNS_TABLE_MISSING",
+            )
+            return None
+        raise
     return _row_to_run(row) if row else None
 
 
@@ -647,6 +708,20 @@ def get_runs(
     limit: int = 100,
 ) -> List[Dict[str, Any]]:
     """List runs for project with optional filters, newest first."""
+    _debug_log(
+        "services/ingest/runs.py:get_runs",
+        "get_runs entry",
+        {
+            "project_id": project_id,
+            "marketplace_code": marketplace_code,
+            "job_code": job_code,
+            "status": status,
+            "date_from": date_from.isoformat() if date_from else None,
+            "date_to": date_to.isoformat() if date_to else None,
+            "limit": limit,
+        },
+        hypothesis_id="RUNS_500",
+    )
     where_clauses = ["project_id = :project_id"]
     params: Dict[str, Any] = {"project_id": project_id, "limit": limit}
 
@@ -667,22 +742,72 @@ def get_runs(
         params["date_to"] = date_to
 
     where_sql = " AND ".join(where_clauses)
+    cols = _get_ingest_runs_columns()
+    optional = ["params_json", "heartbeat_at", "celery_task_id", "meta_json"]
+    select_optional = []
+    for c in optional:
+        if c in cols:
+            select_optional.append(c)
+        else:
+            select_optional.append(f"NULL AS {c}")
+    select_sql = ",\n               ".join(
+        [
+            "id",
+            "schedule_id",
+            "project_id",
+            "marketplace_code",
+            "job_code",
+            "triggered_by",
+            "status",
+            "started_at",
+            "finished_at",
+            "duration_ms",
+            "error_message",
+            "error_trace",
+            "stats_json",
+            *select_optional,
+            "created_at",
+            "updated_at",
+        ]
+    )
     sql = text(
         f"""
-        SELECT id, schedule_id, project_id, marketplace_code, job_code,
-               triggered_by, status,
-               started_at, finished_at, duration_ms,
-               error_message, error_trace, stats_json, params_json,
-               heartbeat_at, celery_task_id, meta_json,
-               created_at, updated_at
+        SELECT {select_sql}
         FROM ingest_runs
         WHERE {where_sql}
         ORDER BY started_at DESC NULLS LAST, created_at DESC
         LIMIT :limit
         """
     )
-    with engine.connect() as conn:
-        rows = conn.execute(sql, params).mappings().all()
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(sql, params).mappings().all()
+    except ProgrammingError as exc:
+        # Most common cause in fresh envs: migrations not applied -> table missing.
+        msg = str(exc).lower()
+        if "ingest_runs" in msg and ("does not exist" in msg or "undefinedtable" in msg):
+            _debug_log(
+                "services/ingest/runs.py:get_runs",
+                "ingest_runs table missing (return empty)",
+                {"project_id": project_id},
+                hypothesis_id="RUNS_TABLE_MISSING",
+            )
+            return []
+        _debug_log(
+            "services/ingest/runs.py:get_runs",
+            "get_runs ProgrammingError",
+            {"error": str(exc), "where_sql": where_sql, "params_keys": list(params.keys())},
+            hypothesis_id="RUNS_500",
+        )
+        raise
+    except Exception as exc:
+        _debug_log(
+            "services/ingest/runs.py:get_runs",
+            "get_runs query failed",
+            {"error": str(exc), "where_sql": where_sql, "params_keys": list(params.keys()), "has_columns_cache": _INGEST_RUNS_COLUMNS_CACHE is not None},
+            hypothesis_id="RUNS_500",
+        )
+        raise
     return [_row_to_run(row) for row in rows]
 
 

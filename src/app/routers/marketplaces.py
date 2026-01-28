@@ -1,6 +1,9 @@
 """Marketplaces router with membership checks and secret masking."""
 
 from typing import List, Optional
+import logging
+
+logger = logging.getLogger(__name__)
 from datetime import datetime, date
 from fastapi import APIRouter, HTTPException, status, Depends, Path, Query
 
@@ -17,6 +20,7 @@ from app.db_marketplaces import (
     toggle_project_marketplace,
     delete_project_marketplace,
     mask_secrets,
+    get_system_marketplace_settings_map,
 )
 from app.schemas.marketplaces import (
     MarketplaceResponse,
@@ -35,6 +39,7 @@ from app.schemas.marketplaces import (
     WBFinancesIngestRequest,
     WBFinancesIngestResponse,
     WBFinanceReportResponse,
+    SystemMarketplacePublicStatus,
 )
 from app.utils.wb_token_validator import validate_wb_token
 from app.deps import (
@@ -48,6 +53,73 @@ router = APIRouter(prefix="/api/v1", tags=["marketplaces"])
 
 # Note: Schema creation and seeding should happen at startup, not at import time
 # This prevents DB queries during module import when tables may not exist yet
+
+
+@router.get("/system/marketplaces", response_model=List[SystemMarketplacePublicStatus])
+async def get_system_marketplaces_public():
+    """Get public system marketplace status (read-only, minimal fields).
+    
+    Returns global enabled/visible status and sort_order for all marketplaces.
+    This endpoint is public (optional auth) and safe - no sensitive data.
+    If system_marketplace_settings table doesn't exist or has no records, returns defaults.
+    
+    Fail-safe: If endpoint fails, frontend should ignore and show marketplaces as before.
+    """
+    try:
+        # Get all marketplaces (source of truth for marketplace codes)
+        all_marketplaces = get_all_marketplaces(active_only=False)
+        
+        # Get system settings map (may be empty if table doesn't exist)
+        try:
+            settings_map = get_system_marketplace_settings_map()
+        except Exception:
+            # Table doesn't exist or error - use defaults
+            settings_map = {}
+        
+        # Build response list
+        result = []
+        for mp in all_marketplaces:
+            mp_code = mp["code"]
+            system_settings = settings_map.get(mp_code)
+            
+            if system_settings:
+                # Record exists
+                result.append(SystemMarketplacePublicStatus(
+                    marketplace_code=mp_code,
+                    is_globally_enabled=system_settings["is_globally_enabled"],
+                    is_visible=system_settings["is_visible"],
+                    sort_order=system_settings["sort_order"],
+                ))
+            else:
+                # No record, return defaults
+                result.append(SystemMarketplacePublicStatus(
+                    marketplace_code=mp_code,
+                    is_globally_enabled=True,
+                    is_visible=True,
+                    sort_order=100,
+                ))
+        
+        # Sort by sort_order, then by marketplace_code
+        result.sort(key=lambda x: (x.sort_order, x.marketplace_code))
+        
+        return result
+    except Exception as e:
+        # Fail-safe: return empty list or defaults
+        # Frontend should handle this gracefully
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f"Failed to get system marketplace settings: {e}")
+        # Return defaults for all marketplaces
+        all_marketplaces = get_all_marketplaces(active_only=False)
+        return [
+            SystemMarketplacePublicStatus(
+                marketplace_code=mp["code"],
+                is_globally_enabled=True,
+                is_visible=True,
+                sort_order=100,
+            )
+            for mp in all_marketplaces
+        ]
 
 
 @router.get("/marketplaces", response_model=List[MarketplaceResponse])

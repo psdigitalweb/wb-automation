@@ -1,18 +1,25 @@
 """Admin endpoints for marketplace-level operations (e.g. WB tariffs)."""
 
-from typing import Any
+from typing import Any, List
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Path
 from sqlalchemy.exc import ProgrammingError
 
 from app.deps import get_current_superuser
 from app.db_marketplace_tariffs import get_tariffs_status
+from app.db_marketplaces import (
+    get_all_marketplaces,
+    get_system_marketplace_settings_map,
+    upsert_system_marketplace_settings,
+)
 from app.schemas.marketplaces import (
     WBTariffsIngestRequest,
     WBTariffsIngestResponse,
     WBTariffsStatusResponse,
+    SystemMarketplaceSettingsResponse,
+    SystemMarketplaceSettingsUpdate,
 )
 
 logger = logging.getLogger(__name__)
@@ -108,4 +115,136 @@ async def get_wb_tariffs_status(
         ) from exc
 
     return WBTariffsStatusResponse(**status_data)
+
+
+@router.get(
+    "/system-marketplaces",
+    response_model=List[SystemMarketplaceSettingsResponse],
+    summary="Get all system marketplace settings",
+    description=(
+        "Returns system settings for all marketplaces from the marketplaces table. "
+        "If a marketplace has no record in system_marketplace_settings, returns defaults "
+        "(enabled=true, visible=true, sort_order=100). Requires superuser permissions."
+    ),
+)
+async def get_system_marketplace_settings_list(
+    _: dict = Depends(get_current_superuser),
+) -> List[SystemMarketplaceSettingsResponse]:
+    """Get system marketplace settings for all marketplaces.
+    
+    Returns settings for all marketplace codes from the marketplaces table.
+    If no record exists in system_marketplace_settings, returns defaults.
+    """
+    # Get all marketplaces (source of truth for marketplace codes)
+    all_marketplaces = get_all_marketplaces(active_only=False)
+    
+    # Get system settings map
+    settings_map = get_system_marketplace_settings_map()
+    
+    # Build response list
+    result = []
+    for mp in all_marketplaces:
+        mp_code = mp["code"]
+        system_settings = settings_map.get(mp_code)
+        
+        if system_settings:
+            # Record exists
+            result.append(SystemMarketplaceSettingsResponse(
+                marketplace_code=mp_code,
+                display_name=mp.get("name"),
+                is_globally_enabled=system_settings["is_globally_enabled"],
+                is_visible=system_settings["is_visible"],
+                sort_order=system_settings["sort_order"],
+                settings_json=system_settings["settings_json"] if isinstance(system_settings["settings_json"], dict) 
+                            else (system_settings["settings_json"] if isinstance(system_settings["settings_json"], str) 
+                                  else {}),
+                has_record=True,
+                created_at=system_settings.get("created_at"),
+                updated_at=system_settings.get("updated_at"),
+            ))
+        else:
+            # No record, return defaults
+            result.append(SystemMarketplaceSettingsResponse(
+                marketplace_code=mp_code,
+                display_name=mp.get("name"),
+                is_globally_enabled=True,
+                is_visible=True,
+                sort_order=100,
+                settings_json={},
+                has_record=False,
+                created_at=None,
+                updated_at=None,
+            ))
+    
+    # Sort by sort_order, then by marketplace_code
+    result.sort(key=lambda x: (x.sort_order, x.marketplace_code))
+    
+    return result
+
+
+@router.put(
+    "/system-marketplaces/{marketplace_code}",
+    response_model=SystemMarketplaceSettingsResponse,
+    summary="Update system marketplace settings",
+    description=(
+        "Create or update system marketplace settings for a marketplace. "
+        "Validates that marketplace_code exists in marketplaces table. "
+        "Requires superuser permissions."
+    ),
+)
+async def update_system_marketplace_settings(
+    marketplace_code: str = Path(..., description="Marketplace code"),
+    update_data: SystemMarketplaceSettingsUpdate = ...,
+    _: dict = Depends(get_current_superuser),
+) -> SystemMarketplaceSettingsResponse:
+    """Update system marketplace settings (UPSERT).
+    
+    Validates that marketplace_code exists in marketplaces table.
+    If not, returns 400 Bad Request.
+    """
+    # Validate marketplace_code exists
+    from app.db_marketplaces import get_marketplace_by_code
+    marketplace = get_marketplace_by_code(marketplace_code)
+    if not marketplace:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Marketplace code '{marketplace_code}' not found in marketplaces table"
+        )
+    
+    # Prepare update dict (only include non-None fields)
+    update_dict = {}
+    if update_data.is_globally_enabled is not None:
+        update_dict["is_globally_enabled"] = update_data.is_globally_enabled
+    if update_data.is_visible is not None:
+        update_dict["is_visible"] = update_data.is_visible
+    if update_data.sort_order is not None:
+        update_dict["sort_order"] = update_data.sort_order
+    if update_data.settings_json is not None:
+        update_dict["settings_json"] = update_data.settings_json
+    
+    # UPSERT
+    updated_settings = upsert_system_marketplace_settings(
+        marketplace_code=marketplace_code,
+        **update_dict
+    )
+    
+    # Parse settings_json if it's a string
+    settings_json = updated_settings["settings_json"]
+    if isinstance(settings_json, str):
+        import json
+        settings_json = json.loads(settings_json)
+    elif not isinstance(settings_json, dict):
+        settings_json = {}
+    
+    return SystemMarketplaceSettingsResponse(
+        marketplace_code=updated_settings["marketplace_code"],
+        display_name=marketplace.get("name"),
+        is_globally_enabled=updated_settings["is_globally_enabled"],
+        is_visible=updated_settings["is_visible"],
+        sort_order=updated_settings["sort_order"],
+        settings_json=settings_json,
+        has_record=True,
+        created_at=updated_settings.get("created_at"),
+        updated_at=updated_settings.get("updated_at"),
+    )
 
