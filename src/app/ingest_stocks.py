@@ -84,7 +84,7 @@ async def ingest_warehouses() -> None:
         print("ingest_warehouses: no valid warehouses to upsert")
 
 
-async def ingest_stocks(project_id: int) -> None:
+async def ingest_stocks(project_id: int, run_id: int | None = None) -> Dict[str, Any]:
     """Fetch and insert stock snapshots from WB API for a specific project.
     
     Args:
@@ -111,7 +111,7 @@ async def ingest_stocks(project_id: int) -> None:
         return
     if not token or token.upper() == "MOCK":
         print("ingest_stocks: skipped (MOCK mode or no token)")
-        return
+        return {"ok": True, "scope": "project", "project_id": project_id, "domain": "stocks", "skipped": True}
     # 1. Получаем склады из wb_warehouses
     select_warehouses_sql = text(
         "SELECT wb_id, name FROM wb_warehouses ORDER BY wb_id"
@@ -130,7 +130,7 @@ async def ingest_stocks(project_id: int) -> None:
 
     if not warehouses:
         print("ingest_stocks: no warehouses available after ingest_warehouses, aborting")
-        return
+        return {"ok": False, "scope": "project", "project_id": project_id, "domain": "stocks", "reason": "no_warehouses"}
 
     print(f"ingest_stocks: using {len(warehouses)} warehouses from wb_warehouses")
 
@@ -141,9 +141,13 @@ async def ingest_stocks(project_id: int) -> None:
             "ingest_stocks: no chrtIds found in products; "
             "ensure products are ingested and contain sizes/raw.sizes"
         )
-        return
+        return {"ok": False, "scope": "project", "project_id": project_id, "domain": "stocks", "reason": "no_chrt_ids"}
 
-    print(f"ingest_stocks: chrtIds total = {len(chrt_ids)} (first 5: {chrt_ids[:5] if len(chrt_ids) >= 5 else chrt_ids})")
+    print(
+        f"ingest_stocks: chrtIds total = {len(chrt_ids)} "
+        f"(first 5: {chrt_ids[:5] if len(chrt_ids) >= 5 else chrt_ids}), "
+        f"run_id={run_id}"
+    )
 
     client = WBClient()
 
@@ -188,6 +192,16 @@ async def ingest_stocks(project_id: int) -> None:
     batch_size = 1000
     total_api_records = 0
     total_inserted = 0
+    failed_chunks = 0
+    empty_chunks = 0
+
+    # Best-effort progress updates to ingest_runs.stats_json (no secrets).
+    runs_service = None
+    if run_id is not None:
+        try:
+            from app.services.ingest import runs as runs_service  # type: ignore
+        except Exception:
+            runs_service = None
 
     for wh in warehouses:
         warehouse_id = wh["wb_id"]
@@ -198,9 +212,31 @@ async def ingest_stocks(project_id: int) -> None:
             print(
                 f"ingest_stocks: warehouse={warehouse_id}, chrtIds_chunk={len(batch_chrt_ids)}"
             )
+
+            if runs_service is not None and run_id is not None:
+                try:
+                    runs_service.set_run_progress(
+                        int(run_id),
+                        {
+                            "ok": None,
+                            "phase": "stocks_fetch",
+                            "warehouse_id": int(warehouse_id),
+                            "chunk_index": int(i // batch_size) + 1,
+                            "chunks_total": int((len(chrt_ids) + batch_size - 1) // batch_size),
+                            "api_records": total_api_records,
+                            "inserted": total_inserted,
+                            "failed_chunks": failed_chunks,
+                            "empty_chunks": empty_chunks,
+                        },
+                    )
+                except Exception:
+                    pass
+
             stocks = await client.fetch_stocks(warehouse_id, batch_chrt_ids)
 
             if not stocks:
+                empty_chunks += 1
+                failed_chunks += 1
                 print(
                     f"ingest_stocks: warehouse={warehouse_id}, chunk_size={len(batch_chrt_ids)}, stocks=0"
                 )
@@ -267,6 +303,30 @@ async def ingest_stocks(project_id: int) -> None:
     print(
         f"ingest_stocks: finished. api_records={total_api_records} inserted={total_inserted}"
     )
+
+    # If we had failures, report ok=False so run is marked failed (avoid silent partial/empty success).
+    ok = failed_chunks == 0 and total_api_records > 0
+    if not ok:
+        return {
+            "ok": False,
+            "scope": "project",
+            "project_id": project_id,
+            "domain": "stocks",
+            "reason": "failed_to_fetch_stocks",
+            "api_records": total_api_records,
+            "inserted": total_inserted,
+            "failed_chunks": failed_chunks,
+            "empty_chunks": empty_chunks,
+        }
+
+    return {
+        "ok": True,
+        "scope": "project",
+        "project_id": project_id,
+        "domain": "stocks",
+        "api_records": total_api_records,
+        "inserted": total_inserted,
+    }
 
 
 @router.get("/warehouses")

@@ -24,6 +24,29 @@ from app.wb.catalog_client import CatalogClient
 
 router = APIRouter(prefix="/api/v1/ingest", tags=["ingest"])
 
+# region agent log
+_DEBUG_LOG_PATH = r"d:\Work\EcomCore\.cursor\debug.log"
+
+
+def _dbg(*, hypothesisId: str, location: str, message: str, data: dict) -> None:
+    try:
+        payload = {
+            "sessionId": "debug-session",
+            "runId": "run1",
+            "hypothesisId": hypothesisId,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(time.time() * 1000),
+        }
+        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+# endregion
+
 
 class FrontendBrandPricesRequest(BaseModel):
     brand_id: int
@@ -274,11 +297,27 @@ async def ingest_frontend_brand_prices(
     base_url: Optional[str] = None,
     max_pages: int = 0,
     sleep_ms: int = 800,
+    sleep_jitter_ms: int = 0,
     run_id: int | None = None,
     project_id: int | None = None,
     run_started_at: datetime | None = None,
 ) -> Dict[str, Any]:
     """Fetch and insert frontend catalog price snapshots from WB public API."""
+    _dbg(
+        hypothesisId="H5",
+        location="ingest_frontend_prices.py:ingest_frontend_brand_prices:entry",
+        message="ingestion start",
+        data={
+            "run_id": run_id,
+            "project_id": project_id,
+            "brand_id": brand_id,
+            "start_page": extract_page_from_url(base_url) if base_url else None,
+            "max_pages": max_pages,
+            "sleep_ms": sleep_ms,
+            "sleep_jitter_ms": sleep_jitter_ms,
+            "base_url_is_set": bool(base_url and str(base_url).strip()),
+        },
+    )
     # If base_url not provided, get it from settings
     if not base_url or not base_url.strip():
         base_url = get_brand_base_url_from_settings()
@@ -323,14 +362,34 @@ async def ingest_frontend_brand_prices(
         print("ingest_frontend_prices: ERROR - table frontend_catalog_price_snapshots does not exist")
         return {"error": "Table frontend_catalog_price_snapshots does not exist. Run migrations."}
     
+    def _sleep_seconds_between_pages() -> float:
+        """Compute between-pages sleep with optional jitter."""
+        try:
+            base_ms = int(sleep_ms or 0)
+        except Exception:
+            base_ms = 0
+        try:
+            jitter = int(sleep_jitter_ms or 0)
+        except Exception:
+            jitter = 0
+
+        if base_ms <= 0:
+            return 0.0
+        if jitter <= 0:
+            return float(base_ms) / 1000.0
+
+        ms = base_ms + random.randint(-jitter, +jitter)
+        ms = max(0, ms)
+        return float(ms) / 1000.0
+
     # Prepare insert SQL
     insert_sql = text("""
         INSERT INTO frontend_catalog_price_snapshots 
         (snapshot_at, source, query_type, query_value, page, nm_id, vendor_code, name, 
-         price_basic, price_product, sale_percent, discount_calc_percent, raw)
+         price_basic, price_product, sale_percent, discount_calc_percent, raw, ingest_run_id)
         VALUES 
         (:snapshot_at, 'catalog_wb', 'brand', :query_value, :page, :nm_id, :vendor_code, :name,
-         :price_basic, :price_product, :sale_percent, :discount_calc_percent, CAST(:raw AS jsonb))
+         :price_basic, :price_product, :sale_percent, :discount_calc_percent, CAST(:raw AS jsonb), :ingest_run_id)
     """)
     
     total_inserted = 0
@@ -646,10 +705,11 @@ async def ingest_frontend_brand_prices(
             if total_pages:
                 print(f"ingest_frontend_prices: page {page} - no products but total_pages={total_pages}, continuing to next page")
             # Sleep and continue to next page
-            if sleep_ms > 0:
+            sleep_s = _sleep_seconds_between_pages()
+            if sleep_s > 0:
                 await sleep_with_heartbeat(
                     run_id=int(run_id) if run_id is not None else None,
-                    total_seconds=float(sleep_ms) / 1000.0,
+                    total_seconds=float(sleep_s),
                     tick=10,
                     progress={
                         "ok": None,
@@ -736,7 +796,8 @@ async def ingest_frontend_brand_prices(
                 "price_product": float(price_product) if price_product else None,
                 "sale_percent": sale_percent,
                 "discount_calc_percent": discount_calc_percent,
-                "raw": json.dumps(product, ensure_ascii=False)
+                "raw": json.dumps(product, ensure_ascii=False),
+                "ingest_run_id": int(run_id) if run_id is not None else None,
             }
             rows.append(row)
 
@@ -775,6 +836,21 @@ async def ingest_frontend_brand_prices(
         
         # Bulk insert
         if rows:
+            # linked share within this page batch (1.0 expected when run_id is set)
+            linked = sum(1 for r in rows if r.get("ingest_run_id") is not None)
+            share = float(linked) / float(len(rows)) if rows else None
+            _dbg(
+                hypothesisId="H5",
+                location="ingest_frontend_prices.py:ingest_frontend_brand_prices:before_insert",
+                message="before insert batch",
+                data={
+                    "run_id": run_id,
+                    "page": page,
+                    "rows_batch": len(rows),
+                    "linked_rows_batch": linked,
+                    "linked_share_batch": share,
+                },
+            )
             with engine.begin() as conn:
                 # 1) Append-only snapshots into frontend_catalog_price_snapshots
                 conn.execute(insert_sql, rows)
@@ -915,10 +991,11 @@ async def ingest_frontend_brand_prices(
                 pass
         
         # Sleep between pages
-        if sleep_ms > 0:
+        sleep_s = _sleep_seconds_between_pages()
+        if sleep_s > 0:
             await sleep_with_heartbeat(
                 run_id=int(run_id) if run_id is not None else None,
-                total_seconds=float(sleep_ms) / 1000.0,
+                total_seconds=float(sleep_s),
                 tick=10,
                 progress={
                     "ok": None,

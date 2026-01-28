@@ -174,30 +174,70 @@ def get_project_by_id(project_id: int) -> Optional[dict]:
 
 def get_user_projects(user_id: int) -> List[dict]:
     """Get all projects where user is a member."""
-    with engine.connect() as conn:
-        result = conn.execute(
-            text("""
-                SELECT DISTINCT p.id, p.name, p.description, p.created_by, p.created_at, p.updated_at,
-                       pm.role
-                FROM projects p
-                INNER JOIN project_members pm ON p.id = pm.project_id
-                WHERE pm.user_id = :user_id
-                ORDER BY p.updated_at DESC
-            """),
-            {"user_id": user_id}
-        )
-        projects = []
-        for row in result:
-            projects.append({
-                "id": row[0],
-                "name": row[1],
-                "description": row[2],
-                "created_by": row[3],
-                "created_at": row[4],
-                "updated_at": row[5],
-                "role": row[6],
-            })
-        return projects
+    # #region agent log
+    logger.info(f"get_user_projects entry: user_id={user_id}")
+    try:
+        import json, time
+        with open("d:\\Work\\EcomCore\\.cursor\\debug.log", "a", encoding="utf-8") as _f:
+            _f.write(json.dumps({"sessionId":"debug-session","runId":"db-projects","hypothesisId":"H5","location":"db_projects.py:175","message":"get_user_projects entry","data":{"user_id":user_id},"timestamp":int(time.time()*1000)})+"\n")
+    except Exception as log_err:
+        logger.error(f"Failed to write debug log: {log_err}")
+    # #endregion
+    try:
+        with engine.connect() as conn:
+            # #region agent log
+            logger.info(f"get_user_projects: executing SQL query for user_id={user_id}")
+            try:
+                import json, time
+                with open("d:\\Work\\EcomCore\\.cursor\\debug.log", "a", encoding="utf-8") as _f:
+                    _f.write(json.dumps({"sessionId":"debug-session","runId":"db-projects","hypothesisId":"H5","location":"db_projects.py:178","message":"Executing SQL query","data":{"user_id":user_id},"timestamp":int(time.time()*1000)})+"\n")
+            except Exception as log_err:
+                logger.error(f"Failed to write debug log: {log_err}")
+            # #endregion
+            result = conn.execute(
+                text("""
+                    SELECT DISTINCT p.id, p.name, p.description, p.created_by, p.created_at, p.updated_at,
+                           pm.role
+                    FROM projects p
+                    INNER JOIN project_members pm ON p.id = pm.project_id
+                    WHERE pm.user_id = :user_id
+                    ORDER BY p.updated_at DESC
+                """),
+                {"user_id": user_id}
+            )
+            projects = []
+            rows = result.mappings().all()
+            for row in rows:
+                projects.append({
+                    "id": row["id"],
+                    "name": row["name"],
+                    "description": row["description"],
+                    "created_by": row["created_by"],
+                    "created_at": row["created_at"],
+                    "updated_at": row["updated_at"],
+                    "role": row["role"],
+                })
+            # #region agent log
+            logger.info(f"get_user_projects: query completed, found {len(projects)} projects")
+            try:
+                import json, time
+                with open("d:\\Work\\EcomCore\\.cursor\\debug.log", "a", encoding="utf-8") as _f:
+                    _f.write(json.dumps({"sessionId":"debug-session","runId":"db-projects","hypothesisId":"H5","location":"db_projects.py:200","message":"get_user_projects exit","data":{"projects_count":len(projects)},"timestamp":int(time.time()*1000)})+"\n")
+            except Exception as log_err:
+                logger.error(f"Failed to write debug log: {log_err}")
+            # #endregion
+            return projects
+    except Exception as e:
+        # #region agent log
+        logger.error(f"get_user_projects error for user_id={user_id}: {e}\n{traceback.format_exc()}")
+        try:
+            import json, time, traceback
+            with open("d:\\Work\\EcomCore\\.cursor\\debug.log", "a", encoding="utf-8") as _f:
+                _f.write(json.dumps({"sessionId":"debug-session","runId":"db-projects","hypothesisId":"H5","location":"db_projects.py:202","message":"get_user_projects error","data":{"error":str(e),"traceback":traceback.format_exc()},"timestamp":int(time.time()*1000)})+"\n")
+        except Exception as log_err:
+            logger.error(f"Failed to write debug log: {log_err}")
+        # #endregion
+        raise
 
 
 def get_project_member(project_id: int, user_id: int) -> Optional[dict]:

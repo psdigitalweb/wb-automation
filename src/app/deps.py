@@ -16,6 +16,14 @@ async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security)
 ) -> dict:
     """Get current user from JWT access token."""
+    # #region agent log
+    try:
+        import json, time
+        with open("d:\\Work\\EcomCore\\.cursor\\debug.log", "a", encoding="utf-8") as _f:
+            _f.write(json.dumps({"sessionId":"debug-session","runId":"deps-auth","hypothesisId":"H3","location":"deps.py:14","message":"get_current_user entry","data":{"has_token":bool(credentials.credentials)},"timestamp":int(time.time()*1000)})+"\n")
+    except Exception:
+        pass
+    # #endregion
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -23,15 +31,48 @@ async def get_current_user(
     )
     
     token = credentials.credentials
+    # #region agent log
+    try:
+        import json, time
+        with open("d:\\Work\\EcomCore\\.cursor\\debug.log", "a", encoding="utf-8") as _f:
+            _f.write(json.dumps({"sessionId":"debug-session","runId":"deps-auth","hypothesisId":"H3","location":"deps.py:26","message":"Decoding token","timestamp":int(time.time()*1000)})+"\n")
+    except Exception:
+        pass
+    # #endregion
     payload = decode_token(token, token_type="access")
     
     if payload is None:
+        # #region agent log
+        try:
+            import json, time
+            with open("d:\\Work\\EcomCore\\.cursor\\debug.log", "a", encoding="utf-8") as _f:
+                _f.write(json.dumps({"sessionId":"debug-session","runId":"deps-auth","hypothesisId":"H3","location":"deps.py:32","message":"Token decode returned None","timestamp":int(time.time()*1000)})+"\n")
+        except Exception:
+            pass
+        # #endregion
         raise credentials_exception
     
     username: Optional[str] = payload.get("sub")
     user_id: Optional[int] = payload.get("user_id")
     
+    # #region agent log
+    try:
+        import json, time
+        with open("d:\\Work\\EcomCore\\.cursor\\debug.log", "a", encoding="utf-8") as _f:
+            _f.write(json.dumps({"sessionId":"debug-session","runId":"deps-auth","hypothesisId":"H3","location":"deps.py:40","message":"Token decoded","data":{"username":username,"user_id":user_id},"timestamp":int(time.time()*1000)})+"\n")
+    except Exception:
+        pass
+    # #endregion
+    
     if username is None and user_id is None:
+        # #region agent log
+        try:
+            import json, time
+            with open("d:\\Work\\EcomCore\\.cursor\\debug.log", "a", encoding="utf-8") as _f:
+                _f.write(json.dumps({"sessionId":"debug-session","runId":"deps-auth","hypothesisId":"H3","location":"deps.py:44","message":"Both username and user_id are None","timestamp":int(time.time()*1000)})+"\n")
+        except Exception:
+            pass
+        # #endregion
         raise credentials_exception
     
     # Try to get user by username first, then by ID
@@ -41,9 +82,34 @@ async def get_current_user(
     if not user and user_id:
         user = get_user_by_id(user_id)
     
+    # #region agent log
+    try:
+        import json, time
+        with open("d:\\Work\\EcomCore\\.cursor\\debug.log", "a", encoding="utf-8") as _f:
+            _f.write(json.dumps({"sessionId":"debug-session","runId":"deps-auth","hypothesisId":"H3","location":"deps.py:52","message":"User lookup result","data":{"found":user is not None,"user_id":user.get("id") if user else None},"timestamp":int(time.time()*1000)})+"\n")
+    except Exception:
+        pass
+    # #endregion
+    
     if user is None:
+        # #region agent log
+        try:
+            import json, time
+            with open("d:\\Work\\EcomCore\\.cursor\\debug.log", "a", encoding="utf-8") as _f:
+                _f.write(json.dumps({"sessionId":"debug-session","runId":"deps-auth","hypothesisId":"H3","location":"deps.py:56","message":"User not found","timestamp":int(time.time()*1000)})+"\n")
+        except Exception:
+            pass
+        # #endregion
         raise credentials_exception
     
+    # #region agent log
+    try:
+        import json, time
+        with open("d:\\Work\\EcomCore\\.cursor\\debug.log", "a", encoding="utf-8") as _f:
+            _f.write(json.dumps({"sessionId":"debug-session","runId":"deps-auth","hypothesisId":"H3","location":"deps.py:64","message":"get_current_user exit","data":{"user_id":user.get("id")},"timestamp":int(time.time()*1000)})+"\n")
+    except Exception:
+        pass
+    # #endregion
     return user
 
 
@@ -51,11 +117,35 @@ async def get_current_active_user(
     current_user: dict = Depends(get_current_user)
 ) -> dict:
     """Get current active user."""
+    # #region agent log
+    try:
+        import json, time
+        with open("d:\\Work\\EcomCore\\.cursor\\debug.log", "a", encoding="utf-8") as _f:
+            _f.write(json.dumps({"sessionId":"debug-session","runId":"deps-auth","hypothesisId":"H3","location":"deps.py:50","message":"get_current_active_user entry","data":{"user_id":current_user.get("id"),"username":current_user.get("username"),"is_active":current_user.get("is_active")},"timestamp":int(time.time()*1000)})+"\n")
+    except Exception:
+        pass
+    # #endregion
     if not current_user.get("is_active"):
+        # #region agent log
+        try:
+            import json, time
+            with open("d:\\Work\\EcomCore\\.cursor\\debug.log", "a", encoding="utf-8") as _f:
+                _f.write(json.dumps({"sessionId":"debug-session","runId":"deps-auth","hypothesisId":"H3","location":"deps.py:54","message":"User is inactive","data":{"user_id":current_user.get("id")},"timestamp":int(time.time()*1000)})+"\n")
+        except Exception:
+            pass
+        # #endregion
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Inactive user"
         )
+    # #region agent log
+    try:
+        import json, time
+        with open("d:\\Work\\EcomCore\\.cursor\\debug.log", "a", encoding="utf-8") as _f:
+            _f.write(json.dumps({"sessionId":"debug-session","runId":"deps-auth","hypothesisId":"H3","location":"deps.py:59","message":"get_current_active_user exit","data":{"user_id":current_user.get("id")},"timestamp":int(time.time()*1000)})+"\n")
+    except Exception:
+        pass
+    # #endregion
     return current_user
 
 

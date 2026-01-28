@@ -7,7 +7,7 @@ This module provides:
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, List
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -92,13 +92,124 @@ def get_user_by_id(user_id: int) -> Optional[dict]:
         return None
 
 
-def create_user(username: str, email: Optional[str], hashed_password: str, is_superuser: bool = False) -> dict:
+def get_user_by_email(email: str) -> Optional[dict]:
+    """Get user by email."""
+    with engine.connect() as conn:
+        result = conn.execute(
+            text("SELECT id, username, email, hashed_password, is_active, is_superuser, created_at, updated_at FROM users WHERE email = :email"),
+            {"email": email}
+        )
+        row = result.fetchone()
+        if row:
+            return {
+                "id": row[0],
+                "username": row[1],
+                "email": row[2],
+                "hashed_password": row[3],
+                "is_active": row[4],
+                "is_superuser": row[5],
+                "created_at": row[6],
+                "updated_at": row[7],
+            }
+        return None
+
+
+def list_users(limit: int = 200, offset: int = 0, q: Optional[str] = None) -> List[dict]:
+    """List users with pagination and optional search.
+    
+    Args:
+        limit: Maximum number of users to return (default: 200)
+        offset: Number of users to skip (default: 0)
+        q: Optional search query for username or email (case-insensitive)
+    
+    Returns:
+        List of user dicts (without hashed_password)
+    """
+    with engine.connect() as conn:
+        if q:
+            search_pattern = f"%{q}%"
+            result = conn.execute(
+                text("""
+                    SELECT id, username, email, is_active, is_superuser, created_at, updated_at
+                    FROM users
+                    WHERE username ILIKE :q OR email ILIKE :q
+                    ORDER BY created_at DESC
+                    LIMIT :limit OFFSET :offset
+                """),
+                {"q": search_pattern, "limit": limit, "offset": offset}
+            )
+        else:
+            result = conn.execute(
+                text("""
+                    SELECT id, username, email, is_active, is_superuser, created_at, updated_at
+                    FROM users
+                    ORDER BY created_at DESC
+                    LIMIT :limit OFFSET :offset
+                """),
+                {"limit": limit, "offset": offset}
+            )
+        
+        users = []
+        for row in result:
+            users.append({
+                "id": row[0],
+                "username": row[1],
+                "email": row[2],
+                "is_active": row[3],
+                "is_superuser": row[4],
+                "created_at": row[5],
+                "updated_at": row[6],
+            })
+        return users
+
+
+def count_users(q: Optional[str] = None) -> int:
+    """Count total number of users, optionally filtered by search query.
+    
+    Args:
+        q: Optional search query for username or email (case-insensitive)
+    
+    Returns:
+        Total count of users matching the query
+    """
+    with engine.connect() as conn:
+        if q:
+            search_pattern = f"%{q}%"
+            result = conn.execute(
+                text("SELECT COUNT(*) FROM users WHERE username ILIKE :q OR email ILIKE :q"),
+                {"q": search_pattern}
+            )
+        else:
+            result = conn.execute(text("SELECT COUNT(*) FROM users"))
+        return result.scalar_one()
+
+
+def count_superusers() -> int:
+    """Count total number of superusers.
+    
+    Returns:
+        Total count of users with is_superuser = TRUE
+    """
+    with engine.connect() as conn:
+        result = conn.execute(
+            text("SELECT COUNT(*) FROM users WHERE is_superuser = TRUE")
+        )
+        return result.scalar_one()
+
+
+def create_user(
+    username: str,
+    email: Optional[str],
+    hashed_password: str,
+    is_superuser: bool = False,
+    is_active: bool = True
+) -> dict:
     """Create a new user."""
     with engine.begin() as conn:
         result = conn.execute(
             text("""
-                INSERT INTO users (username, email, hashed_password, is_superuser)
-                VALUES (:username, :email, :hashed_password, :is_superuser)
+                INSERT INTO users (username, email, hashed_password, is_superuser, is_active)
+                VALUES (:username, :email, :hashed_password, :is_superuser, :is_active)
                 RETURNING id, username, email, is_active, is_superuser, created_at, updated_at
             """),
             {
@@ -106,6 +217,7 @@ def create_user(username: str, email: Optional[str], hashed_password: str, is_su
                 "email": email,
                 "hashed_password": hashed_password,
                 "is_superuser": is_superuser,
+                "is_active": is_active,
             }
         )
         row = result.fetchone()
@@ -118,6 +230,27 @@ def create_user(username: str, email: Optional[str], hashed_password: str, is_su
             "created_at": row[5],
             "updated_at": row[6],
         }
+
+
+def delete_user(user_id: int) -> bool:
+    """Delete a user by ID.
+    
+    Args:
+        user_id: ID of the user to delete
+    
+    Returns:
+        True if user was deleted, False if user was not found
+    
+    Note:
+        This will cascade delete related records in project_members
+        due to FK ON DELETE CASCADE constraint.
+    """
+    with engine.begin() as conn:
+        result = conn.execute(
+            text("DELETE FROM users WHERE id = :user_id"),
+            {"user_id": user_id}
+        )
+        return result.rowcount > 0
 
 
 def update_user_last_login(user_id: int) -> None:

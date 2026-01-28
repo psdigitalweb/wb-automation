@@ -22,9 +22,23 @@ from app.api_articles_base import router as articles_base_router
 from app.routers.auth import router as auth_router
 from app.routers.admin_tasks import router as admin_tasks_router
 from app.routers.admin_marketplaces import router as admin_marketplaces_router
+from app.routers.admin_users import router as admin_users_router
+from app.routers.admin_project_members import router as admin_project_members_router
 from app.routers.ingest_run import router as ingest_run_router
+from app.routers.ingest import router as ingest_router
 from app.routers.projects import router as projects_router
 from app.routers.marketplaces import router as marketplaces_router
+from app.routers.internal_data import router as internal_data_router
+# Import category import endpoints (they register on the same router)
+import app.routers.internal_data_category_import  # noqa: F401
+from app.routers.cogs import router as cogs_router
+from app.routers.additional_costs import router as additional_costs_router
+from app.routers.warehouse_labor import router as warehouse_labor_router
+from app.routers.packaging import router as packaging_router
+try:
+    from app.routers.taxes import router as taxes_router
+except Exception as e:
+    raise
 from app.api_example_protected import router as protected_router
 
 app = FastAPI(title="E-com Core")
@@ -51,6 +65,25 @@ app.include_router(projects_router)
 # Marketplaces router (requires authentication and membership)
 app.include_router(marketplaces_router)
 
+# Internal Data router (project-scoped)
+app.include_router(internal_data_router)
+
+# COGS router (project-scoped)
+app.include_router(cogs_router)
+
+# Additional Costs router (project-scoped)
+app.include_router(additional_costs_router)
+
+# Warehouse Labor router (project-scoped)
+app.include_router(warehouse_labor_router)
+app.include_router(packaging_router)
+
+# Taxes router (project-scoped)
+try:
+    app.include_router(taxes_router)
+except Exception as e:
+    raise
+
 # Protected router (requires authentication)
 app.include_router(protected_router)
 
@@ -60,8 +93,17 @@ app.include_router(admin_tasks_router)
 # Admin marketplaces router (requires superuser)
 app.include_router(admin_marketplaces_router)
 
+# Admin users router (requires superuser)
+app.include_router(admin_users_router)
+
+# Admin project members router (requires superuser)
+app.include_router(admin_project_members_router)
+
 # Unified ingestion runner (requires authentication and membership)
 app.include_router(ingest_run_router)
+
+# Ingestion schedules & runs (cron-like)
+app.include_router(ingest_router)
 
 # Other routers
 app.include_router(ingest_router)
