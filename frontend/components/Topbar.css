@@ -1,11 +1,15 @@
 .topbar {
   background: white;
   border-bottom: 1px solid #ddd;
-  padding: 12px 20px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+}
+
+.topbar .container {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+  /* Keep same horizontal padding as main content container, but smaller vertical padding for header */
+  padding: 12px 20px;
 }
 
 .topbar-left {
