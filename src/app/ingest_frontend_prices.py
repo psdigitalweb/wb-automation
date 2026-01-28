@@ -19,6 +19,7 @@ from app.services.wb_current import (
     compute_hour_bucket_utc,
     upsert_wb_current_metrics_on_conn,
 )
+from app import settings
 from app.wb.catalog_client import CatalogClient
 
 router = APIRouter(prefix="/api/v1/ingest", tags=["ingest"])
@@ -43,7 +44,7 @@ def compute_retry_sleep_seconds(retry_count: int) -> int:
     base = min(20 * (2 ** (retry_count - 1)), 120)
     jitter = random.uniform(-0.25, 0.25)
     sleep = base * (1.0 + jitter)
-    sleep = max(10.0, min(120.0, sleep))
+    sleep = max(10.0, min(float(settings.FRONTEND_PRICES_MAX_RETRY_SLEEP_SECONDS), sleep))
     return int(round(sleep))
 
 
@@ -349,6 +350,18 @@ async def ingest_frontend_brand_prices(
     # Retry accounting (rate limit)
     total_retry_wait_seconds = 0
     started_monotonic = time.monotonic()
+
+    # If run is linked to a schedule, we can reschedule it when rate-limited.
+    schedule_id: int | None = None
+    if run_id is not None:
+        try:
+            from app.services.ingest import runs as runs_service
+
+            run_row = runs_service.get_run(int(run_id))
+            if run_row and run_row.get("schedule_id") is not None:
+                schedule_id = int(run_row["schedule_id"])
+        except Exception:
+            schedule_id = None
     
     while True:
         pages_fetched += 1
@@ -388,6 +401,62 @@ async def ingest_frontend_brand_prices(
             if status_code == 429:
                 retry_count_429 += 1
                 sleep_s = compute_retry_sleep_seconds(retry_count_429)
+                runtime_s = time.monotonic() - started_monotonic
+
+                # Limits: stop gracefully (skipped rate_limited) instead of running forever.
+                if (
+                    (total_retry_wait_seconds + sleep_s) > settings.FRONTEND_PRICES_MAX_TOTAL_RETRY_WAIT_SECONDS
+                    or runtime_s > settings.FRONTEND_PRICES_MAX_RUNTIME_SECONDS
+                ):
+                    if run_id is not None:
+                        try:
+                            from app.services.ingest import runs as runs_service
+
+                            runs_service.mark_run_skipped(
+                                int(run_id),
+                                reason_code="rate_limited",
+                                actor="frontend_prices",
+                                reason_text="Exceeded retry wait/runtime limits",
+                            )
+                        except Exception:
+                            pass
+
+                    # Reschedule the linked schedule (if any) to back off rate limit pressure.
+                    if schedule_id is not None:
+                        try:
+                            from datetime import timedelta
+
+                            next_run_at = datetime.now(timezone.utc) + timedelta(
+                                minutes=int(settings.FRONTEND_PRICES_RATE_LIMIT_BACKOFF_MINUTES)
+                            )
+                            with engine.begin() as conn:
+                                conn.execute(
+                                    text(
+                                        """
+                                        UPDATE ingest_schedules
+                                        SET next_run_at = :next_run_at,
+                                            updated_at = now()
+                                        WHERE id = :id
+                                        """
+                                    ),
+                                    {"id": schedule_id, "next_run_at": next_run_at},
+                                )
+                        except Exception:
+                            pass
+
+                    return {
+                        "ok": True,
+                        "domain": "frontend_prices",
+                        "skipped": True,
+                        "reason": "rate_limited",
+                        "detail": "Exceeded retry wait/runtime limits",
+                        "page": page,
+                        "total_pages": total_pages,
+                        "retry_count": retry_count_429,
+                        "total_retry_wait": total_retry_wait_seconds,
+                        "runtime_seconds": runtime_s,
+                    }
+
                 total_retry_wait_seconds += sleep_s
                 print(
                     f"frontend_prices rate_limited retry={retry_count_429} sleep={sleep_s}s "
@@ -411,6 +480,7 @@ async def ingest_frontend_brand_prices(
                         "last_http_status": 429,
                         "sleep_seconds": sleep_s,
                         "total_retry_wait": total_retry_wait_seconds,
+                        "runtime_seconds": int(runtime_s),
                     },
                 }
                 await sleep_with_heartbeat(

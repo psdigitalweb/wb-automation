@@ -445,6 +445,7 @@ def mark_run_skipped(
     run_id: int,
     reason_code: str,
     actor: str,
+    reason_text: str | None = None,
     *,
     conn=None,
 ) -> Optional[Dict[str, Any]]:
@@ -467,6 +468,7 @@ def mark_run_skipped(
         UPDATE ingest_runs
         SET status = 'skipped',
             finished_at = :now,
+            error_message = COALESCE(:error_message, error_message),
             meta_json = COALESCE(meta_json, '{}'::jsonb) || CAST(:meta_patch AS jsonb),
             updated_at = :now
         WHERE id = :id
@@ -479,7 +481,12 @@ def mark_run_skipped(
                   created_at, updated_at
         """
     )
-    params = {"id": run_id, "now": now, "meta_patch": meta_patch_str}
+    params = {
+        "id": run_id,
+        "now": now,
+        "meta_patch": meta_patch_str,
+        "error_message": (reason_text or "")[:500] if reason_text else None,
+    }
     if conn is None:
         with engine.begin() as _conn:
             row = _conn.execute(sql, params).mappings().first()
