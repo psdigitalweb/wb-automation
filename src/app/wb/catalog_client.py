@@ -17,6 +17,7 @@ class CatalogClient:
         self.timeout = 30
         self.max_retries = 3
         self.retry_delay = 1.0
+        self.last_request_meta: Dict[str, Any] = {}
         
         # Headers as in Apps Script / browser DevTools
         self.headers = {
@@ -40,21 +41,35 @@ class CatalogClient:
         - 5xx (server errors)
         - Network exceptions
         """
+        print(f"catalog_client._request_with_retry: starting, method={method}, url={url[:100]}")
+        last_status: int | None = None
+        last_error: str | None = None
         for attempt in range(self.max_retries):
             try:
-                response = await client.request(method, url, **kwargs)
+                print(f"catalog_client._request_with_retry: attempt {attempt + 1}/{self.max_retries}")
+                # Guard against indefinite hangs even if transport stalls.
+                response = await asyncio.wait_for(
+                    client.request(method, url, **kwargs),
+                    timeout=float(self.timeout) + 5.0,
+                )
+                last_status = response.status_code if response else None
+                last_error = None
+                print(f"catalog_client._request_with_retry: status={last_status}")
+                self.last_request_meta = {
+                    "ok": True,
+                    "status_code": last_status,
+                    "attempt": attempt + 1,
+                }
                 
                 # Handle 429 rate limit with longer backoff
                 if response.status_code == 429:
-                    if attempt < self.max_retries - 1:
-                        # Longer backoff for rate limits: 60-120 seconds
-                        delay = 60 + (attempt * 30)  # 60s, 90s, 120s
-                        print(f"catalog_client: HTTP 429 rate limit, waiting {delay}s before retry (attempt {attempt + 1}/{self.max_retries})")
-                        await asyncio.sleep(delay)
-                        continue
-                    else:
-                        print(f"catalog_client: HTTP 429 after {self.max_retries} attempts, giving up")
-                        return response  # Return 429 response so caller can handle it
+                    # Do not sleep/retry here: the caller should apply heartbeat-aware backoff
+                    # to avoid "running forever" and to keep ingest_runs heartbeat/stats updated.
+                    print(
+                        f"catalog_client: HTTP 429 Too Many Requests; returning to caller "
+                        f"(attempt {attempt + 1}/{self.max_retries})"
+                    )
+                    return response
                 
                 # Don't retry on other 4xx errors
                 if response.status_code < 500:
@@ -63,15 +78,32 @@ class CatalogClient:
                 # Retry on 5xx errors
                 if attempt < self.max_retries - 1:
                     delay = self.retry_delay * (2 ** attempt)
-                    print(f"catalog_client: HTTP {response.status_code}, retrying in {delay}s (attempt {attempt + 1}/{self.max_retries})")
+                    print(
+                        f"catalog_client: HTTP {response.status_code}; next_step=sleep; sleep_s={delay}; "
+                        f"attempt={attempt + 1}/{self.max_retries}"
+                    )
                     await asyncio.sleep(delay)
             except Exception as e:
+                last_error = type(e).__name__
+                self.last_request_meta = {
+                    "ok": False,
+                    "status_code": last_status,
+                    "error": last_error,
+                    "attempt": attempt + 1,
+                }
                 if attempt < self.max_retries - 1:
-                    delay = self.retry_delay * (2 ** attempt)
-                    print(f"catalog_client: request exception: {e}, retrying in {delay}s (attempt {attempt + 1}/{self.max_retries})")
+                    # Connection problems are common here; be more patient to improve completeness.
+                    delay = min(10 * (attempt + 1), 60)  # 10s, 20s, 30s ... capped 60s
+                    print(
+                        f"catalog_client: exception={type(e).__name__}; next_step=sleep; sleep_s={delay}; "
+                        f"attempt={attempt + 1}/{self.max_retries}"
+                    )
                     await asyncio.sleep(delay)
                 else:
-                    print(f"catalog_client: request failed after {self.max_retries} attempts: {e}")
+                    print(
+                        f"catalog_client: failed after {self.max_retries} attempts; "
+                        f"last_status={last_status}; last_error={last_error}"
+                    )
                     return None
         return None
     
@@ -88,7 +120,8 @@ class CatalogClient:
         self,
         brand_id: int,
         page: int,
-        base_url: str
+        base_url: str,
+        client: httpx.AsyncClient | None = None,
     ) -> Dict[str, Any]:
         """Fetch a single page from WB catalog API.
         
@@ -101,44 +134,101 @@ class CatalogClient:
             Parsed JSON response. Empty dict if error.
         """
         url = self._replace_page_in_url(base_url, page)
+        self.last_request_meta = {"page": page}
         
         print(f"catalog_client: URL={url}")
         print(f"catalog_client: method=GET, brand_id={brand_id}, page={page}")
-        
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+
+        async def _handle_with_client(http_client: httpx.AsyncClient) -> Dict[str, Any]:
             try:
                 r = await self._request_with_retry(
-                    client, "GET", url, headers=self.headers
+                    http_client, "GET", url, headers=self.headers
                 )
-                
+
                 if not r:
                     print("catalog_client: request returned None (no response)")
+                    self.last_request_meta = {
+                        **(self.last_request_meta or {}),
+                        "ok": False,
+                        "status_code": None,
+                        "result": "no_response",
+                    }
                     return {}
-                
+
                 print(f"catalog_client: HTTP status={r.status_code}")
-                response_text = r.text[:500] if r.text else "(empty)"
-                print(f"catalog_client: response preview (first 500 chars): {response_text}")
-                
+
                 if r.status_code == 200:
                     try:
                         data = r.json()
-                        print(f"catalog_client: response type={type(data)}, keys={list(data.keys()) if isinstance(data, dict) else 'list'}")
+                        self.last_request_meta = {
+                            **(self.last_request_meta or {}),
+                            "ok": True,
+                            "status_code": 200,
+                            "result": "ok",
+                        }
                         return data
                     except Exception as e:
                         print(f"catalog_client: JSON parse error: {type(e).__name__}: {e}")
+                        self.last_request_meta = {
+                            **(self.last_request_meta or {}),
+                            "ok": False,
+                            "status_code": 200,
+                            "result": "json_parse_error",
+                            "error": type(e).__name__,
+                        }
                         return {}
                 elif r.status_code == 429:
                     print("catalog_client: HTTP 429 Too Many Requests - rate limit exceeded, need backoff")
+                    self.last_request_meta = {
+                        **(self.last_request_meta or {}),
+                        "ok": False,
+                        "status_code": 429,
+                        "result": "rate_limited",
+                    }
                     return {}
                 elif r.status_code >= 500:
                     print(f"catalog_client: HTTP {r.status_code} server error - will retry")
+                    self.last_request_meta = {
+                        **(self.last_request_meta or {}),
+                        "ok": False,
+                        "status_code": int(r.status_code),
+                        "result": "server_error",
+                    }
                     return {}
                 else:
                     print(f"catalog_client: HTTP {r.status_code} error")
+                    self.last_request_meta = {
+                        **(self.last_request_meta or {}),
+                        "ok": False,
+                        "status_code": int(r.status_code),
+                        "result": "http_error",
+                    }
                     return {}
             except Exception as e:
                 print(f"catalog_client: exception during request: {type(e).__name__}: {e}")
+                self.last_request_meta = {
+                    **(self.last_request_meta or {}),
+                    "ok": False,
+                    "status_code": None,
+                    "result": "exception",
+                    "error": type(e).__name__,
+                }
                 return {}
-        
-        return {}
+
+        # Prefer reusing a shared AsyncClient (connection pooling / keep-alive).
+        if client is not None:
+            return await _handle_with_client(client)
+
+        print(f"catalog_client: creating AsyncClient, timeout={self.timeout}")
+        timeout_cfg = httpx.Timeout(
+            float(self.timeout),
+            # Connect timeouts were the main failure mode; keep it same as overall timeout.
+            connect=float(self.timeout),
+            read=float(self.timeout),
+            write=float(self.timeout),
+            pool=float(self.timeout),
+        )
+        limits = httpx.Limits(max_connections=20, max_keepalive_connections=10, keepalive_expiry=30.0)
+        async with httpx.AsyncClient(timeout=timeout_cfg, limits=limits) as http_client:
+            return await _handle_with_client(http_client)
 

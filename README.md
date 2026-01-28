@@ -547,6 +547,24 @@ docker compose exec api alembic upgrade head
 docker compose exec api alembic upgrade head
 ```
 
+### Sanity-check: multiple heads
+
+Иногда при параллельной разработке Alembic может получить несколько heads, и тогда `alembic upgrade head` падает с ошибкой вида:
+`Multiple head revisions are present for given argument 'head'`.
+
+- **Проверка**:
+  - `docker compose exec api alembic heads`
+  - или локально: `python scripts/check_alembic_heads.py`
+- **Фикс (без drop/reset)**: создать *пустую merge-миграцию*, которая объединяет оба head'а (down_revision = (HEAD_A, HEAD_B)).
+
+### Troubleshooting: alembic_version.version_num is too short
+
+Если `alembic upgrade head` падает с ошибкой Postgres вида:
+`value too long for type character varying(32)` при записи в `alembic_version`,
+значит колонка `alembic_version.version_num` имеет тип `VARCHAR(32)`, а ваши revision ids длиннее.
+
+- **Фикс (без reset БД)**: расширить `alembic_version.version_num` до `TEXT` (см. соответствующую миграцию) и повторить `alembic upgrade head`.
+
 ### Новые миграции (Спринт #1)
 
 1. **b1c2d3e4f5a6** - `add_rrp_snapshots_table`: таблица для данных из 1С XML

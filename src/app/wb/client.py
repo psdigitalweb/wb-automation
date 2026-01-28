@@ -25,11 +25,31 @@ class WBClient:
         url: str, 
         **kwargs
     ) -> Optional[httpx.Response]:
-        """Make HTTP request with retries and exponential backoff."""
+        """Make HTTP request with retries and exponential backoff.
+
+        Retries on:
+        - 429 (rate limit) with bounded backoff
+        - 5xx
+        - network exceptions / timeouts
+        """
         for attempt in range(self.max_retries):
             try:
-                response = await client.request(method, url, **kwargs)
-                if response.status_code < 500:  # Don't retry on 4xx errors
+                # Guard against indefinite stalls even if transport hangs.
+                response = await asyncio.wait_for(
+                    client.request(method, url, **kwargs),
+                    timeout=float(self.timeout) + 5.0,
+                )
+
+                # Special-case rate limiting: backoff and retry.
+                if response.status_code == 429:
+                    if attempt < self.max_retries - 1:
+                        delay = min(15 * (attempt + 1), 90)  # 15s, 30s, 45s ... cap 90s
+                        print(f"Request failed with 429, retrying in {delay}s (attempt {attempt + 1}/{self.max_retries})")
+                        await asyncio.sleep(delay)
+                        continue
+                    return response
+
+                if response.status_code < 500:  # Don't retry on other 4xx errors
                     return response
                 if attempt < self.max_retries - 1:
                     delay = self.retry_delay * (2 ** attempt)
@@ -38,10 +58,10 @@ class WBClient:
             except Exception as e:
                 if attempt < self.max_retries - 1:
                     delay = self.retry_delay * (2 ** attempt)
-                    print(f"Request exception: {e}, retrying in {delay}s (attempt {attempt + 1}/{self.max_retries})")
+                    print(f"Request exception: {type(e).__name__}: {e!r}, retrying in {delay}s (attempt {attempt + 1}/{self.max_retries})")
                     await asyncio.sleep(delay)
                 else:
-                    print(f"Request failed after {self.max_retries} attempts: {e}")
+                    print(f"Request failed after {self.max_retries} attempts: {type(e).__name__}: {e!r}")
                     return None
         return None
 

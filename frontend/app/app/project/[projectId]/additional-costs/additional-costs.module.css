@@ -1,0 +1,344 @@
+/* Additional Costs page – unified UI atoms. Do not alter global styles. */
+
+.root {
+  --ac-h: 40px;
+  --ac-px: 12px;
+  --ac-py: 8px;
+  --ac-radius: 6px;
+  --ac-fs: 14px;
+  --ac-placeholder-opacity: 0.5;
+}
+
+/* Base control – height, padding, font, radius. Use for input/select/button. */
+.control {
+  height: var(--ac-h);
+  padding: var(--ac-py) var(--ac-px);
+  box-sizing: border-box;
+  border-radius: var(--ac-radius);
+  font-size: var(--ac-fs);
+  font-family: inherit;
+  border: 1px solid #ddd;
+  background: #fff;
+  color: #333;
+}
+
+.control::placeholder {
+  color: #666;
+  opacity: var(--ac-placeholder-opacity);
+}
+
+.control:disabled {
+  background: #f0f0f0;
+  color: #888;
+  cursor: not-allowed;
+  height: var(--ac-h);
+}
+
+/* Date input – browsers often add own padding. Normalize to match .control. */
+.inputDate {
+  height: var(--ac-h);
+  padding: var(--ac-py) var(--ac-px);
+  box-sizing: border-box;
+  border-radius: var(--ac-radius);
+  font-size: var(--ac-fs);
+  font-family: inherit;
+  border: 1px solid #ddd;
+  background: #fff;
+  color: #333;
+  min-width: 140px;
+}
+
+.inputDate:disabled {
+  background: #f0f0f0;
+  color: #888;
+  cursor: not-allowed;
+}
+
+.inputText {
+  composes: control;
+  min-width: 120px;
+}
+
+.inputNumber {
+  composes: control;
+  min-width: 90px;
+}
+
+.select {
+  composes: control;
+  cursor: pointer;
+  min-width: 140px;
+}
+
+.select:disabled {
+  cursor: not-allowed;
+}
+
+/* Button – same height/padding, no border override from globals when used via module. */
+.button {
+  height: var(--ac-h);
+  padding: var(--ac-py) var(--ac-px);
+  box-sizing: border-box;
+  border-radius: var(--ac-radius);
+  font-size: var(--ac-fs);
+  font-family: inherit;
+  border: none;
+  background: #0070f3;
+  color: #fff;
+  cursor: pointer;
+  min-width: 80px;
+  margin: 0;
+}
+
+.button:hover:not(:disabled) {
+  background: #0051cc;
+}
+
+.button:disabled {
+  background: #ccc;
+  cursor: not-allowed;
+  color: #fff;
+}
+
+.buttonSecondary {
+  composes: button;
+  background: #f5f5f5;
+  color: #333;
+  border: 1px solid #ddd;
+  margin: 0;
+}
+
+.buttonSecondary:hover:not(:disabled) {
+  background: #e8e8e8;
+}
+
+.buttonSecondary:disabled {
+  background: #f0f0f0;
+  color: #888;
+}
+
+/* Field = label + control */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fieldLabel {
+  font-size: var(--ac-fs);
+  font-weight: 500;
+  color: #444;
+}
+
+/* Grids */
+.gridSummary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  align-items: end;
+  margin-bottom: 12px;
+}
+
+@media (max-width: 768px) {
+  .gridSummary {
+    grid-template-columns: 1fr;
+  }
+}
+
+.gridSummaryButton {
+  display: flex;
+  align-items: flex-end;
+}
+
+.gridFormRow1 {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(120px, 1fr));
+  gap: 12px;
+  align-items: end;
+  margin-bottom: 12px;
+}
+
+.gridFormRow2 {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  gap: 12px;
+  align-items: end;
+  margin-bottom: 12px;
+}
+
+.gridFormRow3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(120px, 1fr)) auto;
+  gap: 12px;
+  align-items: end;
+  margin-bottom: 12px;
+}
+
+.gridFormDescription {
+  grid-column: span 2;
+}
+
+.gridFormButton {
+  display: flex;
+  align-items: flex-end;
+}
+
+@media (max-width: 768px) {
+  .gridFormRow1,
+  .gridFormRow2,
+  .gridFormRow3 {
+    grid-template-columns: 1fr;
+  }
+  .gridFormDescription {
+    grid-column: span 1;
+  }
+  .gridFormButton {
+    width: 100%;
+  }
+  .gridFormButton button {
+    width: 100%;
+  }
+}
+
+.gridFilters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  align-items: end;
+  margin-bottom: 12px;
+}
+
+.gridFiltersButtons {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+@media (max-width: 768px) {
+  .gridFilters {
+    grid-template-columns: 1fr;
+  }
+  .gridFiltersButtons {
+    width: 100%;
+    flex-direction: column;
+  }
+  .gridFiltersButtons button {
+    width: 100%;
+  }
+}
+
+/* Table – center action buttons in row */
+.tableActionsCell {
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.tableActionBtn {
+  composes: buttonSecondary;
+  height: var(--ac-h);
+  min-width: 70px;
+  padding: var(--ac-py) var(--ac-px);
+  margin-right: 4px;
+}
+
+.tableActionBtn:last-child {
+  margin-right: 0;
+}
+
+/* Pagination buttons – use same atoms */
+.paginationWrap {
+  margin-top: 12px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.paginationBtn {
+  composes: buttonSecondary;
+}
+
+.linkAsButton {
+  composes: buttonSecondary;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  margin-bottom: 10px;
+}
+
+/* Empty state */
+.emptyState {
+  padding: 40px 20px;
+  text-align: center;
+  color: #666;
+}
+
+.emptyStateTitle {
+  font-size: 16px;
+  font-weight: 500;
+  margin-bottom: 8px;
+  color: #444;
+}
+
+.emptyStateText {
+  font-size: 14px;
+  color: #666;
+}
+
+/* Tabs */
+.gridTabs {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+  align-items: center;
+}
+
+.tab {
+  composes: buttonSecondary;
+  min-width: 180px;
+  height: var(--ac-h);
+  margin: 0;
+}
+
+.tabActive {
+  font-weight: 600;
+  border-color: #0070f3;
+  color: #0070f3;
+}
+
+/* Compact filters row */
+.gridFiltersCompact {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-end;
+  margin-bottom: 12px;
+  padding: 12px;
+  background: #f9fafb;
+  border-radius: var(--ac-radius);
+}
+
+.gridFiltersCompact .field {
+  min-width: 140px;
+  flex: 0 1 auto;
+}
+
+.gridFiltersCompactButtons {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  margin-left: auto;
+}
+
+@media (max-width: 768px) {
+  .gridFiltersCompact {
+    flex-direction: column;
+  }
+  .gridFiltersCompactButtons {
+    margin-left: 0;
+    width: 100%;
+  }
+  .gridFiltersCompactButtons button {
+    flex: 1;
+  }
+}

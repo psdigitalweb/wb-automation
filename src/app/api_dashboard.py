@@ -385,6 +385,25 @@ async def get_dashboard_kpis(
             FROM rrp_snapshots s
             JOIN rrp_run r ON s.snapshot_at = r.run_at
             WHERE s.project_id = :project_id
+        ),
+        internal_data_latest_snapshot AS (
+            SELECT id, imported_at
+            FROM internal_data_snapshots
+            WHERE project_id = :project_id
+              AND status IN ('success', 'partial')
+            ORDER BY imported_at DESC
+            LIMIT 1
+        ),
+        internal_data_kpi AS (
+            SELECT
+              COALESCE(COUNT(DISTINCT ip.internal_sku), 0)::bigint AS total,
+              COALESCE(COUNT(DISTINCT CASE 
+                WHEN (ip.attributes->>'stock') IS NOT NULL 
+                  AND (ip.attributes->>'stock')::numeric > 0 
+                THEN ip.internal_sku 
+              END), 0)::bigint AS with_stock
+            FROM internal_data_latest_snapshot s
+            LEFT JOIN internal_products ip ON ip.snapshot_id = s.id AND ip.project_id = :project_id
         )
         SELECT
           (SELECT total FROM wb_products) AS wb_products_total,
@@ -402,13 +421,25 @@ async def get_dashboard_kpis(
           (SELECT total FROM rrp_kpi) AS rrp_total,
           (SELECT with_price FROM rrp_kpi) AS rrp_with_price,
           (SELECT with_stock FROM rrp_kpi) AS rrp_with_stock,
-          (SELECT with_price_and_stock FROM rrp_kpi) AS rrp_with_price_and_stock
+          (SELECT with_price_and_stock FROM rrp_kpi) AS rrp_with_price_and_stock,
+          (SELECT imported_at FROM internal_data_latest_snapshot LIMIT 1) AS internal_data_at,
+          COALESCE((SELECT total FROM internal_data_kpi), 0::bigint) AS internal_data_total,
+          COALESCE((SELECT with_stock FROM internal_data_kpi), 0::bigint) AS internal_data_with_stock
         ;
         """
     )
 
-    with engine.connect() as conn:
-        row = conn.execute(sql, {"project_id": project_id}).mappings().first() or {}
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(sql, {"project_id": project_id}).mappings().first() or {}
+    except Exception as e:
+        # Log error for debugging
+        import traceback
+        error_msg = f"{type(e).__name__}: {e}"
+        print(f"ERROR: api_dashboard.get_dashboard_kpis failed for project_id={project_id}: {error_msg}")
+        print(traceback.format_exc())
+        # Return empty/default values to prevent frontend crash
+        row = {}
 
     def iso(v):
         return v.isoformat() if v is not None and hasattr(v, "isoformat") else None
@@ -436,12 +467,17 @@ async def get_dashboard_kpis(
             "with_stock": int(row.get("rrp_with_stock") or 0),
             "with_price_and_stock": int(row.get("rrp_with_price_and_stock") or 0),
         },
+        "internal_data": {
+            "total": int(row.get("internal_data_total") or 0),
+            "with_stock": int(row.get("internal_data_with_stock") or 0),
+        },
         "last_snapshots": {
             "fbs_stock_at": iso(row.get("fbs_stock_at")),
             "fbo_stock_at": iso(row.get("fbo_stock_at")),
             "wb_prices_at": iso(row.get("wb_prices_at")),
             "storefront_at": iso(row.get("storefront_at")),
             "rrp_at": iso(row.get("rrp_at")),
+            "internal_data_at": iso(row.get("internal_data_at")),
         },
     }
 

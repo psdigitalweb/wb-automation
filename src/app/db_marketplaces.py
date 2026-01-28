@@ -481,4 +481,152 @@ def delete_project_marketplace(project_id: int, marketplace_id: int) -> bool:
         return result.rowcount > 0
 
 
+# System marketplace settings functions
+
+def get_system_marketplace_settings(marketplace_code: str) -> Optional[dict]:
+    """Get system marketplace settings by code."""
+    with engine.connect() as conn:
+        result = conn.execute(
+            text("""
+                SELECT marketplace_code, is_globally_enabled, is_visible, sort_order, 
+                       settings_json, created_at, updated_at
+                FROM system_marketplace_settings
+                WHERE marketplace_code = :marketplace_code
+            """),
+            {"marketplace_code": marketplace_code}
+        )
+        row = result.fetchone()
+        if row:
+            return {
+                "marketplace_code": row[0],
+                "is_globally_enabled": row[1],
+                "is_visible": row[2],
+                "sort_order": row[3],
+                "settings_json": row[4],
+                "created_at": row[5],
+                "updated_at": row[6],
+            }
+        return None
+
+
+def get_system_marketplace_settings_map() -> Dict[str, dict]:
+    """Get all system marketplace settings as a map by marketplace_code.
+    
+    Returns:
+        Dictionary mapping marketplace_code to settings dict.
+    """
+    with engine.connect() as conn:
+        result = conn.execute(
+            text("""
+                SELECT marketplace_code, is_globally_enabled, is_visible, sort_order, 
+                       settings_json, created_at, updated_at
+                FROM system_marketplace_settings
+            """)
+        )
+        settings_map = {}
+        for row in result:
+            settings_map[row[0]] = {
+                "marketplace_code": row[0],
+                "is_globally_enabled": row[1],
+                "is_visible": row[2],
+                "sort_order": row[3],
+                "settings_json": row[4],
+                "created_at": row[5],
+                "updated_at": row[6],
+            }
+        return settings_map
+
+
+def upsert_system_marketplace_settings(
+    marketplace_code: str,
+    is_globally_enabled: Optional[bool] = None,
+    is_visible: Optional[bool] = None,
+    sort_order: Optional[int] = None,
+    settings_json: Optional[Dict[str, Any]] = None
+) -> dict:
+    """Create or update system marketplace settings (UPSERT).
+    
+    Args:
+        marketplace_code: Marketplace code (primary key)
+        is_globally_enabled: Whether marketplace is globally enabled
+        is_visible: Whether marketplace is visible in UI
+        sort_order: Sort order for display
+        settings_json: JSON settings (will be merged with existing if provided)
+    
+    Returns:
+        Updated settings dict
+    """
+    import json as json_module
+    
+    # Get existing settings for merge
+    existing = get_system_marketplace_settings(marketplace_code)
+    
+    # Prepare values for UPSERT
+    final_is_globally_enabled = is_globally_enabled if is_globally_enabled is not None else (
+        existing.get("is_globally_enabled") if existing else True
+    )
+    final_is_visible = is_visible if is_visible is not None else (
+        existing.get("is_visible") if existing else True
+    )
+    final_sort_order = sort_order if sort_order is not None else (
+        existing.get("sort_order") if existing else 100
+    )
+    
+    # Merge settings_json if provided
+    if settings_json is not None:
+        existing_settings = existing.get("settings_json") if existing else None
+        if existing_settings:
+            if isinstance(existing_settings, str):
+                existing_settings = json_module.loads(existing_settings)
+            merged_settings = {**existing_settings, **settings_json}
+        else:
+            merged_settings = settings_json
+        settings_json_str = json_module.dumps(merged_settings)
+    else:
+        # Keep existing settings_json or use empty dict
+        if existing and existing.get("settings_json"):
+            existing_settings = existing.get("settings_json")
+            if isinstance(existing_settings, str):
+                settings_json_str = existing_settings
+            else:
+                settings_json_str = json_module.dumps(existing_settings)
+        else:
+            settings_json_str = "{}"
+    
+    with engine.begin() as conn:
+        result = conn.execute(
+            text("""
+                INSERT INTO system_marketplace_settings 
+                    (marketplace_code, is_globally_enabled, is_visible, sort_order, settings_json)
+                VALUES (:marketplace_code, :is_globally_enabled, :is_visible, :sort_order, CAST(:settings_json AS jsonb))
+                ON CONFLICT (marketplace_code) 
+                DO UPDATE SET
+                    is_globally_enabled = EXCLUDED.is_globally_enabled,
+                    is_visible = EXCLUDED.is_visible,
+                    sort_order = EXCLUDED.sort_order,
+                    settings_json = EXCLUDED.settings_json,
+                    updated_at = now()
+                RETURNING marketplace_code, is_globally_enabled, is_visible, sort_order, 
+                          settings_json, created_at, updated_at
+            """),
+            {
+                "marketplace_code": marketplace_code,
+                "is_globally_enabled": final_is_globally_enabled,
+                "is_visible": final_is_visible,
+                "sort_order": final_sort_order,
+                "settings_json": settings_json_str,
+            }
+        )
+        row = result.fetchone()
+        return {
+            "marketplace_code": row[0],
+            "is_globally_enabled": row[1],
+            "is_visible": row[2],
+            "sort_order": row[3],
+            "settings_json": row[4],
+            "created_at": row[5],
+            "updated_at": row[6],
+        }
+
+
 

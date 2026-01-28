@@ -39,7 +39,7 @@ export default function Topbar() {
 
   const loadProjects = async () => {
     try {
-      const projects = await apiGetData<Project[]>('/v1/projects')
+      const projects = await apiGetData<Project[]>('/api/v1/projects')
       setProjects(projects)
     } catch (error) {
       console.error('Failed to load projects:', error)
@@ -62,49 +62,51 @@ export default function Topbar() {
 
   return (
     <div className="topbar">
-      <div className="topbar-left">
-        <Link href="/" className="topbar-brand" aria-label="Главная">
-          <Image
-            src="/header_logo.jpg?v=3"
-            alt="E-com Core"
-            width={200}
-            height={48}
-            priority
-            className="topbar-logo"
-            unoptimized
-          />
-        </Link>
-        <div className="topbar-project-selector">
-          <select
-            value={currentProjectId || ''}
-            onChange={(e) => handleProjectChange(e.target.value)}
-            disabled={projects.length === 0}
-          >
-            {projects.length === 0 ? (
-              <option value="">No projects</option>
-            ) : (
-              <>
-                <option value="">Select project...</option>
-                {projects.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </>
-            )}
-          </select>
-        </div>
-      </div>
-      <div className="topbar-right">
-        {user.is_superuser && (
-          <Link href="/app/admin/marketplaces/wildberries/tariffs" className="topbar-admin-link">
-            Admin: WB Tariffs
+      <div className="container">
+        <div className="topbar-left">
+          <Link href="/" className="topbar-brand" aria-label="Главная">
+            <Image
+              src="/header_logo.jpg?v=3"
+              alt="E-com Core"
+              width={200}
+              height={48}
+              priority
+              className="topbar-logo"
+              unoptimized
+            />
           </Link>
-        )}
-        <span className="topbar-user">{user.email || user.username}</span>
-        <button onClick={handleLogout} className="btn-logout">
-          Logout
-        </button>
+          <div className="topbar-project-selector">
+            <select
+              value={currentProjectId || ''}
+              onChange={(e) => handleProjectChange(e.target.value)}
+              disabled={projects.length === 0}
+            >
+              {projects.length === 0 ? (
+                <option value="">Нет проектов</option>
+              ) : (
+                <>
+                  <option value="">Выбрать проект…</option>
+                  {projects.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </>
+              )}
+            </select>
+          </div>
+        </div>
+        <div className="topbar-right">
+          {user.is_superuser && (
+            <Link href="/app/admin/settings" className="topbar-admin-link" title="Настройки администратора">
+              ⚙️
+            </Link>
+          )}
+          <span className="topbar-user">{user.email || user.username}</span>
+          <button onClick={handleLogout} className="btn-logout">
+            Выйти
+          </button>
+        </div>
       </div>
     </div>
   )

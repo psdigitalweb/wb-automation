@@ -54,7 +54,7 @@ def _parse_rfc3339_to_datetime(date_str: str) -> datetime:
     raise ValueError(f"Unable to parse RFC3339 date: {date_str}")
 
 
-async def ingest_supplier_stocks(project_id: int) -> None:
+async def ingest_supplier_stocks(project_id: int, run_id: int | None = None) -> None:
     """Fetch and insert supplier stock snapshots from WB Statistics API.
     
     Алгоритм:
@@ -76,11 +76,11 @@ async def ingest_supplier_stocks(project_id: int) -> None:
         credentials = get_wb_credentials_for_project(project_id)
         token = credentials.get("token", "") if credentials else (os.getenv("WB_TOKEN", "") or "")
     except ValueError as e:
-        print(f"ingest_supplier_stocks: {str(e)}, skipping")
+        print(f"ingest_supplier_stocks: {str(e)}, skipping (run_id={run_id})")
         return
 
     if not token or token.upper() == "MOCK":
-        print("ingest_supplier_stocks: skipped (MOCK mode or no token)")
+        print(f"ingest_supplier_stocks: skipped (MOCK mode or no token), run_id={run_id}")
         return
     
     # 1. Определить начальный dateFrom
@@ -210,7 +210,8 @@ async def ingest_supplier_stocks(project_id: int) -> None:
         if rows:
             with engine.begin() as conn:
                 result = conn.execute(insert_sql, rows)
-                inserted = len(rows)  # ON CONFLICT DO NOTHING, so actual inserts may be less
+                # ON CONFLICT DO NOTHING: rowcount reflects actual inserts
+                inserted = int(result.rowcount or 0)
                 total_inserted += inserted
             print(f"ingest_supplier_stocks: inserted {inserted} records (page {total_pages})")
         else:
@@ -245,6 +246,17 @@ async def ingest_supplier_stocks(project_id: int) -> None:
         # (чтобы не пропустить пограничные записи, дубликаты уберёт уникальный индекс)
         from datetime import timedelta
         next_date_from_dt = page_max_last_change_date - timedelta(seconds=1)
+        # IMPORTANT: if overlap produces the same (or older) dateFrom, it will loop forever.
+        # In this case, move dateFrom forward to page_max_last_change_date (no -1s overlap).
+        if next_date_from_dt <= current_date_from_dt:
+            next_date_from_dt = page_max_last_change_date
+        # If we STILL can't move forward, stop to prevent infinite loop.
+        if next_date_from_dt <= current_date_from_dt:
+            print(
+                f"ingest_supplier_stocks: WARNING - cannot advance dateFrom "
+                f"(current={current_date_from_dt}, page_max={page_max_last_change_date}), stopping"
+            )
+            break
         # Форматируем в RFC3339 с правильным timezone
         if next_date_from_dt.tzinfo:
             tz_offset = next_date_from_dt.strftime("%z")
@@ -254,6 +266,28 @@ async def ingest_supplier_stocks(project_id: int) -> None:
             date_from = next_date_from_dt.strftime("%Y-%m-%dT%H:%M:%S") + "Z"
         
         print(f"ingest_supplier_stocks: next dateFrom={date_from} (page_max - 1s for overlap)")
+
+        # Best-effort progress update in ingest_runs.stats_json for UI (no secrets).
+        if run_id is not None:
+            try:
+                from app.services.ingest import runs as runs_service
+                runs_service.set_run_progress(
+                    int(run_id),
+                    {
+                        "ok": None,
+                        "phase": "supplier_stocks",
+                        "page": total_pages,
+                        "received": total_received,
+                        "inserted": total_inserted,
+                        "last_page_inserted": inserted if "inserted" in locals() else None,
+                        "date_from": date_from,
+                        "page_max_last_change_date": page_max_last_change_date.isoformat()
+                        if hasattr(page_max_last_change_date, "isoformat")
+                        else str(page_max_last_change_date),
+                    },
+                )
+            except Exception:
+                pass
         
         # Rate limit: sleep 60 секунд между запросами
         print(f"ingest_supplier_stocks: rate limit throttling, sleeping {rate_limit_delay} seconds...")

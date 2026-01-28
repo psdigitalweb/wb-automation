@@ -18,6 +18,7 @@ in SQL so that filtering and sorting are correct at the database layer.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional, Tuple
@@ -27,6 +28,8 @@ from sqlalchemy import text
 
 from app.db import engine
 from app.deps import get_current_active_user, get_project_membership
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter(prefix="/api/v1/projects", tags=["wb-price-discrepancies"])
@@ -555,6 +558,12 @@ async def get_wb_price_discrepancies(
 
     Always returns HTTP 200 with items/meta (never 404), even if no data is available.
     """
+    start_time = datetime.now(timezone.utc)
+    logger.info(
+        f"get_wb_price_discrepancies: starting for project_id={project_id} "
+        f"page={page} page_size={page_size} only_below_rrp={only_below_rrp}"
+    )
+    
     filters = DiscrepancyFilters(
         q=q,
         category_ids=_parse_category_ids(category_ids),
@@ -570,16 +579,423 @@ async def get_wb_price_discrepancies(
 
     items: List[Dict[str, Any]] = []
     total_count = 0
+    
+    # #region agent log
+    import json
+    try:
+        with open(r'd:\Work\EcomCore\.cursor\debug.log', 'a', encoding='utf-8') as f:
+            f.write(json.dumps({
+                "sessionId": "debug-session",
+                "runId": "run1",
+                "hypothesisId": "H1",
+                "location": "api_wb_price_discrepancies.py:578",
+                "message": "get_wb_price_discrepancies: before SQL execution",
+                "data": {
+                    "project_id": project_id,
+                    "filters_only_below_rrp": filters.only_below_rrp,
+                },
+                "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
+            }, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+    # #endregion
+    
     with engine.connect() as conn:
+        # #region agent log
+        # Diagnostic: Check data availability at each step
+        try:
+            # Check rrp_run (critical for JOIN)
+            rrp_run_check = conn.execute(
+                text("SELECT MAX(snapshot_at) AS run_at FROM rrp_snapshots WHERE project_id = :project_id"),
+                {"project_id": project_id},
+            ).scalar()
+            
+            # Check rrp_snapshots count
+            rrp_count = conn.execute(
+                text("SELECT COUNT(*) FROM rrp_snapshots WHERE project_id = :project_id"),
+                {"project_id": project_id},
+            ).scalar() or 0
+            
+            # Check products count
+            products_count = conn.execute(
+                text("SELECT COUNT(*) FROM products WHERE project_id = :project_id AND vendor_code_norm IS NOT NULL"),
+                {"project_id": project_id},
+            ).scalar() or 0
+            
+            # Check frontend prices count
+            brand_check = conn.execute(
+                text("""
+                    SELECT pm.settings_json->>'brand_id' AS brand_id
+                    FROM project_marketplaces pm
+                    JOIN marketplaces m ON m.id = pm.marketplace_id
+                    WHERE pm.project_id = :project_id AND m.code = 'wildberries'
+                    LIMIT 1
+                """),
+                {"project_id": project_id},
+            ).mappings().first()
+            
+            frontend_count = 0
+            if brand_check and brand_check.get("brand_id"):
+                frontend_count = conn.execute(
+                    text("""
+                        SELECT COUNT(*) FROM frontend_catalog_price_snapshots
+                        WHERE query_type = 'brand' AND query_value = :brand_id
+                    """),
+                    {"brand_id": str(brand_check.get("brand_id"))},
+                ).scalar() or 0
+            
+            # Check Internal Data availability
+            internal_data_count = conn.execute(
+                text("""
+                    SELECT COUNT(*) FROM internal_product_prices ipp
+                    JOIN internal_data_snapshots ids ON ipp.snapshot_id = ids.id
+                    WHERE ids.project_id = :project_id AND ipp.rrp IS NOT NULL
+                """),
+                {"project_id": project_id},
+            ).scalar() or 0
+            
+            # Check mapping: products with vendor_code_norm that match internal_sku
+            mapping_count = conn.execute(
+                text("""
+                    SELECT COUNT(DISTINCT p.vendor_code_norm) FROM products p
+                    JOIN internal_products ip ON ip.internal_sku = p.vendor_code_norm
+                    JOIN internal_product_prices ipp ON ipp.internal_product_id = ip.id
+                    JOIN internal_data_snapshots ids ON ipp.snapshot_id = ids.id
+                    WHERE ids.project_id = :project_id AND p.project_id = :project_id
+                      AND ipp.rrp IS NOT NULL
+                """),
+                {"project_id": project_id},
+            ).scalar() or 0
+            
+            with open(r'd:\Work\EcomCore\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({
+                    "sessionId": "debug-session",
+                    "runId": "run1",
+                    "hypothesisId": "H1",
+                    "location": "api_wb_price_discrepancies.py:620",
+                    "message": "get_wb_price_discrepancies: data availability check",
+                    "data": {
+                        "project_id": project_id,
+                        "rrp_snapshots_count": rrp_count,
+                        "rrp_run_max_snapshot_at": rrp_run_check.isoformat() if rrp_run_check else None,
+                        "products_with_vendor_code_norm": products_count,
+                        "frontend_catalog_price_snapshots_count": frontend_count,
+                        "internal_data_rrp_count": internal_data_count,
+                        "products_mapped_to_internal_data": mapping_count,
+                    },
+                    "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
+                }, ensure_ascii=False) + "\n")
+        except Exception as e:
+            try:
+                with open(r'd:\Work\EcomCore\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({
+                        "sessionId": "debug-session",
+                        "runId": "run1",
+                        "hypothesisId": "H1",
+                        "location": "api_wb_price_discrepancies.py:650",
+                        "message": "get_wb_price_discrepancies: data availability check ERROR",
+                        "data": {"error": str(e)},
+                        "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
+                    }, ensure_ascii=False) + "\n")
+            except Exception:
+                pass
+        # #endregion
+        
         result = conn.execute(text(sql), params).mappings().all()
+        
+        # #region agent log
+        try:
+            with open(r'd:\Work\EcomCore\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({
+                    "sessionId": "debug-session",
+                    "runId": "run1",
+                    "hypothesisId": "H2",
+                    "location": "api_wb_price_discrepancies.py:680",
+                    "message": "get_wb_price_discrepancies: SQL result rows",
+                    "data": {
+                        "project_id": project_id,
+                        "rows_returned": len(result),
+                    },
+                    "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
+                }, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
+        # #endregion
+        
         for row in result:
             row_dict = dict(row)
             total_count = int(row_dict.get("total_count", total_count or 0))
             items.append(_row_to_item(row_dict))
+        
+        # #region agent log
+        # If no data, check intermediate CTE results
+        if total_count == 0:
+            try:
+                # Test rrp_latest CTE directly
+                rrp_latest_test = conn.execute(
+                    text("""
+                        WITH
+                        rrp_run AS (
+                            SELECT MAX(snapshot_at) AS run_at FROM rrp_snapshots WHERE project_id = :project_id
+                        ),
+                        rrp_latest AS (
+                            SELECT s.vendor_code_norm, MAX(s.rrp_price) AS rrp_price
+                            FROM rrp_snapshots s
+                            JOIN rrp_run r ON s.snapshot_at = r.run_at
+                            WHERE s.project_id = :project_id
+                            GROUP BY s.vendor_code_norm
+                        )
+                        SELECT COUNT(*) AS count FROM rrp_latest
+                    """),
+                    {"project_id": project_id},
+                ).scalar() or 0
+                
+                # Test base CTE (products with joins)
+                base_test = conn.execute(
+                    text("""
+                        WITH
+                        brand AS (
+                            SELECT pm.settings_json->>'brand_id' AS brand_id
+                            FROM project_marketplaces pm
+                            JOIN marketplaces m ON m.id = pm.marketplace_id
+                            WHERE pm.project_id = :project_id AND m.code = 'wildberries'
+                            LIMIT 1
+                        ),
+                        rrp_run AS (
+                            SELECT MAX(snapshot_at) AS run_at FROM rrp_snapshots WHERE project_id = :project_id
+                        ),
+                        front_run AS (
+                            SELECT MAX(f.snapshot_at) AS run_at
+                            FROM frontend_catalog_price_snapshots f
+                            JOIN brand b ON b.brand_id IS NOT NULL
+                            WHERE f.query_type = 'brand' AND f.query_value = b.brand_id
+                        ),
+                        rrp_latest AS (
+                            SELECT s.vendor_code_norm, MAX(s.rrp_price) AS rrp_price
+                            FROM rrp_snapshots s
+                            JOIN rrp_run r ON s.snapshot_at = r.run_at
+                            WHERE s.project_id = :project_id
+                            GROUP BY s.vendor_code_norm
+                        ),
+                        front_latest AS (
+                            SELECT DISTINCT ON (f.nm_id) f.nm_id::bigint AS nm_id, f.price_product AS showcase_price
+                            FROM frontend_catalog_price_snapshots f
+                            JOIN brand b ON b.brand_id IS NOT NULL
+                            JOIN front_run r ON f.snapshot_at = r.run_at
+                            WHERE f.query_type = 'brand' AND f.query_value = b.brand_id
+                            ORDER BY f.nm_id, f.snapshot_at DESC
+                        )
+                        SELECT 
+                            COUNT(*) AS products_total,
+                            COUNT(rrp_latest.vendor_code_norm) AS products_with_rrp,
+                            COUNT(front_latest.nm_id) AS products_with_frontend,
+                            COUNT(CASE WHEN rrp_latest.vendor_code_norm IS NOT NULL AND front_latest.nm_id IS NOT NULL THEN 1 END) AS products_with_both
+                        FROM products p
+                        LEFT JOIN rrp_latest ON rrp_latest.vendor_code_norm = p.vendor_code_norm
+                        LEFT JOIN front_latest ON front_latest.nm_id = p.nm_id
+                        WHERE p.project_id = :project_id AND p.vendor_code_norm IS NOT NULL
+                    """),
+                    {"project_id": project_id},
+                ).mappings().first()
+                
+                with open(r'd:\Work\EcomCore\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({
+                        "sessionId": "debug-session",
+                        "runId": "run1",
+                        "hypothesisId": "H3",
+                        "location": "api_wb_price_discrepancies.py:720",
+                        "message": "get_wb_price_discrepancies: CTE analysis (empty result)",
+                        "data": {
+                            "project_id": project_id,
+                            "rrp_latest_count": rrp_latest_test,
+                            "products_total": base_test.get("products_total") if base_test else 0,
+                            "products_with_rrp": base_test.get("products_with_rrp") if base_test else 0,
+                            "products_with_frontend": base_test.get("products_with_frontend") if base_test else 0,
+                            "products_with_both": base_test.get("products_with_both") if base_test else 0,
+                            "only_below_rrp_filter": filters.only_below_rrp,
+                        },
+                        "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
+                    }, ensure_ascii=False) + "\n")
+            except Exception as e:
+                try:
+                    with open(r'd:\Work\EcomCore\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                        f.write(json.dumps({
+                            "sessionId": "debug-session",
+                            "runId": "run1",
+                            "hypothesisId": "H3",
+                            "location": "api_wb_price_discrepancies.py:750",
+                            "message": "get_wb_price_discrepancies: CTE analysis ERROR",
+                            "data": {"error": str(e)},
+                            "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
+                        }, ensure_ascii=False) + "\n")
+                except Exception:
+                    pass
+        # #endregion
+    
+    end_time = datetime.now(timezone.utc)
+    elapsed_ms = (end_time - start_time).total_seconds() * 1000
+    
+    logger.info(
+        f"get_wb_price_discrepancies: completed for project_id={project_id} "
+        f"total_count={total_count} items_returned={len(items)} "
+        f"elapsed={elapsed_ms:.2f}ms"
+    )
+    
+    # If no data, check what's missing and add diagnostic info to response
+    diagnostic_info = None
+    if total_count == 0:
+        logger.warning(
+            f"get_wb_price_discrepancies: no data found for project_id={project_id}. "
+            "Consider running diagnose_data_availability task to check prerequisites."
+        )
+        
+        # Collect diagnostic information about missing data
+        try:
+            with engine.connect() as conn:
+                # Check brand_id
+                brand_check = conn.execute(
+                    text("""
+                        SELECT pm.settings_json->>'brand_id' AS brand_id, pm.is_enabled
+                        FROM project_marketplaces pm
+                        JOIN marketplaces m ON m.id = pm.marketplace_id
+                        WHERE pm.project_id = :project_id AND m.code = 'wildberries'
+                        LIMIT 1
+                    """),
+                    {"project_id": project_id},
+                ).mappings().first()
+                
+                # Check table counts
+                rrp_count = conn.execute(
+                    text("SELECT COUNT(*) FROM rrp_snapshots WHERE project_id = :project_id"),
+                    {"project_id": project_id},
+                ).scalar() or 0
+                
+                price_count = conn.execute(
+                    text("SELECT COUNT(*) FROM price_snapshots WHERE project_id = :project_id"),
+                    {"project_id": project_id},
+                ).scalar() or 0
+                
+                products_count = conn.execute(
+                    text("SELECT COUNT(*) FROM products WHERE project_id = :project_id"),
+                    {"project_id": project_id},
+                ).scalar() or 0
+                
+                frontend_count = 0
+                if brand_check and brand_check.get("brand_id"):
+                    frontend_count = conn.execute(
+                        text("""
+                            SELECT COUNT(*) FROM frontend_catalog_price_snapshots
+                            WHERE query_type = 'brand' AND query_value = :brand_id
+                        """),
+                        {"brand_id": str(brand_check.get("brand_id"))},
+                    ).scalar() or 0
+                
+                stock_count = conn.execute(
+                    text("SELECT COUNT(*) FROM stock_snapshots WHERE project_id = :project_id"),
+                    {"project_id": project_id},
+                ).scalar() or 0
+                
+                # Check how many products have both RRP and showcase prices
+                products_with_both = conn.execute(
+                    text("""
+                        WITH
+                        brand AS (
+                            SELECT pm.settings_json->>'brand_id' AS brand_id
+                            FROM project_marketplaces pm
+                            JOIN marketplaces m ON m.id = pm.marketplace_id
+                            WHERE pm.project_id = :project_id AND m.code = 'wildberries'
+                            LIMIT 1
+                        ),
+                        rrp_run AS (
+                            SELECT MAX(snapshot_at) AS run_at FROM rrp_snapshots WHERE project_id = :project_id
+                        ),
+                        front_run AS (
+                            SELECT MAX(f.snapshot_at) AS run_at
+                            FROM frontend_catalog_price_snapshots f
+                            JOIN brand b ON b.brand_id IS NOT NULL
+                            WHERE f.query_type = 'brand' AND f.query_value = b.brand_id
+                        ),
+                        rrp_latest AS (
+                            SELECT s.vendor_code_norm, MAX(s.rrp_price) AS rrp_price
+                            FROM rrp_snapshots s
+                            JOIN rrp_run r ON s.snapshot_at = r.run_at
+                            WHERE s.project_id = :project_id
+                            GROUP BY s.vendor_code_norm
+                        ),
+                        front_latest AS (
+                            SELECT DISTINCT ON (f.nm_id) f.nm_id::bigint AS nm_id, f.price_product AS showcase_price
+                            FROM frontend_catalog_price_snapshots f
+                            JOIN brand b ON b.brand_id IS NOT NULL
+                            JOIN front_run r ON f.snapshot_at = r.run_at
+                            WHERE f.query_type = 'brand' AND f.query_value = b.brand_id
+                            ORDER BY f.nm_id, f.snapshot_at DESC
+                        )
+                        SELECT COUNT(*) AS count
+                        FROM products p
+                        LEFT JOIN rrp_latest ON rrp_latest.vendor_code_norm = p.vendor_code_norm
+                        LEFT JOIN front_latest ON front_latest.nm_id = p.nm_id
+                        WHERE p.project_id = :project_id
+                          AND p.vendor_code_norm IS NOT NULL
+                          AND rrp_latest.rrp_price IS NOT NULL
+                          AND front_latest.showcase_price IS NOT NULL
+                    """),
+                    {"project_id": project_id},
+                ).scalar() or 0
+                
+                # Safely extract brand_id
+                brand_id_value = None
+                if brand_check and brand_check.get("brand_id"):
+                    try:
+                        brand_id_value = int(brand_check.get("brand_id"))
+                    except (ValueError, TypeError):
+                        brand_id_value = None
+                
+                diagnostic_info = {
+                    "data_availability": {
+                        "brand_id_configured": brand_id_value is not None,
+                        "brand_id": brand_id_value,
+                        "rrp_snapshots_count": rrp_count,
+                        "price_snapshots_count": price_count,
+                        "products_count": products_count,
+                        "frontend_catalog_price_snapshots_count": frontend_count,
+                        "stock_snapshots_count": stock_count,
+                        "products_with_both_rrp_and_showcase": products_with_both,
+                    },
+                    "issues": [],
+                    "recommendations": [],
+                }
+                
+                # Identify issues
+                if not brand_check or not brand_check.get("brand_id"):
+                    diagnostic_info["issues"].append("brand_id not configured in project_marketplaces.settings_json")
+                    diagnostic_info["recommendations"].append("Configure brand_id in project marketplace settings")
+                
+                if rrp_count == 0:
+                    diagnostic_info["issues"].append("No RRP snapshots found")
+                    diagnostic_info["recommendations"].append("Run RRP XML ingestion: POST /api/v1/projects/{project_id}/ingest/run with domain='rrp_xml'")
+                
+                if frontend_count == 0 and brand_check and brand_check.get("brand_id"):
+                    diagnostic_info["issues"].append("No frontend catalog price snapshots found")
+                    diagnostic_info["recommendations"].append("Run frontend prices ingestion: POST /api/v1/projects/{project_id}/ingest/run with domain='frontend_prices'")
+                
+                if products_count == 0:
+                    diagnostic_info["issues"].append("No products found")
+                    diagnostic_info["recommendations"].append("Run products ingestion: POST /api/v1/projects/{project_id}/ingest/run with domain='products'")
+                
+                if products_with_both == 0 and rrp_count > 0 and frontend_count > 0:
+                    diagnostic_info["issues"].append("No products have both RRP and showcase prices (mapping issue)")
+                    diagnostic_info["recommendations"].append("Check vendor_code_norm mapping between products and rrp_snapshots")
+        except Exception as e:
+            logger.error(
+                f"get_wb_price_discrepancies: error collecting diagnostic info for project_id={project_id}: {e}",
+                exc_info=True
+            )
+            # Don't fail the request if diagnostic collection fails
+            diagnostic_info = None
 
     updated_at_iso = _get_updated_at(project_id)
 
-    return {
+    response = {
         "meta": {
             "total_count": total_count,
             "page": page,
@@ -588,6 +1004,12 @@ async def get_wb_price_discrepancies(
         },
         "items": items,
     }
+    
+    # Add diagnostic info if no data
+    if diagnostic_info:
+        response["diagnostic"] = diagnostic_info
+    
+    return response
 
 
 @router.get("/{project_id}/wildberries/price-discrepancies/export.csv")
@@ -709,6 +1131,38 @@ async def export_wb_price_discrepancies_csv(
         "Content-Disposition": 'attachment; filename="wb_price_discrepancies.csv"',
     }
     return Response(content=csv_bytes, media_type="text/csv", headers=headers)
+
+
+@router.post("/{project_id}/wildberries/price-discrepancies/diagnose")
+async def diagnose_price_discrepancies(
+    project_id: int = Path(..., description="Project ID"),
+    current_user: dict = Depends(get_current_active_user),
+    membership: dict = Depends(get_project_membership),
+):
+    """Trigger diagnostic task for price discrepancies data availability.
+    
+    This endpoint enqueues a Celery task to check:
+    - brand_id configuration
+    - RRP snapshots availability
+    - Price snapshots availability
+    - Frontend catalog price snapshots availability
+    - Stock snapshots availability
+    - Products availability
+    - Mapping between products and RRP snapshots
+    
+    Returns task_id for tracking.
+    """
+    from app.tasks.price_discrepancies import diagnose_data_availability
+    
+    logger.info(f"diagnose_price_discrepancies: triggering diagnostics for project_id={project_id}")
+    
+    result = diagnose_data_availability.delay(project_id)
+    
+    return {
+        "task_id": result.id,
+        "status": "queued",
+        "message": "Diagnostic task queued. Check worker logs for results.",
+    }
 
 
 @router.get("/{project_id}/wildberries/categories")

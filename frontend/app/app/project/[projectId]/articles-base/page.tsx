@@ -5,7 +5,6 @@ import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { apiGetData, apiRequest } from '../../../../../lib/apiClient'
 import type { ApiDebug, ApiError } from '../../../../../lib/apiClient'
-import '../../../../globals.css'
 
 interface ArticleRecord {
   'Артикул': string | null
@@ -175,7 +174,7 @@ export default function ArticlesBasePage() {
       setSummaryLoading(true)
       setSummaryError(null)
       const qs = force ? '?force=1' : ''
-      const data = await apiGetData<ArticlesBaseSummary>(`/v1/projects/${projectId}/articles-base/summary${qs}`)
+      const data = await apiGetData<ArticlesBaseSummary>(`/api/v1/projects/${projectId}/articles-base/summary${qs}`)
       setSummary(data)
     } catch (e: any) {
       setSummaryError(e?.detail || e?.message || 'Failed to load summary')
@@ -191,7 +190,7 @@ export default function ArticlesBasePage() {
       const qs = new URLSearchParams()
       qs.set('limit', '50')
       if (force) qs.set('force', '1')
-      const data = await apiGetData<ArticlesBaseCoverage>(`/v1/projects/${projectId}/articles-base/coverage?${qs}`)
+      const data = await apiGetData<ArticlesBaseCoverage>(`/api/v1/projects/${projectId}/articles-base/coverage?${qs}`)
       setCoverage(data)
     } catch (e: any) {
       setCoverageError(e?.detail || e?.message || 'Failed to load coverage')
@@ -280,7 +279,7 @@ export default function ArticlesBasePage() {
       apiParams.set('sort', `${sortField}:${sortOrder}`)
 
       const result = await apiRequest<ArticleBaseResponse>(
-        `/v1/projects/${projectId}/articles-base?${apiParams}`,
+        `/api/v1/projects/${projectId}/articles-base?${apiParams}`,
         { method: 'GET', signal: controller.signal }
       )
       console.log('articles-base result:', result)

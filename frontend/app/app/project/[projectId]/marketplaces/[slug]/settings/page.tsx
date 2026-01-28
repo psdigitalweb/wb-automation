@@ -3,7 +3,6 @@
 import { useState, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { apiGet, apiPut, apiPost } from '../../../../../../lib/apiClient'
-import '../../../../../globals.css'
 
 interface Marketplace {
   id: number
@@ -49,7 +48,7 @@ export default function MarketplaceSettingsPage() {
   const loadData = async () => {
     try {
       setLoading(true)
-      const { data: marketplaces } = await apiGet<Marketplace[]>('/v1/marketplaces')
+      const { data: marketplaces } = await apiGet<Marketplace[]>('/api/v1/marketplaces')
       const mp = marketplaces.find(m => m.code === slug)
       if (!mp) {
         alert('Marketplace not found')
@@ -59,7 +58,7 @@ export default function MarketplaceSettingsPage() {
       setMarketplace(mp)
 
       try {
-        const { data: pm } = await apiGet<ProjectMarketplace>(`/v1/projects/${projectId}/marketplaces/${mp.id}`)
+        const { data: pm } = await apiGet<ProjectMarketplace>(`/api/v1/projects/${projectId}/marketplaces/${mp.id}`)
         setProjectMp(pm)
         if (pm.settings_json) {
           setSettings(pm.settings_json)
@@ -72,7 +71,7 @@ export default function MarketplaceSettingsPage() {
         }
       } catch {
         // Project-marketplace connection doesn't exist yet, create it
-        const { data: newPm } = await apiPost<ProjectMarketplace>(`/v1/projects/${projectId}/marketplaces`, {
+        const { data: newPm } = await apiPost<ProjectMarketplace>(`/api/v1/projects/${projectId}/marketplaces`, {
           marketplace_id: mp.id,
           is_enabled: false,
           settings_json: {}
@@ -82,7 +81,7 @@ export default function MarketplaceSettingsPage() {
 
       if (slug === 'wildberries') {
         try {
-          const { data: status } = await apiGet<WBStatusV2>(`/v1/projects/${projectId}/marketplaces/wb`)
+          const { data: status } = await apiGet<WBStatusV2>(`/api/v1/projects/${projectId}/marketplaces/wb`)
           setWbStatus(status)
         } catch (e) {
           console.warn('[WB_DEBUG] Failed to load WB status v2', e)
@@ -132,7 +131,7 @@ export default function MarketplaceSettingsPage() {
       if (slug === 'wildberries' && wbToken.trim()) {
         const brandIdRaw = settingsToSave.brand_id
         const brandId = brandIdRaw !== undefined && brandIdRaw !== null ? Number(brandIdRaw) : undefined
-        await apiPut(`/v1/projects/${projectId}/marketplaces/wildberries`, {
+        await apiPut(`/api/v1/projects/${projectId}/marketplaces/wildberries`, {
           is_enabled: true,
           api_token: wbToken.trim(),
           ...(Number.isFinite(brandId) && brandId! > 0 ? { brand_id: brandId } : {}),
@@ -140,7 +139,7 @@ export default function MarketplaceSettingsPage() {
         setWbToken('')
       }
 
-      await apiPut(`/v1/projects/${projectId}/marketplaces/${marketplace!.id}`, {
+      await apiPut(`/api/v1/projects/${projectId}/marketplaces/${marketplace!.id}`, {
         settings_json: settingsToSave
       })
       alert('Settings saved successfully')
@@ -154,6 +153,16 @@ export default function MarketplaceSettingsPage() {
 
   const handleFieldChange = (key: string, value: string) => {
     setSettings(prev => ({ ...prev, [key]: value }))
+  }
+
+  const updateFrontendPricesSettings = (key: string, value: any) => {
+    setSettings((prev) => ({
+      ...prev,
+      frontend_prices: {
+        ...(prev.frontend_prices || {}),
+        [key]: value,
+      },
+    }))
   }
 
   if (loading || !marketplace || !projectMp) {
@@ -207,6 +216,64 @@ export default function MarketplaceSettingsPage() {
                 value={settings.timeout || 30}
                 onChange={(e) => handleFieldChange('timeout', parseInt(e.target.value))}
               />
+            </div>
+
+            <hr style={{ margin: '18px 0' }} />
+
+            <h3 style={{ marginTop: 0 }}>Витринные цены (frontend catalog)</h3>
+            <div className="form-group">
+              <label>Base URL template</label>
+              <input
+                type="text"
+                value={(settings.frontend_prices?.base_url_template ?? '') as string}
+                onChange={(e) => updateFrontendPricesSettings('base_url_template', e.target.value)}
+                placeholder="https://catalog.wb.ru/brands/v4/catalog?...&page=1..."
+              />
+              <small style={{ color: '#666' }}>
+                URL должен содержать query-параметр <code>page</code> — клиент заменит его на номер страницы.
+              </small>
+            </div>
+            <div className="form-group">
+              <label>Max pages (0 = until empty)</label>
+              <input
+                type="number"
+                value={(settings.frontend_prices?.max_pages ?? '') as any}
+                onChange={(e) => {
+                  const raw = e.target.value
+                  const n = raw === '' ? undefined : parseInt(raw)
+                  updateFrontendPricesSettings('max_pages', Number.isFinite(n as any) ? n : undefined)
+                }}
+                placeholder="0"
+              />
+            </div>
+            <div className="form-group">
+              <label>Sleep between pages (ms)</label>
+              <input
+                type="number"
+                value={(settings.frontend_prices?.sleep_ms ?? '') as any}
+                onChange={(e) => {
+                  const raw = e.target.value
+                  const n = raw === '' ? undefined : parseInt(raw)
+                  updateFrontendPricesSettings('sleep_ms', Number.isFinite(n as any) ? n : undefined)
+                }}
+                placeholder="800"
+              />
+            </div>
+            <div className="form-group">
+              <label>Sleep jitter (ms)</label>
+              <input
+                type="number"
+                value={(settings.frontend_prices?.sleep_jitter_ms ?? '') as any}
+                onChange={(e) => {
+                  const raw = e.target.value
+                  const n = raw === '' ? undefined : parseInt(raw)
+                  updateFrontendPricesSettings('sleep_jitter_ms', Number.isFinite(n as any) ? n : undefined)
+                }}
+                placeholder="0"
+              />
+              <small style={{ color: '#666' }}>
+                Опционально: фактическая пауза будет <code>sleep_ms ± jitter</code>.
+              </small>
             </div>
           </div>
         ) : (

@@ -198,3 +198,42 @@ class WBFinancesReportsResponse(BaseModel):
 
     reports: List[WBFinanceReportResponse] = Field(..., description="List of finance reports")
 
+
+# System marketplace settings schemas
+
+class SystemMarketplaceSettingsBase(BaseModel):
+    """Base schema for system marketplace settings."""
+    is_globally_enabled: bool = Field(True, description="Whether marketplace is globally enabled")
+    is_visible: bool = Field(True, description="Whether marketplace is visible in UI")
+    sort_order: int = Field(100, description="Sort order for display")
+    settings_json: Dict[str, Any] = Field(default_factory=dict, description="System-level settings JSON")
+
+
+class SystemMarketplaceSettingsUpdate(BaseModel):
+    """Update schema for system marketplace settings (partial update)."""
+    is_globally_enabled: Optional[bool] = Field(None, description="Whether marketplace is globally enabled")
+    is_visible: Optional[bool] = Field(None, description="Whether marketplace is visible in UI")
+    sort_order: Optional[int] = Field(None, description="Sort order for display")
+    settings_json: Optional[Dict[str, Any]] = Field(None, description="System-level settings JSON (will be merged)")
+
+
+class SystemMarketplaceSettingsResponse(BaseModel):
+    """Response schema for system marketplace settings."""
+    marketplace_code: str = Field(..., description="Marketplace code")
+    display_name: Optional[str] = Field(None, description="Display name from marketplaces table")
+    is_globally_enabled: bool = Field(..., description="Whether marketplace is globally enabled")
+    is_visible: bool = Field(..., description="Whether marketplace is visible in UI")
+    sort_order: int = Field(..., description="Sort order for display")
+    settings_json: Dict[str, Any] = Field(..., description="System-level settings JSON")
+    has_record: bool = Field(..., description="Whether a record exists in system_marketplace_settings")
+    created_at: Optional[datetime] = Field(None, description="Creation timestamp")
+    updated_at: Optional[datetime] = Field(None, description="Last update timestamp")
+
+
+class SystemMarketplacePublicStatus(BaseModel):
+    """Public read-only status for system marketplace (minimal fields)."""
+    marketplace_code: str = Field(..., description="Marketplace code")
+    is_globally_enabled: bool = Field(..., description="Whether marketplace is globally enabled")
+    is_visible: bool = Field(..., description="Whether marketplace is visible in UI")
+    sort_order: int = Field(..., description="Sort order for display")
+

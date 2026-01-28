@@ -46,8 +46,13 @@ services:
       - BOOTSTRAP_ADMIN_PASSWORD=${BOOTSTRAP_ADMIN_PASSWORD:-}
       - BOOTSTRAP_ADMIN_EMAIL=${BOOTSTRAP_ADMIN_EMAIL:-admin@local.dev}
     volumes:
-      - ../../:/app
-      - ../../test.xml:/app/test.xml:ro  # Монтируем test.xml для RRP ingestion
+      # Windows Docker Desktop fix: use relative path from compose file location
+      # Docker Desktop on Windows has issues with absolute paths like D:\Work\EcomCore
+      # Using relative paths (../../) avoids the /run/desktop/mnt/host/d creation issue
+      # Note: Docker Desktop may still resolve this to absolute path, causing mount issues
+      # If you see "mkdir /run/desktop/mnt/host/d: file exists" error, restart Docker Desktop
+      - ../../:/app:cached
+      # test.xml уже доступен через основной volume ../../:/app, отдельное монтирование не требуется
     # Entrypoint waits for PostgreSQL, runs migrations (with advisory lock protection), then starts uvicorn
     entrypoint: ["python", "/app/scripts/docker-entrypoint.py"]
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --app-dir /app/src
@@ -73,7 +78,8 @@ services:
       environment:
         - PYTHONPATH=/app/src
       volumes:
-        - ../../:/app
+        # Windows Docker Desktop fix: use relative path from compose file location
+        - ../../:/app:cached
       command: celery -A app.celery_app worker -l info
       depends_on:
         - redis
@@ -90,7 +96,8 @@ services:
       environment:
         - PYTHONPATH=/app/src
       volumes:
-        - ../../:/app
+        # Windows Docker Desktop fix: use relative path from compose file location
+        - ../../:/app:cached
       command: celery -A app.celery_app beat -l info
       depends_on:
         - redis
@@ -116,13 +123,14 @@ services:
       context: ../../frontend
       dockerfile: Dockerfile.dev  # Используем dev версию для локальной разработки
     environment:
-      - NEXT_PUBLIC_API_BASE=/api
+      - NEXT_PUBLIC_API_BASE=
       - NEXT_PUBLIC_API_URL=http://api:8000/api  # URL для rewrites в Next.js (внутренний Docker)
       - NODE_ENV=development
       - HOSTNAME=0.0.0.0  # Явно указываем, что Next.js должен слушать на всех интерфейсах
       - PORT=3000
     volumes:
-      - ../../frontend:/app
+      # Windows Docker Desktop fix: use relative path from compose file location
+      - ../../frontend:/app:cached
       - /app/node_modules  # Изолируем node_modules от хоста
       - /app/.next  # Изолируем .next от хоста
     ports:
@@ -140,6 +148,8 @@ services:
     ports:
       - "80:80"
     volumes:
+      # Windows Docker Desktop fix: use relative path from compose file location
+      # Note: If nginx fails to start with mount error, try restarting Docker Desktop
       - ../../nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ../../nginx/.htpasswd:/etc/nginx/.htpasswd:ro
     depends_on:

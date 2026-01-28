@@ -22,6 +22,9 @@ export default function ProjectsPage() {
   const [newProjectName, setNewProjectName] = useState('')
   const [newProjectDesc, setNewProjectDesc] = useState('')
   const projectNameInputRef = useRef<HTMLInputElement>(null)
+  const roleLabels: Record<string, string> = {
+    owner: 'владелец',
+  }
 
   useEffect(() => {
     loadProjects()
@@ -37,7 +40,7 @@ export default function ProjectsPage() {
   const loadProjects = async () => {
     try {
       setLoading(true)
-      const projects = await apiGetData<Project[]>('/v1/projects')
+      const projects = await apiGetData<Project[]>('/api/v1/projects')
       setProjects(projects)
       setLoading(false)
     } catch (error) {
@@ -50,7 +53,7 @@ export default function ProjectsPage() {
     if (!newProjectName.trim()) return
 
     try {
-      const project = await apiPostData<Project>('/v1/projects', {
+      const project = await apiPostData<Project>('/api/v1/projects', {
         name: newProjectName,
         description: newProjectDesc || null,
       })
@@ -84,20 +87,18 @@ export default function ProjectsPage() {
 
   return (
     <div className="container">
-      <h1>Projects</h1>
-
       {/* Create Project Form - shown only when isCreateFormOpen is true */}
       {isCreateFormOpen && (
         <div className="card" style={{ marginTop: '0', marginBottom: '32px', padding: '24px' }}>
-          <h3 style={{ marginBottom: '20px', fontSize: '1.5rem', fontWeight: '600', color: '#333' }}>Create New Project</h3>
+          <h3 style={{ marginBottom: '20px', fontSize: '1.5rem', fontWeight: '600', color: '#333' }}>Создать новый проект</h3>
           <div className="form-group" style={{ marginBottom: '16px' }}>
-            <label style={{ display: 'block', marginBottom: '8px', fontWeight: '500' }}>Project Name *</label>
+            <label style={{ display: 'block', marginBottom: '8px', fontWeight: '500' }}>Название проекта *</label>
             <input
               ref={projectNameInputRef}
               type="text"
               value={newProjectName}
               onChange={(e) => setNewProjectName(e.target.value)}
-              placeholder="Enter project name"
+              placeholder="Введите название проекта"
               style={{
                 width: '100%',
                 padding: '10px 12px',
@@ -108,11 +109,11 @@ export default function ProjectsPage() {
             />
           </div>
           <div className="form-group" style={{ marginBottom: '20px' }}>
-            <label style={{ display: 'block', marginBottom: '8px', fontWeight: '500' }}>Description</label>
+            <label style={{ display: 'block', marginBottom: '8px', fontWeight: '500' }}>Описание</label>
             <textarea
               value={newProjectDesc}
               onChange={(e) => setNewProjectDesc(e.target.value)}
-              placeholder="Enter project description (optional)"
+              placeholder="Введите описание проекта (необязательно)"
               rows={3}
               style={{
                 width: '100%',
@@ -130,14 +131,14 @@ export default function ProjectsPage() {
               className="btn-secondary"
               onClick={handleCancelCreate}
             >
-              Cancel
+              Отмена
             </button>
             <button
               className="btn-primary"
               onClick={handleCreateProject}
               disabled={!newProjectName.trim()}
             >
-              Create
+              Создать
             </button>
           </div>
         </div>
@@ -146,16 +147,16 @@ export default function ProjectsPage() {
       {/* Projects List */}
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-          <h2 style={{ marginBottom: '0' }}>My Projects</h2>
+          <h2 style={{ marginBottom: '0' }}>Мои проекты</h2>
           {!isCreateFormOpen && (
-            <button onClick={() => setIsCreateFormOpen(true)}>+ New Project</button>
+            <button onClick={() => setIsCreateFormOpen(true)}>+ Новый проект</button>
           )}
         </div>
 
         {loading ? (
-          <p>Loading...</p>
+          <p>Загрузка...</p>
         ) : projects.length === 0 ? (
-          <p>No projects yet. Create your first project!</p>
+          <p>Проектов пока нет. Создайте первый проект!</p>
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '20px' }}>
             {projects.map((project) => (
@@ -168,8 +169,8 @@ export default function ProjectsPage() {
                 <h3>{project.name}</h3>
                 {project.description && <p style={{ color: '#666', marginTop: '10px' }}>{project.description}</p>}
                 <div style={{ marginTop: '15px', fontSize: '0.9rem', color: '#999' }}>
-                  <div>Role: <strong>{project.role}</strong></div>
-                  <div>Created: {new Date(project.created_at).toLocaleDateString()}</div>
+                  <div>Роль: <strong>{roleLabels[project.role] ?? project.role}</strong></div>
+                  <div>Создан: {new Date(project.created_at).toLocaleDateString()}</div>
                 </div>
                 <div style={{ marginTop: '16px', display: 'flex', gap: '10px' }}>
                   <button
@@ -178,7 +179,7 @@ export default function ProjectsPage() {
                       handleProjectClick(project.id)
                     }}
                   >
-                    Open
+                    Открыть
                   </button>
                   <button
                     onClick={(e) => {
@@ -186,7 +187,7 @@ export default function ProjectsPage() {
                       handleProjectSettings(project.id)
                     }}
                   >
-                    Settings
+                    Настройки
                   </button>
                 </div>
               </div>

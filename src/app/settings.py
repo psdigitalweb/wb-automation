@@ -5,6 +5,15 @@ from dotenv import load_dotenv
 # This is important when .env is mounted as volume and may have updated values
 load_dotenv(override=True)
 
+def _get_env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return int(raw)
+    except Exception:
+        return default
+
 POSTGRES_DB = os.getenv("POSTGRES_DB", "wb")
 POSTGRES_USER = os.getenv("POSTGRES_USER", "wb")
 POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "wbpassword")
@@ -26,3 +35,15 @@ SQLALCHEMY_DATABASE_URL = (
 )
 
 REDIS_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/0"
+
+# Directory for storing uploaded Internal Data files (local filesystem).
+INTERNAL_DATA_DIR = os.getenv("INTERNAL_DATA_DIR", "/data/internal_data")
+
+# Ingest: if no heartbeat for longer than TTL, run is considered stuck.
+INGEST_STUCK_TTL_SECONDS_DEFAULT = _get_env_int("INGEST_STUCK_TTL_SECONDS_DEFAULT", 1800)
+
+# Frontend prices (catalog.wb.ru): rate-limit and runtime guards
+FRONTEND_PRICES_MAX_RUNTIME_SECONDS = _get_env_int("FRONTEND_PRICES_MAX_RUNTIME_SECONDS", 1200)
+FRONTEND_PRICES_MAX_TOTAL_RETRY_WAIT_SECONDS = _get_env_int("FRONTEND_PRICES_MAX_TOTAL_RETRY_WAIT_SECONDS", 300)
+FRONTEND_PRICES_MAX_RETRY_SLEEP_SECONDS = _get_env_int("FRONTEND_PRICES_MAX_RETRY_SLEEP_SECONDS", 120)
+FRONTEND_PRICES_RATE_LIMIT_BACKOFF_MINUTES = _get_env_int("FRONTEND_PRICES_RATE_LIMIT_BACKOFF_MINUTES", 15)

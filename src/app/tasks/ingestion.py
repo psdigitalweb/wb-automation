@@ -54,28 +54,36 @@ def ingest_warehouses_task(_: int) -> Dict[str, Any]:
 
 
 @celery_app.task(name="app.tasks.ingestion.frontend_prices")
-def ingest_frontend_prices_task(project_id: int) -> Dict[str, Any]:
+def ingest_frontend_prices_task(project_id: int, run_id: int | None = None) -> Dict[str, Any]:
     """Ingest WB frontend catalog prices for a project.
 
     Source of configuration:
     - brand_id: project_marketplaces.settings_json.brand_id for WB marketplace (project-scoped)
-    - base_url: app_settings key 'frontend_prices.brand_base_url' (global)
-    - sleep_ms: app_settings key 'frontend_prices.sleep_ms' (global, default 800)
+    - base_url_template/max_pages/sleep_ms/sleep_jitter_ms: project_marketplaces.settings_json.frontend_prices (project-scoped)
+      (fallback to app_settings for soft migration)
     """
     from sqlalchemy import text
     from app.db import engine
     from app.ingest_frontend_prices import ingest_frontend_brand_prices
+    from app.services.ingest.runs import get_run
 
     brand_id: int | None = None
+    base_url_template: str | None = None
     sleep_ms: int = 800
     # Default: full crawl (until empty / totalPages). Can be capped via app_settings.frontend_prices.max_pages.
     max_pages: int = 0
+    sleep_jitter_ms: int = 0
 
     with engine.connect() as conn:
-        brand_id_str = conn.execute(
+        wb_settings_row = conn.execute(
             text(
                 """
-                SELECT pm.settings_json->>'brand_id' AS brand_id
+                SELECT
+                  pm.settings_json->>'brand_id' AS brand_id,
+                  pm.settings_json->'frontend_prices'->>'base_url_template' AS base_url_template,
+                  pm.settings_json->'frontend_prices'->>'max_pages' AS fp_max_pages,
+                  pm.settings_json->'frontend_prices'->>'sleep_ms' AS fp_sleep_ms,
+                  pm.settings_json->'frontend_prices'->>'sleep_jitter_ms' AS fp_sleep_jitter_ms
                 FROM project_marketplaces pm
                 JOIN marketplaces m ON m.id = pm.marketplace_id
                 WHERE pm.project_id = :project_id
@@ -84,7 +92,13 @@ def ingest_frontend_prices_task(project_id: int) -> Dict[str, Any]:
                 """
             ),
             {"project_id": project_id},
-        ).scalar_one_or_none()
+        ).mappings().first()
+
+        brand_id_str = (wb_settings_row or {}).get("brand_id")
+        base_url_template = (wb_settings_row or {}).get("base_url_template")
+        fp_sleep_ms_str = (wb_settings_row or {}).get("fp_sleep_ms")
+        fp_max_pages_str = (wb_settings_row or {}).get("fp_max_pages")
+        fp_sleep_jitter_ms_str = (wb_settings_row or {}).get("fp_sleep_jitter_ms")
 
         sleep_ms_str = conn.execute(
             text(
@@ -130,22 +144,62 @@ def ingest_frontend_prices_task(project_id: int) -> Dict[str, Any]:
         except (ValueError, TypeError):
             sleep_ms = 800
 
+    if fp_sleep_ms_str:
+        try:
+            sleep_ms = int(fp_sleep_ms_str)
+        except (ValueError, TypeError):
+            pass
+
     if max_pages_str:
         try:
             max_pages = int(max_pages_str)
         except (ValueError, TypeError):
             max_pages = 0
 
+    if fp_max_pages_str:
+        try:
+            max_pages = int(fp_max_pages_str)
+        except (ValueError, TypeError):
+            pass
+
+    if fp_sleep_jitter_ms_str:
+        try:
+            sleep_jitter_ms = int(fp_sleep_jitter_ms_str)
+        except (ValueError, TypeError):
+            sleep_jitter_ms = 0
+
+    # Normalize
+    if sleep_jitter_ms < 0:
+        sleep_jitter_ms = abs(sleep_jitter_ms)
+
     # Hard safety cap to avoid runaway jobs if WB API behaves unexpectedly
     if max_pages > 0:
         max_pages = min(max_pages, 50)
 
+    print(
+        "ingest_frontend_prices_task: "
+        f"project_id={project_id} brand_id={brand_id} run_id={run_id} "
+        f"base_url_template={'set' if (base_url_template and str(base_url_template).strip()) else 'none'} "
+        f"max_pages={max_pages} sleep_ms={sleep_ms} sleep_jitter_ms={sleep_jitter_ms}"
+    )
+
+    # Determine run_started_at for stable snapshot buckets (hourly) if run_id is provided.
+    run_started_at = None
+    if run_id is not None:
+        run = get_run(run_id)
+        if run:
+            run_started_at = run.get("started_at") or run.get("created_at")
+
     result = asyncio.run(
         ingest_frontend_brand_prices(
             brand_id=brand_id,
-            base_url=None,
+            base_url=base_url_template,
             max_pages=max_pages,
             sleep_ms=sleep_ms,
+            sleep_jitter_ms=sleep_jitter_ms,
+            run_id=run_id,
+            project_id=project_id,
+            run_started_at=run_started_at,
         )
     )
 
@@ -158,18 +212,28 @@ def ingest_frontend_prices_task(project_id: int) -> Dict[str, Any]:
             **result,
         }
 
-    return {
-        "status": "completed",
-        "domain": "frontend_prices",
+    # Normalize stats_json contract
+    stats: Dict[str, Any] = {
+        "ok": "error" not in result,
         "project_id": project_id,
         "brand_id": brand_id,
         "max_pages": max_pages,
-        "result": result,
+        "items_total": result.get("distinct_nm_id") or result.get("items_saved") or 0,
+        "current_upserts": result.get("current_upserts_total", 0),
+        "snapshots_inserted": result.get("showcase_snapshots_inserted_total", 0),
+        "spp_events_inserted": result.get("spp_events_inserted_total", 0),
+        **{k: v for k, v in result.items() if k not in {
+            "current_upserts_total",
+            "showcase_snapshots_inserted_total",
+            "spp_events_inserted_total",
+        }},
     }
+
+    return stats
 
 
 @celery_app.task(name="app.tasks.ingestion.rrp_xml")
-def ingest_rrp_xml_task(project_id: int) -> Dict[str, Any]:
+def ingest_rrp_xml_task(project_id: int, run_id: int | None = None) -> Dict[str, Any]:
     """Ingest RRP prices from a local XML file (MVP).
 
     Source file:
@@ -313,7 +377,8 @@ def ingest_rrp_xml_task(project_id: int) -> Dict[str, Any]:
         written_count = len(rows)
 
     print(
-        f"ingest_rrp_xml: file={file_path} parsed={parsed_count} written={written_count} skipped={skipped_count}"
+        f"ingest_rrp_xml: file={file_path} parsed={parsed_count} "
+        f"written={written_count} skipped={skipped_count} run_id={run_id}"
     )
 
     return {

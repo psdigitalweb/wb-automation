@@ -1,0 +1,257 @@
+/* COGS page – unified UI atoms. Do not alter global styles. */
+
+.root {
+  --cogs-h: 40px;
+  --cogs-px: 12px;
+  --cogs-py: 8px;
+  --cogs-radius: 6px;
+  --cogs-fs: 14px;
+  --cogs-placeholder-opacity: 0.5;
+}
+
+/* Base control – height, padding, font, radius. Use for input/select/button. */
+.control {
+  height: var(--cogs-h);
+  padding: var(--cogs-py) var(--cogs-px);
+  box-sizing: border-box;
+  border-radius: var(--cogs-radius);
+  font-size: var(--cogs-fs);
+  font-family: inherit;
+  border: 1px solid #ddd;
+  background: #fff;
+  color: #333;
+}
+
+.control::placeholder {
+  color: #666;
+  opacity: var(--cogs-placeholder-opacity);
+}
+
+.control:disabled {
+  background: #f0f0f0;
+  color: #888;
+  cursor: not-allowed;
+  height: var(--cogs-h);
+}
+
+/* Date input – browsers often add own padding. Normalize to match .control. */
+.inputDate {
+  height: var(--cogs-h);
+  padding: var(--cogs-py) var(--cogs-px);
+  box-sizing: border-box;
+  border-radius: var(--cogs-radius);
+  font-size: var(--cogs-fs);
+  font-family: inherit;
+  border: 1px solid #ddd;
+  background: #fff;
+  color: #333;
+  min-width: 140px;
+}
+
+.inputDate:disabled {
+  background: #f0f0f0;
+  color: #888;
+  cursor: not-allowed;
+}
+
+.inputText {
+  composes: control;
+  min-width: 120px;
+}
+
+.inputNumber {
+  composes: control;
+  min-width: 90px;
+}
+
+.select {
+  composes: control;
+  cursor: pointer;
+  min-width: 140px;
+}
+
+.select:disabled {
+  cursor: not-allowed;
+}
+
+/* Button – same height/padding, no border override from globals when used via module. */
+.button {
+  height: var(--cogs-h);
+  padding: var(--cogs-py) var(--cogs-px);
+  box-sizing: border-box;
+  border-radius: var(--cogs-radius);
+  font-size: var(--cogs-fs);
+  font-family: inherit;
+  border: none;
+  background: #0070f3;
+  color: #fff;
+  cursor: pointer;
+  min-width: 80px;
+  margin: 0;
+}
+
+.button:hover:not(:disabled) {
+  background: #0051cc;
+}
+
+.button:disabled {
+  background: #ccc;
+  cursor: not-allowed;
+  color: #fff;
+}
+
+.buttonSecondary {
+  composes: button;
+  background: #f5f5f5;
+  color: #333;
+  border: 1px solid #ddd;
+  margin: 0;
+}
+
+.buttonSecondary:hover:not(:disabled) {
+  background: #e8e8e8;
+}
+
+.buttonSecondary:disabled {
+  background: #f0f0f0;
+  color: #888;
+}
+
+/* Field = label + control */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fieldLabel {
+  font-size: var(--cogs-fs);
+  font-weight: 500;
+  color: #444;
+}
+
+/* Grids */
+.gridCoverage {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.gridCoverageItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--cogs-h);
+}
+
+.gridTabs {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+  align-items: center;
+}
+
+.tab {
+  composes: buttonSecondary;
+  min-width: 180px;
+  height: var(--cogs-h);
+  margin: 0;
+}
+
+.tabActive {
+  font-weight: 600;
+  border-color: #0070f3;
+  color: #0070f3;
+}
+
+.gridFormRow1 {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(120px, 1fr));
+  gap: 12px;
+  align-items: end;
+}
+
+.gridFormRow2 {
+  display: grid;
+  grid-template-columns: minmax(100px, 1fr) minmax(80px, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+  max-width: 420px;
+}
+
+.gridFormSpacer {
+  min-height: var(--cogs-h);
+}
+
+.gridBulk {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.gridBulkItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--cogs-h);
+}
+
+/* Rules search */
+.searchWrap {
+  margin-bottom: 12px;
+  max-width: 320px;
+}
+
+.searchWrap input {
+  width: 100%;
+}
+
+/* Table – center delete button in row */
+.tableDeleteCell {
+  vertical-align: middle;
+}
+
+.tableDeleteBtn {
+  composes: buttonSecondary;
+  height: var(--cogs-h);
+  min-width: 80px;
+  padding: var(--cogs-py) var(--cogs-px);
+}
+
+/* Textarea (bulk) – match font, optional min-height */
+.textarea {
+  width: 100%;
+  min-height: 120px;
+  padding: var(--cogs-py) var(--cogs-px);
+  box-sizing: border-box;
+  border-radius: var(--cogs-radius);
+  font-size: var(--cogs-fs);
+  font-family: ui-monospace, monospace;
+  border: 1px solid #ddd;
+  resize: vertical;
+}
+
+/* Pagination buttons – use same atoms */
+.paginationWrap {
+  margin-top: 12px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.paginationBtn {
+  composes: buttonSecondary;
+}
+
+.linkAsButton {
+  composes: buttonSecondary;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  margin-bottom: 10px;
+}

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { apiGetData } from '@/lib/apiClient'
+import { usePageTitle } from '@/hooks/usePageTitle'
 
 interface StockWithoutPhotosItem {
   nm_id: number
@@ -238,6 +239,7 @@ export default function StockWithoutPhotosPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const projectId = params.projectId as string
+  usePageTitle('Товары без фото', projectId)
 
   const [data, setData] = useState<StockWithoutPhotosItem[]>([])
   const [meta, setMeta] = useState<StockWithoutPhotosResponse['meta'] | null>(null)
@@ -276,7 +278,7 @@ export default function StockWithoutPhotosPage() {
         if (filters.minStock !== 1) qs.set('min_stock', String(filters.minStock))
         if (filters.warehouseId) qs.set('warehouse_id', filters.warehouseId)
 
-        const url = `/v1/projects/${projectId}/wildberries/stock-without-photos${qs.toString() ? `?${qs.toString()}` : ''}`
+        const url = `/api/v1/projects/${projectId}/wildberries/stock-without-photos${qs.toString() ? `?${qs.toString()}` : ''}`
         const resp = await apiGetData<StockWithoutPhotosResponse>(url)
         if (cancelled) return
         setData(resp.items || [])

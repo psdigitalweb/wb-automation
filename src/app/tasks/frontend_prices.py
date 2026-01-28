@@ -119,16 +119,7 @@ def sync_frontend_prices_brand() -> Dict[str, Any]:
         if not base_url:
             print("sync_frontend_prices_brand: brand_base_url not configured in app_settings (frontend_prices.brand_base_url)")
             return {"status": "error", "reason": "brand_base_url_not_configured"}
-        
-        try:
-            brand_id = int(brand_id_str)
-        except (ValueError, TypeError):
-            print(f"sync_frontend_prices_brand: invalid brand_id: {brand_id_str}")
-            return {
-                "status": "error",
-                "reason": "invalid_brand_id",
-            }
-        
+
         try:
             sleep_ms = int(sleep_ms_str)
         except (ValueError, TypeError):

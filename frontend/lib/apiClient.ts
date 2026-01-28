@@ -37,7 +37,7 @@ async function refreshAccessToken(): Promise<string | null> {
 
   try {
     const apiBase = getApiBase()
-    const res = await fetch(`${apiBase}/v1/auth/refresh`, {
+    const res = await fetch(`${apiBase}/api/v1/auth/refresh`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ refresh_token: refreshToken }),
@@ -70,6 +70,16 @@ export async function apiRequest<T = any>(
 
   const debugEnabled = process.env.NEXT_PUBLIC_DEBUG === 'true'
 
+  // #region agent log
+  try {
+    const origin =
+      typeof window !== 'undefined' && (window as any)?.location?.origin
+        ? (window as any).location.origin
+        : 'server'
+    fetch('http://127.0.0.1:7242/ingest/66ddcc6b-d2d0-4156-a371-04fea067f11b',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'apiClient.ts:apiRequest','message':'apiRequest built URL','data':{origin,apiBase,url,fullUrl,method:options?.method||'GET'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'CORS1'})}).catch(()=>{});
+  } catch {}
+  // #endregion
+
   // Get access token
   let accessToken = getAccessToken()
 
@@ -100,7 +110,41 @@ export async function apiRequest<T = any>(
   }
 
   // Make request
-  let res = await fetch(fullUrl, fetchOptions)
+  let res: Response
+  try {
+    res = await fetch(fullUrl, fetchOptions)
+  } catch (fetchError: any) {
+    // #region agent log
+    try {
+      fetch('http://127.0.0.1:7242/ingest/66ddcc6b-d2d0-4156-a371-04fea067f11b',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'apiClient.ts:103','message':'fetch exception','data':{url:fullUrl,error:fetchError?.message||String(fetchError),name:fetchError?.name},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H6'})}).catch(()=>{});
+    } catch {}
+    // #endregion
+    // Handle network errors (CORS, connection refused, etc.)
+    throw {
+      detail: fetchError?.message || 'Failed to fetch',
+      status: 0,
+      url: fullUrl,
+      bodyPreview: fetchError?.message || 'Network error',
+      isJson: false,
+      parsed: null,
+      debug: {
+        url: fullUrl,
+        status: 0,
+        bodyPreview: fetchError?.message || 'Network error',
+        isJson: false,
+        parsed: null,
+      },
+    } as ApiError
+  }
+
+  // #region agent log
+  try {
+    const proxy = res.headers.get('x-ecomcore-proxy')
+    const proxyTarget = res.headers.get('x-ecomcore-proxy-target')
+    const ct = res.headers.get('content-type')
+    fetch('http://127.0.0.1:7242/ingest/66ddcc6b-d2d0-4156-a371-04fea067f11b',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'apiClient.ts:afterFetch','message':'fetch response received','data':{fullUrl,status:res.status,proxy,proxyTarget,contentType:ct},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'PROXY_OBS'})}).catch(()=>{});
+  } catch {}
+  // #endregion
 
   // If 401, try to refresh token and retry
   if (res.status === 401 && accessToken) {
@@ -275,3 +319,49 @@ export async function apiDeleteData<T = any>(url: string): Promise<T> {
   return res.data
 }
 
+// WB Ingest Status types
+export interface WBIngestStatus {
+  job_code: string
+  title: string
+  has_schedule: boolean
+  schedule_summary: string | null
+  last_run_at: string | null
+  last_status: string | null
+  is_running: boolean
+}export interface IngestRunResponse {
+  id: number
+  schedule_id: number | null
+  project_id: number
+  marketplace_code: string
+  job_code: string
+  triggered_by: string
+  status: string
+  started_at: string | null
+  finished_at: string | null
+  duration_ms: number | null
+  error_message: string | null
+  error_trace: string | null
+  stats_json: any
+  created_at: string
+  updated_at: string
+}/**
+ * Get WB ingest status for a project
+ */
+export async function getWBIngestStatus(projectId: string): Promise<WBIngestStatus[]> {
+  const res = await apiGet<WBIngestStatus[]>(`/api/v1/projects/${projectId}/ingestions/wb/status`)
+  return res.data
+}/**
+ * Manually trigger a WB ingest job
+ */
+export async function runWBIngest(
+  projectId: string, 
+  jobCode: string,
+  params?: { date_from?: string; date_to?: string }
+): Promise<IngestRunResponse> {
+  const body = params ? { params_json: params } : undefined
+  const res = await apiPost<IngestRunResponse>(
+    `/api/v1/projects/${projectId}/ingestions/wb/${jobCode}/run`,
+    body
+  )
+  return res.data
+}

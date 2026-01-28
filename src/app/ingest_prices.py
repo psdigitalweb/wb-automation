@@ -25,7 +25,7 @@ def round_to_49_99(value: Decimal) -> Decimal:
     return Decimal(best)
 
 
-async def ingest_prices(project_id: int) -> None:
+async def ingest_prices(project_id: int, run_id: int | None = None) -> None:
     """Fetch and insert price snapshots from WB Prices and Discounts API for a specific project.
     
     Uses GET /api/v2/list/goods/filter with pagination via offset.
@@ -89,7 +89,10 @@ async def ingest_prices(project_id: int) -> None:
     page_count = 0
     max_pages = 1000  # Safety limit
     
-    print(f"ingest_prices: starting pagination, limit={limit}, run_at={run_at.isoformat()}")
+    print(
+        f"ingest_prices: starting pagination, limit={limit}, "
+        f"run_at={run_at.isoformat()}, run_id={run_id}"
+    )
     
     while page_count < max_pages:
         page_count += 1

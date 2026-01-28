@@ -1,9 +1,36 @@
 """API endpoints for frontend catalog prices."""
 
-from fastapi import APIRouter, Query
+# region agent log
+import json as _json
+import time as _time
+
+_DEBUG_LOG_PATH = r"d:\Work\EcomCore\.cursor\debug.log"
+
+
+def _dbg(*, hypothesisId: str, location: str, message: str, data: dict) -> None:
+    try:
+        payload = {
+            "sessionId": "debug-session",
+            "runId": "run1",
+            "hypothesisId": hypothesisId,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(_time.time() * 1000),
+        }
+        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(_json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+# endregion
+
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from sqlalchemy import text
 
 from app.db import engine
+from app.deps import get_current_active_user, get_project_membership
 
 router = APIRouter(prefix="/api/v1", tags=["frontend-prices"])
 
@@ -14,6 +41,11 @@ def _serialize_row(row: dict) -> dict:
     for key, value in row.items():
         if value is None:
             result[key] = None
+        elif isinstance(value, bool):
+            result[key] = value
+        elif isinstance(value, int):
+            # Keep ints as ints (important for percent fields)
+            result[key] = value
         elif hasattr(value, 'isoformat'):  # datetime
             result[key] = value.isoformat()
         elif hasattr(value, '__float__'):  # Decimal
@@ -21,6 +53,410 @@ def _serialize_row(row: dict) -> dict:
         else:
             result[key] = value
     return result
+
+
+def _run_at_iso(run_row: dict) -> str | None:
+    """Pick a stable timestamp for UI/meta (prefer run_at if exists, else created_at).
+
+    NOTE: For as-of joins we also use run_at/created_at only (per requirements).
+    """
+    if not run_row:
+        return None
+    dt = run_row.get("run_at") or run_row.get("created_at")
+    return dt.isoformat() if dt is not None and hasattr(dt, "isoformat") else None
+
+
+@router.get("/projects/{project_id}/frontend-prices")
+async def get_project_frontend_prices(
+    project_id: int = Path(..., description="Project ID"),
+    run_id: int | None = Query(None, description="Ingest run id to show (defaults to latest)"),
+    limit: int = Query(50, ge=1, le=1000, description="Maximum number of records to return"),
+    offset: int = Query(0, ge=0, description="Number of records to skip"),
+    current_user: dict = Depends(get_current_active_user),
+    membership: dict = Depends(get_project_membership),
+):
+    """Project-scoped report for WB frontend prices.
+
+    - Finds last run for (project, marketplace_code='wildberries', job_code='frontend_prices', brand_id)
+    - Returns count for last run and rows for selected run (default: last)
+    """
+    _dbg(
+        hypothesisId="H2",
+        location="api_frontend_prices.py:get_project_frontend_prices:entry",
+        message="handler entry",
+        data={"project_id": project_id, "requested_run_id": run_id, "limit": limit, "offset": offset},
+    )
+
+    with engine.connect() as conn:
+        # region agent log
+        try:
+            total_runs_any = conn.execute(
+                text(
+                    """
+                    SELECT COUNT(*)::bigint
+                    FROM ingest_runs
+                    WHERE project_id = :project_id
+                      AND marketplace_code = 'wildberries'
+                      AND job_code = 'frontend_prices'
+                    """
+                ),
+                {"project_id": project_id},
+            ).scalar()
+            _dbg(
+                hypothesisId="H4",
+                location="api_frontend_prices.py:get_project_frontend_prices:run_inventory",
+                message="ingest_runs inventory (unfiltered)",
+                data={"project_id": project_id, "runs_any_count": int(total_runs_any or 0)},
+            )
+        except Exception:
+            pass
+        # endregion
+
+        brand_id_str = conn.execute(
+            text(
+                """
+                SELECT pm.settings_json->>'brand_id' AS brand_id
+                FROM project_marketplaces pm
+                JOIN marketplaces m ON m.id = pm.marketplace_id
+                WHERE pm.project_id = :project_id
+                  AND m.code = 'wildberries'
+                LIMIT 1
+                """
+            ),
+            {"project_id": project_id},
+        ).scalar_one_or_none()
+
+        # If brand_id is not configured, return empty result but keep contract stable.
+        if not brand_id_str:
+            _dbg(
+                hypothesisId="H2",
+                location="api_frontend_prices.py:get_project_frontend_prices:brand_id_missing",
+                message="brand_id missing in project marketplace settings",
+                data={"project_id": project_id},
+            )
+            return {
+                "meta": {
+                    "brand_id": None,
+                    "last_run_id": None,
+                    "last_run_at": None,
+                    "count_last_run": 0,
+                    "selected_run_id": None,
+                    "selected_run_at": None,
+                    "runs": [],
+                },
+                "data": [],
+                "limit": limit,
+                "offset": offset,
+                "count": 0,
+                "total": 0,
+            }
+
+        # Last runs for dropdown + to pick default run.
+        # We only list runs that actually have rows linked via ingest_run_id (so counts/\"last update\" are meaningful).
+        runs_sql = text(
+            """
+            SELECT
+              r.id,
+              r.status,
+              r.created_at,
+              s.rows_count
+            FROM ingest_runs r
+            JOIN (
+              SELECT ingest_run_id, COUNT(*)::bigint AS rows_count
+              FROM frontend_catalog_price_snapshots
+              WHERE ingest_run_id IS NOT NULL
+              GROUP BY ingest_run_id
+            ) s ON s.ingest_run_id = r.id
+            WHERE r.project_id = :project_id
+              AND r.marketplace_code = 'wildberries'
+              AND r.job_code = 'frontend_prices'
+              AND (
+                r.stats_json->>'brand_id' = :brand_id
+                OR r.params_json->>'brand_id' = :brand_id
+              )
+            ORDER BY r.created_at DESC
+            LIMIT 50
+            """
+        )
+        runs_raw = conn.execute(
+            runs_sql, {"project_id": project_id, "brand_id": str(brand_id_str)}
+        ).mappings().all()
+        runs = [dict(r) for r in runs_raw]
+
+        last_run = runs[0] if runs else None
+        last_run_id = int(last_run["id"]) if last_run else None
+        last_run_at = _run_at_iso(last_run) if last_run else None
+
+        selected_run_id = int(run_id) if run_id is not None else last_run_id
+        selected_run = None
+        if selected_run_id is not None:
+            selected_run = next((r for r in runs if int(r["id"]) == int(selected_run_id)), None)
+            if selected_run is None:
+                # Avoid leaking other projects' runs.
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="ingest run not found for this project/job/brand",
+                )
+
+        # Count for last run (metric above table)
+        count_last_run = int(last_run.get("rows_count") or 0) if last_run else 0
+
+        # as-of timestamp: prefer ingest_runs.run_at if the column exists, else created_at.
+        # Per requirements: do NOT use started_at/finished_at for as-of joins.
+        as_of_at = None
+        if selected_run_id is not None:
+            # Avoid probing non-existent columns (would abort txn on Postgres).
+            has_run_at = False
+            try:
+                has_run_at = (
+                    conn.execute(
+                        text(
+                            """
+                            SELECT 1
+                            FROM information_schema.columns
+                            WHERE table_name = 'ingest_runs'
+                              AND column_name = 'run_at'
+                            LIMIT 1
+                            """
+                        )
+                    ).scalar_one_or_none()
+                    is not None
+                )
+            except Exception:
+                has_run_at = False
+
+            if has_run_at:
+                as_of_row = conn.execute(
+                    text(
+                        """
+                        SELECT id, run_at, created_at
+                        FROM ingest_runs
+                        WHERE id = :id
+                        """
+                    ),
+                    {"id": selected_run_id},
+                ).mappings().first()
+                if as_of_row:
+                    as_of_at = as_of_row.get("run_at") or as_of_row.get("created_at")
+            else:
+                as_of_row = conn.execute(
+                    text(
+                        """
+                        SELECT id, created_at
+                        FROM ingest_runs
+                        WHERE id = :id
+                        """
+                    ),
+                    {"id": selected_run_id},
+                ).mappings().first()
+                if as_of_row:
+                    as_of_at = as_of_row.get("created_at")
+
+        # region agent log
+        try:
+            base_count = conn.execute(
+                text(
+                    """
+                    SELECT COUNT(*)::bigint
+                    FROM frontend_catalog_price_snapshots
+                    WHERE ingest_run_id = :run_id
+                    """
+                ),
+                {"run_id": selected_run_id},
+            ).scalar()
+            _dbg(
+                hypothesisId="H4",
+                location="api_frontend_prices.py:get_project_frontend_prices:base_count",
+                message="base rows count by ingest_run_id",
+                data={
+                    "project_id": project_id,
+                    "selected_run_id": selected_run_id,
+                    "as_of_at": as_of_at.isoformat() if hasattr(as_of_at, "isoformat") else None,
+                    "meta_runs_len": len(runs),
+                    "base_count": int(base_count or 0),
+                },
+            )
+        except Exception:
+            pass
+        # endregion
+
+        _dbg(
+            hypothesisId="H3",
+            location="api_frontend_prices.py:get_project_frontend_prices:after_runs_query",
+            message="runs selected",
+            data={
+                "project_id": project_id,
+                "brand_id": str(brand_id_str),
+                "requested_run_id": run_id,
+                "last_run_id": last_run_id,
+                "runs_len": len(runs),
+                "count_last_run": count_last_run,
+                "as_of_at": as_of_at.isoformat() if hasattr(as_of_at, "isoformat") else None,
+            },
+        )
+
+        # Data for selected run
+        rows: list[dict] = []
+        total_items = 0
+        if selected_run_id is not None:
+            total_items = int(
+                conn.execute(
+                    text(
+                        """
+                        SELECT COUNT(*)
+                        FROM frontend_catalog_price_snapshots
+                        WHERE ingest_run_id = :run_id
+                        """
+                    ),
+                    {"run_id": selected_run_id},
+                ).scalar()
+                or 0
+            )
+            # Join enrichment:
+            # f (selected run) -> price_snapshots (as-of) -> products -> rrp_prices
+            query_sql = text(
+                """
+                WITH
+                f_page AS (
+                    SELECT
+                        id,
+                        snapshot_at,
+                        source,
+                        query_type,
+                        query_value,
+                        page,
+                        nm_id,
+                        vendor_code,
+                        name,
+                        price_basic,
+                        price_product,
+                        sale_percent,
+                        discount_calc_percent
+                    FROM frontend_catalog_price_snapshots
+                    WHERE ingest_run_id = :run_id
+                    ORDER BY nm_id
+                    LIMIT :limit OFFSET :offset
+                ),
+                wb_price_latest AS (
+                    SELECT DISTINCT ON (ps.nm_id)
+                        ps.nm_id::bigint AS nm_id,
+                        ps.wb_price,
+                        ps.wb_discount,
+                        ps.customer_price
+                    FROM price_snapshots ps
+                    WHERE ps.project_id = :project_id
+                      AND ps.created_at <= :as_of_at
+                    ORDER BY ps.nm_id, ps.created_at DESC
+                )
+                SELECT
+                    f_page.*,
+                    rrp.rrp_price AS rrp_price,
+                    wb.wb_price AS wb_price,
+                    wb.wb_discount AS wb_discount,
+                    f_page.price_product AS final_price,
+                    CASE
+                        WHEN wb.customer_price IS NULL OR wb.customer_price <= 0 OR f_page.price_product IS NULL
+                            THEN NULL
+                        ELSE CAST(ROUND((1 - (f_page.price_product / wb.customer_price)) * 100) AS INTEGER)
+                    END AS spp_percent,
+                    CASE
+                        WHEN rrp.rrp_price IS NULL OR rrp.rrp_price <= 0 OR f_page.price_product IS NULL
+                            THEN NULL
+                        ELSE CAST(ROUND((1 - (f_page.price_product / rrp.rrp_price)) * 100) AS INTEGER)
+                    END AS total_discount_percent
+                FROM f_page
+                LEFT JOIN wb_price_latest wb
+                  ON wb.nm_id = f_page.nm_id
+                LEFT JOIN products p
+                  ON p.project_id = :project_id
+                 AND p.nm_id = f_page.nm_id
+                LEFT JOIN rrp_prices rrp
+                  ON rrp.project_id = :project_id
+                 AND rrp.sku = p.vendor_code_norm
+                ORDER BY f_page.nm_id
+                """
+            )
+            if as_of_at is None:
+                # No as-of → can't join to price_snapshots meaningfully; still return f rows.
+                query_sql = text(
+                    """
+                    SELECT
+                        id,
+                        snapshot_at,
+                        source,
+                        query_type,
+                        query_value,
+                        page,
+                        nm_id,
+                        vendor_code,
+                        name,
+                        price_basic,
+                        price_product,
+                        sale_percent,
+                        discount_calc_percent,
+                        NULL::numeric AS rrp_price,
+                        NULL::numeric AS wb_price,
+                        NULL::numeric AS wb_discount,
+                        price_product AS final_price,
+                        NULL::int AS spp_percent,
+                        NULL::int AS total_discount_percent
+                    FROM frontend_catalog_price_snapshots
+                    WHERE ingest_run_id = :run_id
+                    ORDER BY nm_id
+                    LIMIT :limit OFFSET :offset
+                    """
+                )
+                rows_raw = conn.execute(
+                    query_sql, {"run_id": selected_run_id, "limit": limit, "offset": offset}
+                ).mappings().all()
+            else:
+                rows_raw = conn.execute(
+                    query_sql,
+                    {
+                        "run_id": selected_run_id,
+                        "project_id": project_id,
+                        "as_of_at": as_of_at,
+                        "limit": limit,
+                        "offset": offset,
+                    },
+                ).mappings().all()
+
+            rows = [dict(r) for r in rows_raw]
+
+        # region agent log
+        try:
+            _dbg(
+                hypothesisId="H4",
+                location="api_frontend_prices.py:get_project_frontend_prices:response_counts",
+                message="response counts",
+                data={
+                    "project_id": project_id,
+                    "selected_run_id": selected_run_id,
+                    "meta_runs_len": len(runs),
+                    "total_items": int(total_items or 0),
+                    "returned_rows_count": int(len(rows)),
+                },
+            )
+        except Exception:
+            pass
+        # endregion
+
+        return {
+            "meta": {
+                "brand_id": brand_id_str,
+                "last_run_id": last_run_id,
+                "last_run_at": last_run_at,
+                "count_last_run": count_last_run,
+                "selected_run_id": selected_run_id,
+                "selected_run_at": as_of_at.isoformat() if hasattr(as_of_at, "isoformat") else None,
+                "runs": [_serialize_row(r) for r in runs],
+            },
+            "data": [_serialize_row(row) for row in rows],
+            "limit": limit,
+            "offset": offset,
+            "count": len(rows),
+            "total": total_items,
+        }
 
 
 @router.get("/frontend-prices/latest")

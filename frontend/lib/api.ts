@@ -1,9 +1,14 @@
 /**
  * Get the base URL for API requests.
- * Always use same-origin `/api` and rely on nginx/Next rewrites proxying to backend.
+ *
+ * Uses NEXT_PUBLIC_API_BASE if provided.
+ * Default is empty string, so browser calls same-origin `/api/...` and Next.js rewrites proxy to backend.
+ *
+ * Example override (if you really need direct backend calls):
+ * NEXT_PUBLIC_API_BASE="http://localhost:8000"
  */
 export function getApiBase(): string {
-  return '/api'
+  return process.env.NEXT_PUBLIC_API_BASE || ''
 }
 
 

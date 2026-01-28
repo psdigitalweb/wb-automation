@@ -5,43 +5,18 @@ import { usePathname } from 'next/navigation'
 import { useMemo, useEffect, useState } from 'react'
 import { apiGetData } from '../lib/apiClient'
 
-const LABELS: Record<string, string> = {
-  app: 'Приложение',
-  projects: 'Проекты',
-  project: 'Проект',
-  dashboard: 'Дашборд',
-  prices: 'Цены',
-  stocks: 'FBS остатки',
-  'supplier-stocks': 'FBO остатки',
-  'rrp-snapshots': 'RRP',
-  'frontend-prices': 'Frontend цены',
-  'articles-base': 'База артикулов',
-  wildberries: 'Wildberries',
-  'price-discrepancies': 'Расхождения цен',
-  settings: 'Настройки',
-  marketplaces: 'Маркетплейсы',
-}
-
-function humanize(segment: string) {
-  if (!segment) return segment
-  if (/^\d+$/.test(segment)) return `#${segment}`
-  return (
-    segment
-      .replace(/[-_]+/g, ' ')
-      .split(' ')
-      .filter(Boolean)
-      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-      .join(' ')
-  )
-}
-
 interface Project {
   id: number
   name: string
 }
 
+type Crumb = {
+  href: string
+  label: string
+}
+
 export default function Breadcrumbs() {
-  const pathname = usePathname() || '/'
+  const pathname = usePathname() ?? ''
   const [projectName, setProjectName] = useState<string | null>(null)
 
   // Extract projectId from pathname and load project name
@@ -49,7 +24,7 @@ export default function Breadcrumbs() {
     const match = pathname?.match(/\/app\/project\/(\d+)/)
     if (match) {
       const projectId = match[1]
-      apiGetData<Project>(`/v1/projects/${projectId}`)
+      apiGetData<Project>(`/api/v1/projects/${projectId}`)
         .then((project) => setProjectName(project.name))
         .catch(() => setProjectName(null))
     } else {
@@ -57,65 +32,55 @@ export default function Breadcrumbs() {
     }
   }, [pathname])
 
+  const normalizedPathname = useMemo(() => {
+    if (!pathname) return ''
+    return pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname
+  }, [pathname])
+
+  const isHidden = useMemo(() => {
+    if (!pathname) return true
+    // Hide breadcrumbs on the Projects page (main app screen).
+    return normalizedPathname === '/app/projects'
+  }, [pathname, normalizedPathname])
+
   const items = useMemo(() => {
-    const segments = pathname.split('/').filter(Boolean)
-    
-    // If path starts with /app, start with "Проекты" instead of "Главная"
-    const isAppPath = pathname.startsWith('/app')
-    const crumbs: Array<{ href: string; label: string }> = isAppPath 
-      ? [{ href: '/app/projects', label: 'Проекты' }]
-      : [{ href: '/', label: 'Главная' }]
-
+    if (!pathname) return []
+    const isAppPath = normalizedPathname.startsWith('/app')
     if (!isAppPath) {
-      // For non-app paths, build breadcrumbs normally
-      let href = ''
-      for (const seg of segments) {
-        href += `/${seg}`
-        const label = LABELS[seg] || humanize(seg)
-        crumbs.push({ href, label })
-      }
-      return crumbs
+      return [{ href: '/', label: 'Главная' }]
     }
 
-    // For /app paths, skip "app" and handle special cases
-    let href = '/app'
-    let i = 1 // Skip "app" segment (index 0)
-    
-    while (i < segments.length) {
-      const seg = segments[i]
-      
-      // If this is "projects", skip it (we already added "Проекты")
-      if (seg === 'projects') {
-        href += `/${seg}`
-        i++
-        continue
-      }
-      
-      // If this is "project" followed by a number, replace with project name
-      if (seg === 'project' && i + 1 < segments.length && /^\d+$/.test(segments[i + 1])) {
-        const projectId = segments[i + 1]
-        href += `/${seg}/${projectId}`
-        const label = projectName || `#${projectId}`
-        crumbs.push({ href, label })
-        i += 2 // Skip both "project" and the ID
-        continue
+    const match = normalizedPathname.match(/^\/app\/project\/(\d+)(?:\/(.*))?$/)
+    if (match) {
+      const projectId = match[1]
+      const rest = (match[2] || '').trim()
+
+      const extraLabelByPath: Record<string, string> = {
+        'frontend-prices': 'Цены на витрине Wildberries',
       }
 
-      // For dashboard route, do not add extra "Дашборд" segment;
-      // keep breadcrumb as "Проекты / {ProjectName}"
-      if (seg === 'dashboard') {
-        break
+      const base: Crumb[] = [
+        { href: '/app/projects', label: 'Проекты' },
+        { href: `/app/project/${projectId}/dashboard`, label: projectName || `#${projectId}` },
+      ]
+
+      // For deeper project pages (except dashboard itself), show the current page as the last crumb.
+      if (rest && rest !== 'dashboard') {
+        const firstSeg = rest.split('/')[0]
+        const label = extraLabelByPath[firstSeg]
+        if (label) {
+          base.push({ href: `/app/project/${projectId}/${firstSeg}`, label })
+        }
       }
-      
-      // Regular segment
-      href += `/${seg}`
-      const label = LABELS[seg] || humanize(seg)
-      crumbs.push({ href, label })
-      i++
+
+      return base
     }
 
-    return crumbs
-  }, [pathname, projectName])
+    // Non-project app pages: keep breadcrumbs minimal.
+    return [{ href: '/app/projects', label: 'Проекты' }]
+  }, [pathname, normalizedPathname, projectName])
+
+  if (isHidden) return null
 
   return (
     <nav className="breadcrumbs" aria-label="Breadcrumb">

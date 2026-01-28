@@ -4,7 +4,6 @@ import { useState, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { apiGetData } from '../../../../../lib/apiClient'
-import '../../../../globals.css'
 
 interface StockRecord {
   nm_id: number
@@ -38,7 +37,7 @@ export default function StocksPage() {
   const loadData = async () => {
     try {
       setLoading(true)
-      const result = await apiGetData<{ data: StockRecord[]; total: number }>(`/v1/projects/${projectId}/stocks/latest?limit=${limit}&offset=${offset}`)
+      const result = await apiGetData<{ data: StockRecord[]; total: number }>(`/api/v1/projects/${projectId}/stocks/latest?limit=${limit}&offset=${offset}`)
       setData(result.data || [])
       setTotal(result.total || 0)
       setLoading(false)
