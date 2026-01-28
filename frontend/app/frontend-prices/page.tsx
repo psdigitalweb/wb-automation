@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
-import '../globals.css'
 import { getApiBase } from '@/lib/api'
 
 const API_BASE = getApiBase()
@@ -55,7 +54,7 @@ export default function FrontendPricesPage() {
 
   const loadBrandUrl = async () => {
     try {
-      const res = await fetch(`${API_BASE}/v1/settings/frontend-prices/brand-url`)
+      const res = await fetch(`${API_BASE}/api/v1/settings/frontend-prices/brand-url`)
       if (res.ok) {
         const data = await res.json()
         setBaseUrl(data.url || '')
@@ -75,7 +74,7 @@ export default function FrontendPricesPage() {
     
     setSavingUrl(true)
     try {
-      const res = await fetch(`${API_BASE}/v1/settings/frontend-prices/brand-url`, {
+      const res = await fetch(`${API_BASE}/api/v1/settings/frontend-prices/brand-url`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: baseUrl.trim() })
@@ -99,7 +98,7 @@ export default function FrontendPricesPage() {
   const loadPrices = async () => {
     setLoading(true)
     try {
-      const res = await fetch(`${API_BASE}/v1/frontend-prices/latest?limit=${PAGE_SIZE}&offset=${offset}`)
+      const res = await fetch(`${API_BASE}/api/v1/frontend-prices/latest?limit=${PAGE_SIZE}&offset=${offset}`)
       const data: FrontendPricesResponse = await res.json()
       setPrices(data.data)
       setTotal(data.total)
@@ -136,7 +135,7 @@ export default function FrontendPricesPage() {
         requestBody.base_url = baseUrl.trim()
       }
       
-      const res = await fetch(`${API_BASE}/v1/ingest/frontend-prices/brand`, {
+      const res = await fetch(`${API_BASE}/api/v1/ingest/frontend-prices/brand`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestBody)

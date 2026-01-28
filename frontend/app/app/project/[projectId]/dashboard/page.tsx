@@ -5,8 +5,7 @@ import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { apiGet, apiPost, apiGetData } from '../../../../../lib/apiClient'
 import type { ApiDebug, ApiError } from '../../../../../lib/apiClient'
-import '../../../../globals.css'
-import WBFinancesSection from '../../../../../components/WBFinancesSection'
+import { usePageTitle } from '../../../../../hooks/usePageTitle'
 
 interface Kpis {
   wb: {
@@ -30,12 +29,17 @@ interface Kpis {
     with_stock: number
     with_price_and_stock: number
   }
+  internal_data?: {
+    total: number
+    with_stock: number
+  }
   last_snapshots: {
     fbs_stock_at: string | null
     fbo_stock_at: string | null
     wb_prices_at: string | null
     storefront_at: string | null
     rrp_at: string | null
+    internal_data_at?: string | null
   }
 }
 
@@ -57,6 +61,7 @@ export default function ProjectDashboard() {
   const params = useParams()
   const router = useRouter()
   const projectId = params.projectId as string
+  usePageTitle('Сводка данных', projectId)
   const [kpis, setKpis] = useState<Kpis | null>(null)
   const [loading, setLoading] = useState(true)
   const [toast, setToast] = useState<string | null>(null)
@@ -96,7 +101,7 @@ export default function ProjectDashboard() {
 
   const loadProject = async () => {
     try {
-      const { data } = await apiGet<Project>(`/v1/projects/${projectId}`)
+      const { data } = await apiGet<Project>(`/api/v1/projects/${projectId}`)
       setProject(data)
     } catch (error) {
       console.error('Failed to load project:', error)
@@ -105,7 +110,7 @@ export default function ProjectDashboard() {
 
   const checkWbEnabled = async () => {
     try {
-      const { data: marketplaces } = await apiGet<ProjectMarketplace[]>(`/v1/projects/${projectId}/marketplaces`)
+      const { data: marketplaces } = await apiGet<ProjectMarketplace[]>(`/api/v1/projects/${projectId}/marketplaces`)
       const wb = marketplaces.find(m => m.marketplace_code === 'wildberries')
       setWbEnabled(wb?.is_enabled || false)
       const otherEnabled = marketplaces.some(
@@ -123,7 +128,7 @@ export default function ProjectDashboard() {
     try {
       setError(null)
       setLoading(true)
-      const result = await apiGet<Kpis>(`/v1/dashboard/projects/${projectId}/kpis`)
+      const result = await apiGet<Kpis>(`/api/v1/dashboard/projects/${projectId}/kpis`)
       console.log('kpis result:', result)
       setDebug(result.debug)
       setKpis(result.data)
@@ -146,7 +151,7 @@ export default function ProjectDashboard() {
     try {
       setLoadingDiscrepancies(true)
       const resp = await apiGetData<{ meta: { total_count: number } }>(
-        `/v1/projects/${projectId}/wildberries/price-discrepancies?only_below_rrp=true&page_size=1`
+        `/api/v1/projects/${projectId}/wildberries/price-discrepancies?only_below_rrp=true&page_size=1`
       )
       setPriceDiscrepanciesCount(resp.meta?.total_count || 0)
     } catch (error) {
@@ -159,7 +164,36 @@ export default function ProjectDashboard() {
 
   return (
     <div className="container">
-      <h1>{project?.name || 'Loading...'}</h1>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+        <h1 style={{ marginBottom: 20 }}>{project?.name || 'Loading...'}</h1>
+        <Link
+          href={`/app/project/${projectId}/settings`}
+          title="Настройки проекта"
+          aria-label="Настройки проекта"
+          style={{
+            width: 32,
+            height: 32,
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderRadius: 8,
+            color: '#6b7280',
+            textDecoration: 'none',
+            userSelect: 'none',
+            transition: 'background-color 120ms ease, color 120ms ease',
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.backgroundColor = '#f3f4f6'
+            e.currentTarget.style.color = '#111827'
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.backgroundColor = 'transparent'
+            e.currentTarget.style.color = '#6b7280'
+          }}
+        >
+          ⚙
+        </Link>
+      </div>
 
       {toast && <div className="toast">{toast}</div>}
 
@@ -221,27 +255,47 @@ export default function ProjectDashboard() {
         ) : kpis ? (
           <>
             {/* Внутренние данные */}
-            <div style={{ marginBottom: 20 }}>
-              <h3 style={{ marginTop: 0, marginBottom: 10 }}>Внутренние данные</h3>
-              <div className="metrics">
-                <div className="metric-card" style={{ flex: '2 1 200px' }}>
-                  <div className="metric-label" style={{ fontSize: 12, textTransform: 'uppercase', color: '#0d6efd' }}>
-                    Товары в наличии
-                  </div>
-                  <Link href={`/app/project/${projectId}/rrp-snapshots`} style={{ textDecoration: 'none', color: 'inherit' }}>
-                    <div className="metric-value" style={{ fontSize: 28, color: '#0d6efd', cursor: 'pointer', textDecoration: 'underline', opacity: 1, transition: 'opacity 0.2s' }} onMouseEnter={(e) => e.currentTarget.style.opacity = '0.7'} onMouseLeave={(e) => e.currentTarget.style.opacity = '1'}>
-                      {kpis.rrp_xml.with_stock}
+            {kpis.internal_data && kpis.internal_data.total > 0 && (
+              <div style={{ marginBottom: 20 }}>
+                <h3 style={{ marginTop: 0, marginBottom: 10 }}>Внутренние данные</h3>
+                <div className="metrics">
+                  <div className="metric-card" style={{ flex: '2 1 200px' }}>
+                    <div className="metric-label" style={{ fontSize: 12, textTransform: 'uppercase', color: '#0d6efd' }}>
+                      Товары в наличии
                     </div>
-                  </Link>
-                  <div style={{ fontSize: 12, color: '#666', marginTop: 4 }}>
-                    Всего товаров: {kpis.rrp_xml.total}
-                  </div>
-                  <div style={{ fontSize: 12, color: '#888', marginTop: 4 }}>
-                    Обновлено: {formatDate(kpis.last_snapshots.rrp_at)}
+                    <Link href={`/app/project/${projectId}/settings`} style={{ textDecoration: 'none', color: 'inherit' }}>
+                      <div className="metric-value" style={{ fontSize: 28, color: '#0d6efd', cursor: 'pointer', textDecoration: 'underline', opacity: 1, transition: 'opacity 0.2s' }} onMouseEnter={(e) => e.currentTarget.style.opacity = '0.7'} onMouseLeave={(e) => e.currentTarget.style.opacity = '1'}>
+                        {kpis.internal_data.with_stock || 0}
+                      </div>
+                    </Link>
+                    <div style={{ fontSize: 12, color: '#666', marginTop: 4 }}>
+                      Всего товаров: {kpis.internal_data.total}
+                    </div>
+                    <div style={{ fontSize: 12, color: '#888', marginTop: 4 }}>
+                      Обновлено: {formatDate(kpis.last_snapshots.internal_data_at)}
+                    </div>
+                    <div style={{ marginTop: 8 }}>
+                      <Link
+                        href={`/app/project/${projectId}/internal-data`}
+                        style={{
+                          display: 'inline-block',
+                          padding: '6px 12px',
+                          fontSize: 12,
+                          backgroundColor: '#0d6efd',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: 4,
+                          cursor: 'pointer',
+                          textDecoration: 'none',
+                        }}
+                      >
+                        Посмотреть данные
+                      </Link>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
+            )}
 
             {/* Wildberries — Данные */}
             <div style={{ marginBottom: 32 }}>
@@ -485,11 +539,6 @@ export default function ProjectDashboard() {
           <p>Failed to load metrics</p>
         )}
       </div>
-
-      <WBFinancesSection
-        projectId={projectId}
-        title="Загрузка финансовых отчетов Wildberries"
-      />
     </div>
   )
 }

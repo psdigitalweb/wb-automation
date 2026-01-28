@@ -4,7 +4,6 @@ import React, { useState, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { apiGet, apiPatch, apiPost, apiPut, ApiError } from '../../../../../lib/apiClient'
 import { User } from '../../../../../lib/auth'
-import '../../../../globals.css'
 
 interface Marketplace {
   id: number
@@ -29,6 +28,13 @@ interface WBMarketplaceStatus {
   credentials: { api_token: boolean }
   settings: { brand_id: number | null }
   updated_at: string
+}
+
+interface SystemMarketplacePublicStatus {
+  marketplace_code: string
+  is_globally_enabled: boolean
+  is_visible: boolean
+  sort_order: number
 }
 
 export default function ProjectMarketplacesPage() {
@@ -58,23 +64,47 @@ export default function ProjectMarketplacesPage() {
   const [wbLoading, setWbLoading] = useState(false)
   const [wbError, setWbError] = useState<string | null>(null)
 
+  // System marketplace settings (global status)
+  const [systemMarketplaceStatuses, setSystemMarketplaceStatuses] = useState<Record<string, SystemMarketplacePublicStatus>>({})
+  const [systemStatusLoading, setSystemStatusLoading] = useState(false)
+
   useEffect(() => {
     loadData()
+    loadSystemMarketplaceStatuses()
   }, [projectId])
+
+  const loadSystemMarketplaceStatuses = async () => {
+    setSystemStatusLoading(true)
+    try {
+      const { data } = await apiGet<SystemMarketplacePublicStatus[]>('/api/v1/system/marketplaces')
+      // Convert array to map by marketplace_code
+      const statusMap: Record<string, SystemMarketplacePublicStatus> = {}
+      data.forEach(status => {
+        statusMap[status.marketplace_code] = status
+      })
+      setSystemMarketplaceStatuses(statusMap)
+    } catch (error) {
+      // Fail-safe: if endpoint fails, ignore and continue (backward compatibility)
+      console.warn('Failed to load system marketplace statuses:', error)
+      setSystemMarketplaceStatuses({})
+    } finally {
+      setSystemStatusLoading(false)
+    }
+  }
 
   const loadData = async () => {
     try {
       setLoading(true)
       const [marketplacesRes, projectMpsRes] = await Promise.all([
-        apiGet<Marketplace[]>('/v1/marketplaces?active_only=true'),
-        apiGet<ProjectMarketplace[]>(`/v1/projects/${projectId}/marketplaces`)
+        apiGet<Marketplace[]>('/api/v1/marketplaces?active_only=true'),
+        apiGet<ProjectMarketplace[]>(`/api/v1/projects/${projectId}/marketplaces`)
       ])
       setAllMarketplaces(marketplacesRes.data)
       setProjectMarketplaces(projectMpsRes.data)
       
       // Load WB status separately
       try {
-        const wbStatusRes = await apiGet<WBMarketplaceStatus>(`/v1/projects/${projectId}/marketplaces/wb`)
+        const wbStatusRes = await apiGet<WBMarketplaceStatus>(`/api/v1/projects/${projectId}/marketplaces/wb`)
         const wbStatusData = wbStatusRes.data
         setWbStatus(wbStatusData)
         const brandId = wbStatusData.settings?.brand_id
@@ -101,7 +131,7 @@ export default function ProjectMarketplacesPage() {
     const loadMe = async () => {
       try {
         setLoadingUser(true)
-        const { data } = await apiGet<User>('/v1/auth/me')
+        const { data } = await apiGet<User>('/api/v1/auth/me')
         setCurrentUser(data)
       } catch {
         setCurrentUser(null)
@@ -119,7 +149,7 @@ export default function ProjectMarketplacesPage() {
     setWbTariffsLoading(true)
     setWbTariffsError(null)
     try {
-      const { data } = await apiGet<any>('/v1/admin/marketplaces/wildberries/tariffs/status')
+      const { data } = await apiGet<any>('/api/v1/admin/marketplaces/wildberries/tariffs/status')
       setWbTariffsStatus(data)
     } catch (e: any) {
       const err = e as ApiError
@@ -146,7 +176,7 @@ export default function ProjectMarketplacesPage() {
     try {
       const payloadDays = Math.min(30, Math.max(0, wbTariffsDaysAhead || 0))
       await apiPost<any>(
-        '/v1/admin/marketplaces/wildberries/tariffs/ingest',
+        '/api/v1/admin/marketplaces/wildberries/tariffs/ingest',
         { days_ahead: payloadDays }
       )
       setWbTariffsCooldown(true)
@@ -185,7 +215,7 @@ export default function ProjectMarketplacesPage() {
     }
     
     // Regular toggle for other marketplaces
-    const url = `/v1/projects/${projectId}/marketplaces/${marketplaceId}/toggle`
+    const url = `/api/v1/projects/${projectId}/marketplaces/${marketplaceId}/toggle`
     console.log('[WB_DEBUG] Regular toggle', { url, is_enabled: !currentEnabled })
     try {
       const { data: response } = await apiPatch(url, {
@@ -206,7 +236,7 @@ export default function ProjectMarketplacesPage() {
   }
 
   const handleWBToggle = async (enabled: boolean) => {
-    const url = `/v1/projects/${projectId}/marketplaces/wildberries`
+    const url = `/api/v1/projects/${projectId}/marketplaces/wildberries`
     console.log('[WB_DEBUG] handleWBToggle called', { url, enabled })
     
     try {
@@ -224,7 +254,7 @@ export default function ProjectMarketplacesPage() {
       setWbShowForm(enabled && !updatedStatus.is_configured)
       
       // Reload marketplaces list
-      const { data: projectMps } = await apiGet<ProjectMarketplace[]>(`/v1/projects/${projectId}/marketplaces`)
+      const { data: projectMps } = await apiGet<ProjectMarketplace[]>(`/api/v1/projects/${projectId}/marketplaces`)
       setProjectMarketplaces(projectMps)
     } catch (error: any) {
       console.error('[WB_DEBUG] WB toggle error:', {
@@ -277,7 +307,7 @@ export default function ProjectMarketplacesPage() {
       console.log('[WB_DEBUG] Sending updateData', updateData)
       
       const { data: updatedStatus } = await apiPut<WBMarketplaceStatus>(
-        `/v1/projects/${projectId}/marketplaces/wildberries`,
+        `/api/v1/projects/${projectId}/marketplaces/wildberries`,
         updateData
       )
       
@@ -286,7 +316,7 @@ export default function ProjectMarketplacesPage() {
       setWbShowForm(false)
       
       // Reload marketplaces list
-      const { data: projectMps } = await apiGet<ProjectMarketplace[]>(`/v1/projects/${projectId}/marketplaces`)
+      const { data: projectMps } = await apiGet<ProjectMarketplace[]>(`/api/v1/projects/${projectId}/marketplaces`)
       setProjectMarketplaces(projectMps)
     } catch (error: any) {
       setWbError(error.detail || 'Failed to save Wildberries settings')
@@ -326,11 +356,22 @@ export default function ProjectMarketplacesPage() {
                 const projectMp = projectMpMap.get(mp.id)
                 const isEnabled = projectMp?.is_enabled || false
                 
+                // Get system marketplace status (global settings)
+                const systemStatus = systemMarketplaceStatuses[mp.code]
+                const isGloballyEnabled = systemStatus?.is_globally_enabled ?? true // Default: enabled
+                const isGloballyVisible = systemStatus?.is_visible ?? true // Default: visible
+                
                 // Special handling for Wildberries
                 const isWB = mp.code === 'wildberries'
                 // Use wbStatus if available, fallback to projectMp for backward compatibility
                 const wbEnabled = isWB ? (wbStatus?.is_enabled ?? projectMp?.is_enabled ?? false) : false
                 const wbConnected = wbStatus?.is_configured ?? false
+                
+                // If globally hidden and not connected in project, skip rendering
+                // But if already connected, show it with disabled state
+                if (!isGloballyVisible && !projectMp) {
+                  return null // Skip hidden marketplaces that are not connected
+                }
                 
                 // Debug logging for WB
                 if (isWB) {
@@ -347,7 +388,14 @@ export default function ProjectMarketplacesPage() {
                 
                 let statusText = 'Disabled'
                 let statusColor = '#6c757d'
-                if (isWB && wbConnected) {
+                let statusHint = ''
+                
+                // Check global status
+                if (!isGloballyEnabled) {
+                  statusText = 'Disabled (System)'
+                  statusColor = '#dc3545'
+                  statusHint = 'Отключено администратором системы'
+                } else if (isWB && wbConnected) {
                   statusText = 'Connected ✅'
                   statusColor = '#28a745'
                 } else if (isWB && wbEnabled) {
@@ -356,6 +404,11 @@ export default function ProjectMarketplacesPage() {
                 } else if (isEnabled) {
                   statusText = 'Enabled'
                   statusColor = '#28a745'
+                }
+                
+                // If globally hidden but connected, add hint
+                if (!isGloballyVisible && projectMp) {
+                  statusHint = 'Скрыт администратором системы (но подключен в проекте)'
                 }
                 
                 return (
@@ -370,15 +423,28 @@ export default function ProjectMarketplacesPage() {
                         }}>
                           {statusText}
                         </span>
+                        {statusHint && (
+                          <div style={{ 
+                            fontSize: '12px', 
+                            color: '#666', 
+                            marginTop: '4px',
+                            fontStyle: 'italic'
+                          }}>
+                            {statusHint}
+                          </div>
+                        )}
                       </td>
                       <td>
                         <button
                           onClick={() => handleToggle(mp.id, mp.code, isWB ? wbEnabled : isEnabled)}
-                          disabled={wbLoading}
+                          disabled={wbLoading || !isGloballyEnabled}
                           style={{ 
                             backgroundColor: (isWB ? wbEnabled : isEnabled) ? '#dc3545' : '#28a745',
-                            marginRight: '10px'
+                            marginRight: '10px',
+                            opacity: !isGloballyEnabled ? 0.5 : 1,
+                            cursor: !isGloballyEnabled ? 'not-allowed' : 'pointer'
                           }}
+                          title={!isGloballyEnabled ? 'Отключено администратором системы' : ''}
                         >
                           {wbLoading ? 'Loading...' : ((isWB ? wbEnabled : isEnabled) ? 'Disable' : 'Enable')}
                         </button>

@@ -2,17 +2,19 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import Link from 'next/link'
-import { apiGet, apiPost, apiPut, apiDelete, apiGetData } from '../../../../../lib/apiClient'
 import { getUser } from '../../../../../lib/auth'
 import { isSuperuser } from '../../../../../lib/admin'
+import { apiGetData, apiPostData, apiPatchData, apiDeleteData } from '../../../../../lib/apiClient'
 
-interface ProjectMember {
+interface AdminProjectMember {
   id: number
+  project_id: number
   user_id: number
-  role: string
   username: string
   email: string | null
+  role: string
+  created_at: string
+  updated_at: string
 }
 
 interface AdminUser {
@@ -28,20 +30,18 @@ interface AdminUserListResponse {
   total: number
 }
 
-export default function ProjectMembersPage() {
+export default function AdminProjectMembersPage() {
   const params = useParams()
   const router = useRouter()
   const projectId = params.projectId as string
-  const [currentUser, setCurrentUser] = useState(getUser())
-  const [isUserSuperuser, setIsUserSuperuser] = useState(false)
-  const [mounted, setMounted] = useState(false)
-  const [canManage, setCanManage] = useState(false)
-  const [members, setMembers] = useState<ProjectMember[]>([])
+  const currentUser = getUser()
+  const [members, setMembers] = useState<AdminProjectMember[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [showAddModal, setShowAddModal] = useState(false)
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null)
 
-  // Add member form - searchable combobox
+  // Add member form
   const [userSearchQuery, setUserSearchQuery] = useState('')
   const [availableUsers, setAvailableUsers] = useState<AdminUser[]>([])
   const [searchingUsers, setSearchingUsers] = useState(false)
@@ -53,33 +53,18 @@ export default function ProjectMembersPage() {
   const searchInputRef = useRef<HTMLInputElement>(null)
   const dropdownRef = useRef<HTMLDivElement>(null)
 
-  // Helper function to calculate canManage (defined before useEffects)
-  const updateCanManage = (user: typeof currentUser, membersList: ProjectMember[]) => {
-    const canManageValue = user?.is_superuser || 
-      membersList.find(m => m.user_id === user?.id)?.role === 'owner' || 
-      membersList.find(m => m.user_id === user?.id)?.role === 'admin'
-    setCanManage(canManageValue || false)
-  }
-
-  // Handle client-side hydration to avoid SSR mismatch
+  // Check permissions
   useEffect(() => {
-    setMounted(true)
-    const user = getUser()
-    setCurrentUser(user)
-    setIsUserSuperuser(user?.is_superuser === true)
-    // Calculate canManage after mount when user and members are available
-    updateCanManage(user, members)
-  }, [])
-
-  // Update canManage when members or currentUser changes (after mount)
-  useEffect(() => {
-    if (mounted) {
-      updateCanManage(currentUser, members)
+    if (!isSuperuser()) {
+      router.push('/app/projects')
     }
-  }, [mounted, currentUser, members])
+  }, [router])
 
+  // Load members
   useEffect(() => {
-    loadMembers()
+    if (projectId) {
+      loadMembers()
+    }
   }, [projectId])
 
   // Search users when query changes
@@ -114,13 +99,18 @@ export default function ProjectMembersPage() {
   const loadMembers = async () => {
     try {
       setLoading(true)
-      const { data: project } = await apiGet<any>(`/api/v1/projects/${projectId}`)
-      const membersList = project.members || []
-      setMembers(membersList)
-      // canManage will be updated by useEffect when members change
-      setLoading(false)
-    } catch (error) {
-      console.error('Failed to load members:', error)
+      setError(null)
+      const response = await apiGetData<AdminProjectMember[]>(
+        `/api/v1/admin/projects/${projectId}/members`
+      )
+      setMembers(response)
+    } catch (err: any) {
+      console.error('Failed to load members:', err)
+      setError(err?.detail || 'Failed to load members')
+      if (err?.status === 403) {
+        router.push('/app/projects')
+      }
+    } finally {
       setLoading(false)
     }
   }
@@ -159,7 +149,7 @@ export default function ProjectMembersPage() {
 
     try {
       setSubmitting(true)
-      await apiPost(`/api/v1/projects/${projectId}/members`, {
+      await apiPostData(`/api/v1/admin/projects/${projectId}/members`, {
         user_id: selectedUserId,
         role: newRole,
       })
@@ -167,12 +157,12 @@ export default function ProjectMembersPage() {
       setShowAddModal(false)
       resetForm()
       await loadMembers()
-    } catch (error: any) {
-      console.error('Failed to add member:', error)
-      const errorMsg = error?.detail || 'Не удалось добавить участника'
-      if (error?.status === 409) {
+    } catch (err: any) {
+      console.error('Failed to add member:', err)
+      const errorMsg = err?.detail || 'Не удалось добавить участника'
+      if (err?.status === 409) {
         showToast('Пользователь уже добавлен в проект', 'error')
-      } else if (error?.status === 403) {
+      } else if (err?.status === 403) {
         showToast('Недостаточно прав', 'error')
       } else {
         showToast(errorMsg, 'error')
@@ -182,16 +172,16 @@ export default function ProjectMembersPage() {
     }
   }
 
-  const handleRoleChange = async (userId: number, newRole: string) => {
+  const handleUpdateRole = async (userId: number, newRole: string) => {
     try {
-      await apiPut(`/api/v1/projects/${projectId}/members/${userId}`, {
-        role: newRole
+      await apiPatchData(`/api/v1/admin/projects/${projectId}/members/${userId}`, {
+        role: newRole,
       })
       showToast('Роль обновлена', 'success')
       await loadMembers()
-    } catch (error: any) {
-      console.error('Failed to update role:', error)
-      showToast(error?.detail || 'Не удалось обновить роль', 'error')
+    } catch (err: any) {
+      console.error('Failed to update role:', err)
+      showToast(err?.detail || 'Не удалось обновить роль', 'error')
     }
   }
 
@@ -201,12 +191,12 @@ export default function ProjectMembersPage() {
     }
 
     try {
-      await apiDelete(`/api/v1/projects/${projectId}/members/${userId}`)
+      await apiDeleteData(`/api/v1/admin/projects/${projectId}/members/${userId}`)
       showToast('Участник удален', 'success')
       await loadMembers()
-    } catch (error: any) {
-      console.error('Failed to remove member:', error)
-      showToast(error?.detail || 'Не удалось удалить участника', 'error')
+    } catch (err: any) {
+      console.error('Failed to remove member:', err)
+      showToast(err?.detail || 'Не удалось удалить участника', 'error')
     }
   }
 
@@ -222,8 +212,39 @@ export default function ProjectMembersPage() {
     setTimeout(() => setToast(null), 5000)
   }
 
+  if (!isSuperuser()) {
+    return (
+      <div className="container">
+        <h1>Access Denied</h1>
+        <p>Not enough permissions. Superuser access required.</p>
+      </div>
+    )
+  }
+
   return (
     <div className="container">
+      {/* Header */}
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'baseline',
+          marginBottom: '24px',
+          gap: '16px',
+        }}
+      >
+        <h1 style={{ margin: 0 }}>Участники проекта</h1>
+        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+          <button
+            onClick={() => router.back()}
+            className="btn-secondary"
+            style={{ padding: '8px 16px', height: '36px' }}
+          >
+            ← Назад
+          </button>
+        </div>
+      </div>
+
       {/* Toast */}
       {toast && (
         <div
@@ -243,53 +264,30 @@ export default function ProjectMembersPage() {
         </div>
       )}
 
-      {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '24px', gap: '16px' }}>
-        <h1 style={{ margin: 0 }}>Project Members</h1>
-        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-          {/* Only render Link after mount to avoid hydration mismatch */}
-          {mounted && isUserSuperuser && (
-            <Link
-              href={`/app/admin/projects/${projectId}/members`}
-              style={{
-                padding: '8px 16px',
-                backgroundColor: '#6c757d',
-                color: 'white',
-                textDecoration: 'none',
-                borderRadius: '4px',
-                fontSize: '14px',
-                height: '36px',
-                display: 'inline-flex',
-                alignItems: 'center',
-              }}
-            >
-              Участники (admin)
-            </Link>
-          )}
-          <button onClick={() => router.back()} className="btn-secondary" style={{ padding: '8px 16px', height: '36px' }}>
-            ← Back
-          </button>
-        </div>
-      </div>
-
       {/* Members Table */}
       <div className="card">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-          <h2 style={{ margin: 0 }}>Members</h2>
-          {/* Only render button after mount to avoid hydration mismatch */}
-          {mounted && canManage && (
-            <button
-              onClick={() => setShowAddModal(true)}
-              className="btn-primary"
-              style={{ padding: '8px 16px', height: '36px' }}
-            >
-              + Add Member
-            </button>
-          )}
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: '20px',
+          }}
+        >
+          <h2 style={{ margin: 0 }}>Участники</h2>
+          <button
+            onClick={() => setShowAddModal(true)}
+            className="btn-primary"
+            style={{ padding: '8px 16px', height: '36px' }}
+          >
+            + Добавить участника
+          </button>
         </div>
 
         {loading ? (
-          <p>Loading...</p>
+          <p>Загрузка...</p>
+        ) : error ? (
+          <p style={{ color: '#dc3545' }}>{error}</p>
         ) : members.length === 0 ? (
           <p>Участники не найдены</p>
         ) : (
@@ -311,53 +309,45 @@ export default function ProjectMembersPage() {
                       {member.email || '-'}
                     </td>
                     <td style={{ padding: '12px' }}>
-                      {/* Only render select after mount to avoid hydration mismatch */}
-                      {mounted && canManage ? (
-                        <select
-                          value={member.role}
-                          onChange={(e) => handleRoleChange(member.user_id, e.target.value)}
-                          style={{
-                            width: '100%',
-                            padding: '6px 10px',
-                            fontSize: '14px',
-                            border: '1px solid #ddd',
-                            borderRadius: '4px',
-                            backgroundColor: 'white',
-                          }}
-                        >
-                          <option value="viewer">Viewer</option>
-                          <option value="member">Member</option>
-                          <option value="admin">Admin</option>
-                          <option value="owner">Owner</option>
-                        </select>
-                      ) : (
-                        <strong>{member.role}</strong>
-                      )}
+                      <select
+                        value={member.role}
+                        onChange={(e) => handleUpdateRole(member.user_id, e.target.value)}
+                        style={{
+                          width: '100%',
+                          padding: '6px 10px',
+                          fontSize: '14px',
+                          border: '1px solid #ddd',
+                          borderRadius: '4px',
+                          backgroundColor: 'white',
+                        }}
+                      >
+                        <option value="viewer">Viewer</option>
+                        <option value="member">Member</option>
+                        <option value="admin">Admin</option>
+                        <option value="owner">Owner</option>
+                      </select>
                     </td>
                     <td style={{ padding: '12px', textAlign: 'center' }}>
-                      {/* Only render button after mount to avoid hydration mismatch */}
-                      {mounted && canManage && member.user_id !== currentUser?.id && (
-                        <button
-                          onClick={() => handleRemoveMember(member.user_id, member.username)}
-                          style={{
-                            padding: '4px 12px',
-                            backgroundColor: '#dc3545',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '4px',
-                            cursor: 'pointer',
-                            fontSize: '13px',
-                          }}
-                          onMouseEnter={(e) => {
-                            e.currentTarget.style.backgroundColor = '#c82333'
-                          }}
-                          onMouseLeave={(e) => {
-                            e.currentTarget.style.backgroundColor = '#dc3545'
-                          }}
-                        >
-                          Remove
-                        </button>
-                      )}
+                      <button
+                        onClick={() => handleRemoveMember(member.user_id, member.username)}
+                        style={{
+                          padding: '4px 12px',
+                          backgroundColor: '#dc3545',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '4px',
+                          cursor: 'pointer',
+                          fontSize: '13px',
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor = '#c82333'
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = '#dc3545'
+                        }}
+                      >
+                        Удалить
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -402,7 +392,7 @@ export default function ProjectMembersPage() {
               boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
             }}
           >
-            <h2 style={{ marginTop: 0, marginBottom: '20px' }}>Add Member</h2>
+            <h2 style={{ marginTop: 0, marginBottom: '20px' }}>Добавить участника</h2>
 
             {/* User Search Combobox */}
             <div className="form-group" style={{ marginBottom: '16px', position: 'relative' }}>
@@ -573,7 +563,7 @@ export default function ProjectMembersPage() {
                 style={{ padding: '8px 16px', height: '36px' }}
                 disabled={submitting}
               >
-                Cancel
+                Отмена
               </button>
               <button
                 type="button"
@@ -582,7 +572,7 @@ export default function ProjectMembersPage() {
                 className="btn-primary"
                 style={{ padding: '8px 16px', height: '36px' }}
               >
-                {submitting ? 'Adding...' : 'Add'}
+                {submitting ? 'Добавление...' : 'Добавить'}
               </button>
             </div>
           </div>
@@ -591,4 +581,3 @@ export default function ProjectMembersPage() {
     </div>
   )
 }
-

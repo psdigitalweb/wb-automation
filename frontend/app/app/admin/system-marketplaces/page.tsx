@@ -3,11 +3,11 @@
 import { useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 
-export default function WBTariffsRedirect() {
+export default function SystemMarketplacesRedirect() {
   const router = useRouter()
   
   useEffect(() => {
-    router.replace('/app/admin/settings/wb-tariffs')
+    router.replace('/app/admin/settings/marketplaces')
   }, [router])
   
   return (

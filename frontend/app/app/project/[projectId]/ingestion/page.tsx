@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import { apiGet, apiPost, apiPut, apiDelete } from '../../../../../lib/apiClient'
 import type { ApiError } from '../../../../../lib/apiClient'
+import { usePageTitle } from '../../../../../hooks/usePageTitle'
 import s from './ingestion.module.css'
 
 type Schedule = {
@@ -28,7 +29,8 @@ type IngestRun = {
   project_id: number
   marketplace_code: string
   job_code: string
-  triggered_by: 'schedule' | 'manual' | 'api'
+  // Backend may return additional values for backward compatibility (e.g. 'manual_smoke').
+  triggered_by: string
   status: RunStatus
   started_at: string | null
   finished_at: string | null
@@ -60,6 +62,7 @@ type TabKey = 'schedules' | 'runs'
 export default function ProjectIngestionPage() {
   const params = useParams()
   const projectId = params.projectId as string
+  usePageTitle('Управление загрузкой данных', projectId)
 
   const [activeTab, setActiveTab] = useState<TabKey>('schedules')
 
@@ -68,6 +71,7 @@ export default function ProjectIngestionPage() {
 
   const [runs, setRuns] = useState<IngestRun[]>([])
   const [loadingRuns, setLoadingRuns] = useState(false)
+  const [runsLoadFailedStatus, setRunsLoadFailedStatus] = useState<number | null>(null)
 
   const [jobs, setJobs] = useState<IngestJob[]>([])
   const [loadingJobs, setLoadingJobs] = useState(false)
@@ -122,7 +126,8 @@ export default function ProjectIngestionPage() {
 
   const handleApiError = (e: any, fallback: string) => {
     const err = e as ApiError
-    const msg = err?.detail || fallback
+    const isNetwork = (err as any)?.status === 0
+    const msg = isNetwork ? `${fallback} (CORS/Network)` : (err?.detail || fallback)
     setErrorMessage(msg)
     setTimeout(() => setErrorMessage(null), 5000)
     // eslint-disable-next-line no-console
@@ -156,6 +161,7 @@ export default function ProjectIngestionPage() {
   const loadRuns = async () => {
     setLoadingRuns(true)
     try {
+      setRunsLoadFailedStatus(null)
       const params = new URLSearchParams()
       if (filtersMarketplace) params.append('marketplace_code', filtersMarketplace)
       if (filtersJob) params.append('job_code', filtersJob)
@@ -165,11 +171,22 @@ export default function ProjectIngestionPage() {
       params.append('to', to)
       params.append('limit', '200')
 
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/66ddcc6b-d2d0-4156-a371-04fea067f11b',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ingestion/page.tsx:loadRuns','message':'loadRuns about to apiGet','data':{projectId,query:params.toString()},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'CORS2'})}).catch(()=>{});
+      // #endregion
+
       const { data } = await apiGet<RunListResponse>(
         `/api/v1/projects/${projectId}/ingest/runs?${params.toString()}`
       )
       setRuns(data.items || [])
     } catch (e: any) {
+      const err = e as ApiError
+      setRunsLoadFailedStatus((err as any)?.status ?? 0)
+      // #region agent log
+      try {
+        fetch('http://127.0.0.1:7242/ingest/66ddcc6b-d2d0-4156-a371-04fea067f11b',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ingestion/page.tsx:loadRuns','message':'loadRuns failed','data':{detail:err?.detail,status:(err as any)?.status,url:(err as any)?.url,bodyPreview:(err as any)?.bodyPreview},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'CORS3'})}).catch(()=>{});
+      } catch {}
+      // #endregion
       handleApiError(e, 'Не удалось загрузить историю запусков')
     } finally {
       setLoadingRuns(false)
@@ -1409,6 +1426,14 @@ export default function ProjectIngestionPage() {
             <h2>История запусков</h2>
             {loadingRuns ? (
               <p>Загрузка…</p>
+            ) : runsLoadFailedStatus === 0 ? (
+              <p style={{ color: '#b91c1c' }}>
+                Не удалось загрузить историю (CORS/Network). Проверьте прокси `/api` или настройки CORS на бэке.
+              </p>
+            ) : runsLoadFailedStatus != null ? (
+              <p style={{ color: '#b91c1c' }}>
+                Не удалось загрузить историю (HTTP {runsLoadFailedStatus}). См. сообщение ошибки выше.
+              </p>
             ) : runs.length === 0 ? (
               <p>Запусков не найдено.</p>
             ) : (

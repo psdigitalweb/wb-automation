@@ -4,7 +4,6 @@ import { useState, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { apiGetData } from '../../../../../lib/apiClient'
-import '../../../../globals.css'
 
 interface RrpRecord {
   snapshot_at: string
@@ -48,7 +47,7 @@ export default function RrpSnapshotsPage() {
   const loadData = async () => {
     try {
       setLoading(true)
-      const result = await apiGetData<RrpResponse>(`/v1/projects/${projectId}/rrp/latest?limit=${limit}&offset=${offset}`)
+      const result = await apiGetData<RrpResponse>(`/api/v1/projects/${projectId}/rrp/latest?limit=${limit}&offset=${offset}`)
       setData(result.data || [])
       setTotal(result.total || 0)
       setLoading(false)

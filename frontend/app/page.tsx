@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation'
 import Image from 'next/image'
 import { apiPostData, apiGetData } from '../lib/apiClient'
 import { saveTokens, saveUser, isAuthenticated } from '../lib/auth'
-import './globals.css'
 
 export default function LoginPage() {
   const router = useRouter()
@@ -37,17 +36,17 @@ export default function LoginPage() {
     try {
       console.log('Attempting login with username:', username)
       const loginPayload = { username: username.trim(), password }
-      console.log('Sending POST to /v1/auth/login with payload:', { username: loginPayload.username, password: '***' })
+      console.log('Sending POST to /api/v1/auth/login with payload:', { username: loginPayload.username, password: '***' })
       // Login
       const tokens = await apiPostData<{ access_token: string; refresh_token: string; token_type: string }>(
-        '/v1/auth/login',
+        '/api/v1/auth/login',
         loginPayload
       )
       console.log('Login successful, tokens received')
       saveTokens(tokens)
 
       // Get user info
-      const user = await apiGetData<any>('/v1/auth/me')
+      const user = await apiGetData<any>('/api/v1/auth/me')
       saveUser(user)
 
       // Redirect to projects page

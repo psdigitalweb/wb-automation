@@ -4,7 +4,6 @@ import { useState, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { apiGet } from '../../../../../lib/apiClient'
-import '../../../../globals.css'
 
 interface SupplierStockRecord {
   nm_id: number
@@ -34,7 +33,7 @@ export default function SupplierStocksPage() {
     try {
       setLoading(true)
       const { data: result } = await apiGet<{ data: SupplierStockRecord[]; total: number }>(
-        `/v1/supplier-stocks/latest?limit=${limit}&offset=${offset}`
+        `/api/v1/supplier-stocks/latest?limit=${limit}&offset=${offset}`
       )
       setData(result.data || [])
       setTotal(result.total || 0)

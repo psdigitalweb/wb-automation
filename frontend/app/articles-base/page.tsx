@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
-import '../globals.css'
 import { getApiBase } from '@/lib/api'
 
 interface ArticleRecord {
@@ -68,7 +67,7 @@ export default function ArticlesBasePage() {
       if (onlyWithOurStock) {
         params.append('only_with_our_stock', 'true')
       }
-      const url = `${apiBase}/v1/articles/base?${params}`
+      const url = `${apiBase}/api/v1/articles/base?${params}`
       console.log('Fetching from:', url)
       const res = await fetch(url)
       console.log('Response status:', res.status, res.statusText)

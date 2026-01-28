@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
-import '../globals.css'
 import { getApiBase } from '@/lib/api'
 
 interface RrpRecord {
@@ -37,7 +36,7 @@ export default function RrpSnapshotsPage() {
     try {
       setLoading(true)
       const apiBase = getApiBase()
-      const res = await fetch(`${apiBase}/v1/rrp/latest?limit=${limit}&offset=${offset}`)
+      const res = await fetch(`${apiBase}/api/v1/rrp/latest?limit=${limit}&offset=${offset}`)
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}: ${res.statusText}`)
       }

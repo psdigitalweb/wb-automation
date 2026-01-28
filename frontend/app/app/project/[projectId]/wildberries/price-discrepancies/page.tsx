@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useState, useRef } from 'react'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
-import { apiGetData } from '@/lib/apiClient'
+import { apiGetData, apiPost } from '@/lib/apiClient'
+import { usePageTitle } from '@/hooks/usePageTitle'
 import CategoryMultiSelectPopover from '@/components/CategoryMultiSelectPopover'
 
 interface PriceDiscrepancyItem {
@@ -35,6 +36,21 @@ interface PriceDiscrepancyItem {
   }
 }
 
+interface DiagnosticInfo {
+  data_availability: {
+    brand_id_configured: boolean
+    brand_id: number | null
+    rrp_snapshots_count: number
+    price_snapshots_count: number
+    products_count: number
+    frontend_catalog_price_snapshots_count: number
+    stock_snapshots_count: number
+    products_with_both_rrp_and_showcase: number
+  }
+  issues: string[]
+  recommendations: string[]
+}
+
 interface PriceDiscrepancyResponse {
   meta: {
     total_count: number
@@ -43,6 +59,7 @@ interface PriceDiscrepancyResponse {
     updated_at: string
   }
   items: PriceDiscrepancyItem[]
+  diagnostic?: DiagnosticInfo
 }
 
 type HasStockFilter = 'any' | 'true' | 'false'
@@ -344,11 +361,6 @@ function PriceDiscrepancyFilters({ filters, categories, onChange, onExportCsv }:
         }}
       >
         <h2 style={{ margin: 0 }}>Фильтры</h2>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button type="button" onClick={onExportCsv}>
-            Экспорт CSV
-          </button>
-        </div>
       </div>
 
       <div
@@ -631,12 +643,16 @@ export default function WbPriceDiscrepanciesPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const projectId = params.projectId as string
+  usePageTitle('Расхождения цен', projectId)
 
   const [data, setData] = useState<PriceDiscrepancyItem[]>([])
   const [meta, setMeta] = useState<PriceDiscrepancyResponse['meta'] | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [categories, setCategories] = useState<CategoryOption[]>([])
+  const [diagnosing, setDiagnosing] = useState(false)
+  const [diagnosticMessage, setDiagnosticMessage] = useState<string | null>(null)
+  const [diagnosticInfo, setDiagnosticInfo] = useState<DiagnosticInfo | null>(null)
 
   const filters = useMemo(
     () => parseFiltersFromSearchParams(searchParams),
@@ -692,11 +708,13 @@ export default function WbPriceDiscrepanciesPage() {
         qs.set('page', String(filters.page))
         qs.set('page_size', String(filters.pageSize))
 
-        const url = `/v1/projects/${projectId}/wildberries/price-discrepancies?${qs.toString()}`
+        const url = `/api/v1/projects/${projectId}/wildberries/price-discrepancies?${qs.toString()}`
         const resp = await apiGetData<PriceDiscrepancyResponse>(url)
         if (cancelled) return
         setData(resp.items || [])
         setMeta(resp.meta)
+        setDiagnosticInfo(resp.diagnostic || null)
+        setError(null)
       } catch (e: any) {
         if (cancelled) return
         console.error('Failed to load price discrepancies', e)
@@ -727,7 +745,7 @@ export default function WbPriceDiscrepanciesPage() {
     async function loadCategories() {
       try {
         const resp = await apiGetData<{ items: CategoryOption[] }>(
-          `/v1/projects/${projectId}/wildberries/categories`,
+          `/api/v1/projects/${projectId}/wildberries/categories`,
         )
         if (cancelled) return
         setCategories(resp.items || [])
@@ -754,6 +772,27 @@ export default function WbPriceDiscrepanciesPage() {
     }
   }
 
+  const handleDiagnose = async () => {
+    setDiagnosing(true)
+    setDiagnosticMessage(null)
+    setError(null)
+    try {
+      const { data: resp } = await apiPost<{ task_id: string; status: string; message: string }>(
+        `/api/v1/projects/${projectId}/wildberries/price-discrepancies/diagnose`
+      )
+      setDiagnosticMessage(
+        `Диагностика запущена (task_id: ${resp.task_id}). Проверьте логи worker для деталей.`
+      )
+      // Clear message after 5 seconds
+      setTimeout(() => setDiagnosticMessage(null), 5000)
+    } catch (e: any) {
+      console.error('Failed to trigger diagnostics', e)
+      setError(e?.detail || e?.message || 'Не удалось запустить диагностику')
+    } finally {
+      setDiagnosing(false)
+    }
+  }
+
   return (
     <div className="container">
       <h1>Расхождения цен (РРЦ vs витрина WB)</h1>
@@ -763,16 +802,118 @@ export default function WbPriceDiscrepanciesPage() {
 
       {meta && (
         <div className="card" style={{ marginTop: 16 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
-            <div>
-              <strong>Всего позиций:</strong> {meta.total_count}
-            </div>
-            <div style={{ fontSize: 12, color: '#666' }}>
-              <strong>Данные обновлены:</strong> {formatDate(meta.updated_at)}
-            </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+          <div>
+            <strong>Всего позиций:</strong> {meta.total_count}
+          </div>
+          <div style={{ fontSize: 12, color: '#666' }}>
+            <strong>Данные обновлены:</strong> {formatDate(meta.updated_at)}
           </div>
         </div>
+        {meta.total_count === 0 && diagnosticInfo && (
+          <div
+            style={{
+              marginTop: 12,
+              padding: 16,
+              background: '#fef3c7',
+              border: '1px solid #f59e0b',
+              borderRadius: 4,
+              fontSize: 14,
+            }}
+          >
+            <div style={{ marginBottom: 12 }}>
+              <strong>⚠️ Отчёт пуст. Диагностика данных:</strong>
+            </div>
+            
+            <div style={{ marginBottom: 12 }}>
+              <strong>Доступность данных:</strong>
+              <ul style={{ marginTop: 4, marginBottom: 0, paddingLeft: 20 }}>
+                <li>Products: {diagnosticInfo.data_availability.products_count}</li>
+                <li>Price snapshots: {diagnosticInfo.data_availability.price_snapshots_count}</li>
+                <li>Frontend prices: {diagnosticInfo.data_availability.frontend_catalog_price_snapshots_count}</li>
+                <li>Stock snapshots: {diagnosticInfo.data_availability.stock_snapshots_count}</li>
+                <li>
+                  <strong style={{ color: diagnosticInfo.data_availability.rrp_snapshots_count === 0 ? '#dc2626' : '#059669' }}>
+                    RRP snapshots: {diagnosticInfo.data_availability.rrp_snapshots_count}
+                  </strong>
+                </li>
+                <li>Products with both RRP and showcase: {diagnosticInfo.data_availability.products_with_both_rrp_and_showcase}</li>
+              </ul>
+            </div>
+            
+            {diagnosticInfo.issues.length > 0 && (
+              <div style={{ marginBottom: 12 }}>
+                <strong style={{ color: '#dc2626' }}>Проблемы:</strong>
+                <ul style={{ marginTop: 4, marginBottom: 0, paddingLeft: 20 }}>
+                  {diagnosticInfo.issues.map((issue, idx) => (
+                    <li key={idx}>{issue}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            
+            {diagnosticInfo.recommendations.length > 0 && (
+              <div>
+                <strong style={{ color: '#059669' }}>Рекомендации:</strong>
+                <ul style={{ marginTop: 4, marginBottom: 0, paddingLeft: 20 }}>
+                  {diagnosticInfo.recommendations.map((rec, idx) => (
+                    <li key={idx}>{rec}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
+        
+        {meta.total_count === 0 && !diagnosticInfo && (
+          <div
+            style={{
+              marginTop: 12,
+              padding: 12,
+              background: '#fef3c7',
+              border: '1px solid #f59e0b',
+              borderRadius: 4,
+              fontSize: 14,
+            }}
+          >
+            <strong>Внимание:</strong> Отчёт пуст. Нажмите "Собрать отчёт" для диагностики данных или проверьте логи worker.
+          </div>
+        )}
+        </div>
       )}
+
+      <div className="card" style={{ marginTop: 16, marginBottom: 16 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+          <h2 style={{ margin: 0 }}>Действия</h2>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <button
+              type="button"
+              onClick={handleDiagnose}
+              disabled={diagnosing}
+              style={{ minWidth: 140 }}
+            >
+              {diagnosing ? 'Запуск...' : 'Собрать отчёт'}
+            </button>
+            <button type="button" onClick={handleExportCsv}>
+              Экспорт CSV
+            </button>
+          </div>
+        </div>
+        {diagnosticMessage && (
+          <div
+            style={{
+              marginTop: 12,
+              padding: 12,
+              background: '#d1fae5',
+              border: '1px solid #10b981',
+              borderRadius: 4,
+              fontSize: 14,
+            }}
+          >
+            {diagnosticMessage}
+          </div>
+        )}
+      </div>
 
       <PriceDiscrepancyFilters
         filters={filters}

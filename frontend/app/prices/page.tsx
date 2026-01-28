@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
-import '../globals.css'
 import { getApiBase } from '@/lib/api'
 
 const API_BASE = getApiBase()
@@ -31,7 +30,7 @@ export default function PricesPage() {
   const loadData = async () => {
     try {
       setLoading(true)
-      const res = await fetch(`${API_BASE}/v1/prices/latest?limit=${limit}&offset=${offset}`)
+      const res = await fetch(`${API_BASE}/api/v1/prices/latest?limit=${limit}&offset=${offset}`)
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}: ${res.statusText}`)
       }
