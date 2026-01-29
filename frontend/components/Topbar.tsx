@@ -32,6 +32,11 @@ export default function Topbar() {
     }
   }, [pathname])
 
+  // Sync user state on route change
+  useEffect(() => {
+    setUser(getUser())
+  }, [pathname])
+
   // Load projects
   useEffect(() => {
     loadProjects()
