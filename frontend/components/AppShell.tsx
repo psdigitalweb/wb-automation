@@ -43,7 +43,6 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       </>
     )
 
-  if (isAuthed === null) return <div className="app-layout" />
   if (isAuthed === false) return null
 
   return (
@@ -51,7 +50,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       <Topbar />
       <div className="app-content">
         <Breadcrumbs />
-        {children}
+        {isAuthed === true ? children : null}
       </div>
     </div>
   )
