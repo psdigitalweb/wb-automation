@@ -9,15 +9,27 @@ import httpx
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
+from app.utils.httpx_client import make_async_client
+
 
 class CatalogClient:
     """Client for WB public catalog API."""
     
-    def __init__(self):
+    def __init__(self, *, proxy_url: str | None = None, proxy_scheme: str | None = None):
         self.timeout = 30
         self.max_retries = 3
         self.retry_delay = 1.0
         self.last_request_meta: Dict[str, Any] = {}
+        self.proxy_url: str | None = proxy_url
+        if proxy_scheme is not None and str(proxy_scheme).strip():
+            self.proxy_scheme: str | None = str(proxy_scheme).strip().lower()
+        else:
+            self.proxy_scheme = None
+            if proxy_url:
+                try:
+                    self.proxy_scheme = urlparse(str(proxy_url)).scheme or None
+                except Exception:
+                    self.proxy_scheme = None
         
         # Headers as in Apps Script / browser DevTools
         self.headers = {
@@ -25,6 +37,13 @@ class CatalogClient:
             "Accept": "application/json",
             "Referer": "https://www.wildberries.ru/",
             "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+        }
+
+    def _proxy_meta(self) -> Dict[str, Any]:
+        used = bool(self.proxy_url)
+        return {
+            "proxy_used": used,
+            "proxy_scheme": (self.proxy_scheme if used else None),
         }
     
     async def _request_with_retry(
@@ -56,6 +75,7 @@ class CatalogClient:
                 last_error = None
                 print(f"catalog_client._request_with_retry: status={last_status}")
                 self.last_request_meta = {
+                    **self._proxy_meta(),
                     "ok": True,
                     "status_code": last_status,
                     "attempt": attempt + 1,
@@ -86,6 +106,7 @@ class CatalogClient:
             except Exception as e:
                 last_error = type(e).__name__
                 self.last_request_meta = {
+                    **self._proxy_meta(),
                     "ok": False,
                     "status_code": last_status,
                     "error": last_error,
@@ -134,7 +155,7 @@ class CatalogClient:
             Parsed JSON response. Empty dict if error.
         """
         url = self._replace_page_in_url(base_url, page)
-        self.last_request_meta = {"page": page}
+        self.last_request_meta = {**self._proxy_meta(), "page": page}
         
         print(f"catalog_client: URL={url}")
         print(f"catalog_client: method=GET, brand_id={brand_id}, page={page}")
@@ -205,7 +226,8 @@ class CatalogClient:
                     }
                     return {}
             except Exception as e:
-                print(f"catalog_client: exception during request: {type(e).__name__}: {e}")
+                # Do not print exception message here: it may contain proxy URL/credentials (httpx ProxyError, etc.)
+                print(f"catalog_client: exception during request: {type(e).__name__}")
                 self.last_request_meta = {
                     **(self.last_request_meta or {}),
                     "ok": False,
@@ -229,6 +251,6 @@ class CatalogClient:
             pool=float(self.timeout),
         )
         limits = httpx.Limits(max_connections=20, max_keepalive_connections=10, keepalive_expiry=30.0)
-        async with httpx.AsyncClient(timeout=timeout_cfg, limits=limits) as http_client:
+        async with make_async_client(proxy_url=self.proxy_url, timeout=timeout_cfg, limits=limits) as http_client:
             return await _handle_with_client(http_client)
 

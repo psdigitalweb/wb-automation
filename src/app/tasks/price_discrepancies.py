@@ -119,7 +119,7 @@ def diagnose_data_availability(project_id: int) -> Dict[str, Any]:
         if rrp_count == 0:
             diagnostics["warnings"].append(
                 f"No RRP snapshots found for project_id={project_id}. "
-                "Run RRP XML ingestion to populate data."
+                "Build RRP snapshots from Internal Data (preferred) or run legacy RRP XML ingestion."
             )
         
         # Check 3: Price snapshots (WB admin prices)

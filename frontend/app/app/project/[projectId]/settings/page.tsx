@@ -2,7 +2,14 @@
 
 import { useEffect, useState, useRef } from 'react'
 import Link from 'next/link'
-import { apiGet, getWBIngestStatus, runWBIngest, WBIngestStatus } from '../../../../../lib/apiClient'
+import {
+  apiGet,
+  getProjectProxySettings,
+  ProjectProxySettings,
+  getWBIngestStatus,
+  runWBIngest,
+  WBIngestStatus,
+} from '../../../../../lib/apiClient'
 import { usePageTitle } from '../../../../../hooks/usePageTitle'
 
 interface ProjectMember {
@@ -54,13 +61,14 @@ export default function ProjectSettingsPage({ params }: { params: { projectId: s
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null)
   const [isPolling, setIsPolling] = useState(false)
   const lastStatusesHashRef = useRef<string>('')
+  const [proxySettings, setProxySettings] = useState<ProjectProxySettings | null>(null)
 
   useEffect(() => {
     const load = async () => {
       try {
         setLoading(true)
         setError(null)
-        const [projectData, cogsCoverageData] = await Promise.all([
+        const [projectData, cogsCoverageData, proxyData] = await Promise.all([
           apiGet<ProjectDetail>(`/api/v1/projects/${projectId}`),
           apiGet<{
             internal_data_available: boolean
@@ -69,6 +77,7 @@ export default function ProjectSettingsPage({ params }: { params: { projectId: s
             missing_total: number
             coverage_pct: number
           }>(`/api/v1/projects/${projectId}/cogs/coverage`).catch(() => null),
+          getProjectProxySettings(projectId).catch(() => null),
         ])
         setProject(projectData.data)
 
@@ -77,6 +86,8 @@ export default function ProjectSettingsPage({ params }: { params: { projectId: s
         } else {
           setCogsCoverage(null)
         }
+
+        setProxySettings(proxyData)
       } catch (e: any) {
         setError(e?.detail || 'Failed to load project')
       } finally {
@@ -283,6 +294,17 @@ export default function ProjectSettingsPage({ params }: { params: { projectId: s
     return <span style={{ color: '#999' }}>—</span>
   }
 
+  const frontendPricesProxyEnabled = !!proxySettings?.enabled
+
+  const formatDateTime = (value: string | null | undefined) => {
+    if (!value) return '—'
+    try {
+      return new Date(value).toLocaleString('ru-RU')
+    } catch {
+      return value
+    }
+  }
+
 
   return (
     <div className="container">
@@ -431,7 +453,24 @@ export default function ProjectSettingsPage({ params }: { params: { projectId: s
                           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                             {getStatusIcon(status.last_status, status.is_running)}
                             <div>
-                              <div>{status.title}</div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <span>{status.title}</span>
+                                {status.job_code === 'frontend_prices' && frontendPricesProxyEnabled && (
+                                  <span
+                                    style={{
+                                      display: 'inline-block',
+                                      padding: '2px 8px',
+                                      borderRadius: '999px',
+                                      backgroundColor: '#e0f2fe',
+                                      color: '#0369a1',
+                                      fontSize: 11,
+                                      fontWeight: 600,
+                                    }}
+                                  >
+                                    proxy
+                                  </span>
+                                )}
+                              </div>
                               {status.job_code === 'frontend_prices' && (
                                 <div style={{ fontSize: '0.85rem', color: '#666', marginTop: '2px' }}>
                                   Примечание: перед загрузкой витринных цен автоматически обновляются «Цены WB» (prices).
@@ -501,6 +540,62 @@ export default function ProjectSettingsPage({ params }: { params: { projectId: s
                 </table>
               </div>
             )}
+          </div>
+
+          <div className="card" style={{ padding: '20px', marginTop: '20px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+                <h2 style={{ marginTop: 0, marginBottom: '8px' }}>Прокси для витрины WB</h2>
+                {proxySettings && (
+                  <span
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      padding: '2px 10px',
+                      borderRadius: 999,
+                      fontSize: 12,
+                      fontWeight: 600,
+                      backgroundColor: proxySettings.enabled ? '#dcfce7' : '#f3f4f6',
+                      color: proxySettings.enabled ? '#166534' : '#4b5563',
+                      border: '1px solid ' + (proxySettings.enabled ? '#a7f3d0' : '#e5e7eb'),
+                    }}
+                  >
+                    {proxySettings.enabled ? 'включено' : 'выключено'}
+                  </span>
+                )}
+              </div>
+              <Link
+                href={`/app/project/${projectId}/settings/proxy`}
+                style={{ fontSize: '0.9rem', color: '#2563eb', textDecoration: 'none' }}
+              >
+                Открыть →
+              </Link>
+            </div>
+            <p style={{ color: '#666', marginBottom: '12px', fontSize: '0.95rem' }}>
+              Прокси применяется только для загрузки витринных цен (frontend_prices).
+            </p>
+            {proxySettings && (
+              <div style={{ fontSize: '0.9rem', color: '#6b7280' }}>
+                <div>
+                  Последняя проверка: <strong>{formatDateTime(proxySettings.last_test_at)}</strong>{' '}
+                  {proxySettings.last_test_ok === true ? (
+                    <span style={{ color: '#166534' }}>OK</span>
+                  ) : proxySettings.last_test_ok === false ? (
+                    <span style={{ color: '#b91c1c' }}>Ошибка</span>
+                  ) : (
+                    <span style={{ color: '#6b7280' }}>—</span>
+                  )}
+                </div>
+                {proxySettings.last_test_ok === false && proxySettings.last_test_error ? (
+                  <div style={{ marginTop: 4, color: '#b91c1c' }}>{proxySettings.last_test_error}</div>
+                ) : null}
+              </div>
+            )}
+            <div style={{ marginTop: 14 }}>
+              <Link href={`/app/project/${projectId}/settings/proxy`}>
+                <button>Настроить прокси</button>
+              </Link>
+            </div>
           </div>
 
           <div className="card" style={{ padding: '20px' }}>

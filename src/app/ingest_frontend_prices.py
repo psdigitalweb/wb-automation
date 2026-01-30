@@ -301,8 +301,18 @@ async def ingest_frontend_brand_prices(
     run_id: int | None = None,
     project_id: int | None = None,
     run_started_at: datetime | None = None,
+    proxy_url: str | None = None,
+    proxy_scheme: str | None = None,
 ) -> Dict[str, Any]:
     """Fetch and insert frontend catalog price snapshots from WB public API."""
+    proxy_used = bool(proxy_url and str(proxy_url).strip())
+    proxy_scheme_val = (str(proxy_scheme).strip().lower() if proxy_scheme and str(proxy_scheme).strip() else None)
+    if proxy_used and not proxy_scheme_val:
+        try:
+            proxy_scheme_val = str(proxy_url).split("://", 1)[0].strip().lower()
+        except Exception:
+            proxy_scheme_val = None
+    proxy_meta = {"proxy_used": proxy_used, "proxy_scheme": (proxy_scheme_val if proxy_used else None)}
     _dbg(
         hypothesisId="H5",
         location="ingest_frontend_prices.py:ingest_frontend_brand_prices:entry",
@@ -316,6 +326,7 @@ async def ingest_frontend_brand_prices(
             "sleep_ms": sleep_ms,
             "sleep_jitter_ms": sleep_jitter_ms,
             "base_url_is_set": bool(base_url and str(base_url).strip()),
+            **proxy_meta,
         },
     )
     # If base_url not provided, get it from settings
@@ -323,7 +334,8 @@ async def ingest_frontend_brand_prices(
         base_url = get_brand_base_url_from_settings()
         if not base_url:
             return {
-                "error": "brand_base_url not configured. Please set it via PUT /api/v1/settings/frontend-prices/brand-url or provide base_url in request."
+                "error": "brand_base_url not configured. Please set it via PUT /api/v1/settings/frontend-prices/brand-url or provide base_url in request.",
+                **proxy_meta,
             }
         print(f"ingest_frontend_brand_prices: using base_url from settings: {base_url[:100]}...")
     
@@ -343,7 +355,7 @@ async def ingest_frontend_brand_prices(
         f"max_pages={max_pages}, sleep_ms={sleep_ms}, run_at={run_at_iso}, run_id={run_id}"
     )
     
-    client = CatalogClient()
+    client = CatalogClient(proxy_url=proxy_url, proxy_scheme=proxy_scheme_val)
     
     # Check if table exists
     check_table_sql = text("""
@@ -360,7 +372,7 @@ async def ingest_frontend_brand_prices(
     
     if not table_exists:
         print("ingest_frontend_prices: ERROR - table frontend_catalog_price_snapshots does not exist")
-        return {"error": "Table frontend_catalog_price_snapshots does not exist. Run migrations."}
+        return {"error": "Table frontend_catalog_price_snapshots does not exist. Run migrations.", **proxy_meta}
     
     def _sleep_seconds_between_pages() -> float:
         """Compute between-pages sleep with optional jitter."""
@@ -514,6 +526,7 @@ async def ingest_frontend_brand_prices(
                         "retry_count": retry_count_429,
                         "total_retry_wait": total_retry_wait_seconds,
                         "runtime_seconds": runtime_s,
+                        **proxy_meta,
                     }
 
                 total_retry_wait_seconds += sleep_s
@@ -589,6 +602,7 @@ async def ingest_frontend_brand_prices(
                 "distinct_nm_id": len(seen_nm_ids),
                 "items_saved": total_inserted,
                 "last_request": last_meta,
+                **proxy_meta,
             }
         
         # Extract total pages and total count on first page if available
@@ -1040,6 +1054,7 @@ async def ingest_frontend_brand_prices(
                 "pages_processed": pages_fetched,
                 "items_saved": total_inserted,
                 "failed_pages": failed_pages,
+                **proxy_meta,
             }
     
     return {
@@ -1056,6 +1071,7 @@ async def ingest_frontend_brand_prices(
         "current_upserts_total": current_upserts_total,
         "showcase_snapshots_inserted_total": showcase_snapshots_inserted_total,
         "spp_events_inserted_total": spp_events_inserted_total,
+        **proxy_meta,
     }
 
 

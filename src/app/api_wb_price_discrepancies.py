@@ -869,6 +869,11 @@ async def get_wb_price_discrepancies(
                     text("SELECT COUNT(*) FROM rrp_snapshots WHERE project_id = :project_id"),
                     {"project_id": project_id},
                 ).scalar() or 0
+
+                rrp_latest_snapshot_at = conn.execute(
+                    text("SELECT MAX(snapshot_at) FROM rrp_snapshots WHERE project_id = :project_id"),
+                    {"project_id": project_id},
+                ).scalar()
                 
                 price_count = conn.execute(
                     text("SELECT COUNT(*) FROM price_snapshots WHERE project_id = :project_id"),
@@ -894,6 +899,144 @@ async def get_wb_price_discrepancies(
                     text("SELECT COUNT(*) FROM stock_snapshots WHERE project_id = :project_id"),
                     {"project_id": project_id},
                 ).scalar() or 0
+
+                # Internal Data snapshot + RRP availability (source of truth for RRP)
+                internal_latest = conn.execute(
+                    text(
+                        """
+                        SELECT id, imported_at, status, rows_imported, rows_failed, row_count
+                        FROM internal_data_snapshots
+                        WHERE project_id = :project_id
+                          AND status IN ('success', 'partial')
+                        ORDER BY imported_at DESC NULLS LAST, id DESC
+                        LIMIT 1
+                        """
+                    ),
+                    {"project_id": project_id},
+                ).mappings().first()
+
+                sku_norm_expr = "NULLIF(regexp_replace(trim(both '/' from ip.internal_sku), '^.*/', ''), '')"
+                internal_rrp_rows_found = 0
+                internal_rrp_rows_matched_products = 0
+                internal_rrp_rows_inserted = 0
+                internal_rrp_errors_preview: list[dict[str, Any]] = []
+                internal_snapshot_id = None
+                internal_snapshot_imported_at = None
+                internal_snapshot_status = None
+                internal_snapshot_rows_imported = None
+                internal_snapshot_rows_failed = None
+                if internal_latest:
+                    internal_snapshot_id = int(internal_latest["id"])
+                    internal_snapshot_imported_at = internal_latest.get("imported_at")
+                    internal_snapshot_status = internal_latest.get("status")
+                    internal_snapshot_rows_imported = internal_latest.get("rows_imported")
+                    internal_snapshot_rows_failed = internal_latest.get("rows_failed")
+
+                    internal_rrp_rows_found = (
+                        conn.execute(
+                            text(
+                                f"""
+                                SELECT COUNT(*)::bigint
+                                FROM (
+                                  SELECT DISTINCT {sku_norm_expr} AS sku_norm
+                                  FROM internal_product_prices ipp
+                                  JOIN internal_products ip ON ip.id = ipp.internal_product_id
+                                  WHERE ipp.snapshot_id = :snapshot_id
+                                    AND ipp.rrp IS NOT NULL
+                                    AND ip.internal_sku IS NOT NULL
+                                ) t
+                                WHERE t.sku_norm IS NOT NULL
+                                """
+                            ),
+                            {"snapshot_id": internal_snapshot_id},
+                        ).scalar()
+                        or 0
+                    )
+
+                    # How much would match products (vendor_code_norm is generated in DB).
+                    internal_rrp_rows_matched_products = (
+                        conn.execute(
+                            text(
+                                f"""
+                                WITH src AS (
+                                  SELECT DISTINCT {sku_norm_expr} AS sku_norm
+                                  FROM internal_product_prices ipp
+                                  JOIN internal_products ip ON ip.id = ipp.internal_product_id
+                                  WHERE ipp.snapshot_id = :snapshot_id
+                                    AND ipp.rrp IS NOT NULL
+                                    AND ip.internal_sku IS NOT NULL
+                                )
+                                SELECT COUNT(*)::bigint
+                                FROM src
+                                JOIN products p
+                                  ON p.project_id = :project_id
+                                 AND p.vendor_code_norm = src.sku_norm
+                                WHERE src.sku_norm IS NOT NULL
+                                """
+                            ),
+                            {"project_id": project_id, "snapshot_id": internal_snapshot_id},
+                        ).scalar()
+                        or 0
+                    )
+
+                    # If the builder already ran using snapshot_at=imported_at, show inserted count for that run.
+                    if internal_snapshot_imported_at:
+                        internal_rrp_rows_inserted = (
+                            conn.execute(
+                                text(
+                                    """
+                                    SELECT COUNT(DISTINCT vendor_code_norm)::bigint
+                                    FROM rrp_snapshots
+                                    WHERE project_id = :project_id
+                                      AND source_file = 'internal_data_sync'
+                                      AND snapshot_at = :snapshot_at
+                                    """
+                                ),
+                                {"project_id": project_id, "snapshot_at": internal_snapshot_imported_at},
+                            ).scalar()
+                            or 0
+                        )
+
+                    # Recent Internal Data row errors related to RRP (best-effort preview for UX).
+                    try:
+                        err_rows = (
+                            conn.execute(
+                                text(
+                                    """
+                                    SELECT
+                                      row_index,
+                                      source_key,
+                                      error_code,
+                                      message,
+                                      created_at
+                                    FROM internal_data_row_errors
+                                    WHERE project_id = :project_id
+                                      AND snapshot_id = :snapshot_id
+                                      AND (
+                                        message ILIKE '%rrp%'
+                                        OR COALESCE(source_key, '') ILIKE '%rrp%'
+                                      )
+                                    ORDER BY created_at DESC NULLS LAST, row_index DESC
+                                    LIMIT 20
+                                    """
+                                ),
+                                {"project_id": project_id, "snapshot_id": internal_snapshot_id},
+                            )
+                            .mappings()
+                            .all()
+                        )
+                        internal_rrp_errors_preview = [
+                            {
+                                "row_index": int(r.get("row_index")) if r.get("row_index") is not None else None,
+                                "source_key": r.get("source_key"),
+                                "error_code": r.get("error_code"),
+                                "message": r.get("message"),
+                                "created_at": r["created_at"].isoformat() if r.get("created_at") else None,
+                            }
+                            for r in (err_rows or [])
+                        ]
+                    except Exception:
+                        internal_rrp_errors_preview = []
                 
                 # Check how many products have both RRP and showcase prices
                 products_with_both = conn.execute(
@@ -955,11 +1098,25 @@ async def get_wb_price_discrepancies(
                         "brand_id_configured": brand_id_value is not None,
                         "brand_id": brand_id_value,
                         "rrp_snapshots_count": rrp_count,
+                        "rrp_snapshots_latest_snapshot_at": rrp_latest_snapshot_at.isoformat() if rrp_latest_snapshot_at else None,
                         "price_snapshots_count": price_count,
                         "products_count": products_count,
                         "frontend_catalog_price_snapshots_count": frontend_count,
                         "stock_snapshots_count": stock_count,
                         "products_with_both_rrp_and_showcase": products_with_both,
+                        "internal_data_latest_snapshot": {
+                            "id": internal_snapshot_id,
+                            "imported_at": internal_snapshot_imported_at.isoformat() if internal_snapshot_imported_at else None,
+                            "status": internal_snapshot_status,
+                            "rows_imported": internal_snapshot_rows_imported,
+                            "rows_failed": internal_snapshot_rows_failed,
+                        }
+                        if internal_snapshot_id is not None
+                        else None,
+                        "internal_data_rrp_rows_found": int(internal_rrp_rows_found or 0),
+                        "internal_data_rrp_rows_matched_products": int(internal_rrp_rows_matched_products or 0),
+                        "internal_data_rrp_rows_inserted": int(internal_rrp_rows_inserted or 0),
+                        "internal_data_rrp_errors_preview": internal_rrp_errors_preview,
                     },
                     "issues": [],
                     "recommendations": [],
@@ -972,7 +1129,16 @@ async def get_wb_price_discrepancies(
                 
                 if rrp_count == 0:
                     diagnostic_info["issues"].append("No RRP snapshots found")
-                    diagnostic_info["recommendations"].append("Run RRP XML ingestion: POST /api/v1/projects/{project_id}/ingest/run with domain='rrp_xml'")
+                    if int(internal_rrp_rows_found or 0) > 0:
+                        diagnostic_info["recommendations"].append(
+                            "Build RRP snapshots from Internal Data: "
+                            "POST /api/v1/projects/{project_id}/ingest/run with domain='build_rrp_snapshots'"
+                        )
+                    else:
+                        diagnostic_info["recommendations"].append(
+                            "Import Internal Data with RRP prices (configure mapping_json.fields.rrp) "
+                            "and then build snapshots: domain='build_rrp_snapshots'"
+                        )
                 
                 if frontend_count == 0 and brand_check and brand_check.get("brand_id"):
                     diagnostic_info["issues"].append("No frontend catalog price snapshots found")

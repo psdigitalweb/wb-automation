@@ -168,6 +168,9 @@ def _parse_downloaded_file(download: DownloadResult) -> Any:
 def sync_now(project_id: int) -> Dict[str, Any]:
     """Run Internal Data sync: download current source, parse, and persist snapshot."""
     started_at = datetime.utcnow()
+    import time as time_module
+    import os
+    t0 = time_module.perf_counter()
     # get_or_create_settings is called inside _load_source_for_project as well,
     # but we need the settings row here to update sync status.
     settings = get_or_create_settings(project_id)
@@ -179,10 +182,18 @@ def sync_now(project_id: int) -> Dict[str, Any]:
         )
 
     try:
+        t_load_start = time_module.perf_counter()
         source_info = _load_source_for_project(project_id)
         download = source_info.download
         settings = source_info.settings
         source_mode = settings.get("source_mode")
+        t_load_s = time_module.perf_counter() - t_load_start
+
+        file_size_bytes = None
+        try:
+            file_size_bytes = os.path.getsize(download.path)
+        except Exception:
+            file_size_bytes = None
 
         # Diagnostic logging: mapping configuration
         mapping_json = settings.get("mapping_json") or {}
@@ -203,6 +214,7 @@ def sync_now(project_id: int) -> Dict[str, Any]:
                 f"internal_sku.transforms={sku_spec.get('transforms', [])}"
             )
 
+        t_parse_start = time_module.perf_counter()
         if use_mapping:
             # Mapping-based pipeline: stream raw rows and apply mapping.
             fmt = (download.file_format or settings.get("file_format") or "").lower()
@@ -264,8 +276,10 @@ def sync_now(project_id: int) -> Dict[str, Any]:
             error_summary = None
             errors_for_db = []
             errors_preview = []
+        t_parse_s = time_module.perf_counter() - t_parse_start
 
         # Create snapshot and persist rows/errors in a single transaction
+        t_snapshot_start = time_module.perf_counter()
         snapshot, row_count = create_snapshot_with_rows(
             project_id,
             settings_row=settings,
@@ -282,24 +296,55 @@ def sync_now(project_id: int) -> Dict[str, Any]:
             error_summary=error_summary,
             row_errors=errors_for_db if use_mapping else None,
         )
+        t_snapshot_s = time_module.perf_counter() - t_snapshot_start
+        t_total_s = time_module.perf_counter() - t0
         
         update_sync_result(settings["id"], status=status, error=error_summary)
         finished_at = datetime.utcnow()
+
+        logger.info(
+            "[Internal Data sync timings] project_id=%s settings_id=%s source_mode=%s fmt=%s "
+            "path=%s file_size_bytes=%s use_mapping=%s rows_total=%s rows_imported=%s rows_failed=%s "
+            "t_load_s=%.3f t_parse_s=%.3f t_snapshot_s=%.3f t_total_s=%.3f",
+            project_id,
+            settings.get("id"),
+            source_mode,
+            (download.file_format or settings.get("file_format")),
+            download.path,
+            file_size_bytes,
+            use_mapping,
+            rows_total if use_mapping else None,
+            rows_imported if use_mapping else row_count,
+            rows_failed if use_mapping else 0,
+            t_load_s,
+            t_parse_s,
+            t_snapshot_s,
+            t_total_s,
+        )
         
-        # Post-sync hook: Sync Internal Data RRP to rrp_snapshots
-        # This ensures price discrepancies report has RRP data after Internal Data sync
-        if status == "success":
+        # Post-sync hook: Build Internal Data RRP -> rrp_snapshots
+        # This ensures price discrepancies report has RRP data after Internal Data sync.
+        #
+        # Important: allow 'partial' (mapping pipeline may skip bad rows but still import data).
+        rrp_sync_stats = None
+        effective_rows_imported = rows_imported if use_mapping else row_count
+        if status in ("success", "partial") and (effective_rows_imported or 0) > 0:
             try:
                 from app.services.internal_data.sync_rrp import sync_internal_data_to_rrp_snapshots
-                sync_stats = sync_internal_data_to_rrp_snapshots(project_id)
+
+                rrp_sync_stats = sync_internal_data_to_rrp_snapshots(project_id)
                 logger.info(
-                    f"sync_internal_data: post-sync RRP sync completed for project_id={project_id} "
-                    f"rows_synced={sync_stats.get('rows_synced', 0)}"
+                    "sync_internal_data: post-sync RRP build completed "
+                    "project_id=%s rows_inserted=%s rows_found_rrp=%s snapshot_id=%s",
+                    project_id,
+                    (rrp_sync_stats or {}).get("rows_inserted", 0),
+                    (rrp_sync_stats or {}).get("rows_found_rrp", 0),
+                    (rrp_sync_stats or {}).get("snapshot_id"),
                 )
             except Exception as e:
-                # Don't fail the sync if RRP sync fails
+                # Don't fail the sync if RRP build fails
                 logger.warning(
-                    f"sync_internal_data: post-sync RRP sync failed for project_id={project_id}: {e}",
+                    f"sync_internal_data: post-sync RRP build failed for project_id={project_id}: {e}",
                     exc_info=True,
                 )
         
@@ -315,6 +360,55 @@ def sync_now(project_id: int) -> Dict[str, Any]:
             "rows_failed": rows_failed if use_mapping else None,
             "errors_preview": errors_preview if use_mapping and errors_preview else None,
             "error": error_summary,
+            "rrp_sync": rrp_sync_stats,
+            "started_at": started_at,
+            "finished_at": finished_at,
+        }
+    except FileNotFoundError as exc:
+        msg = (
+            "Uploaded Internal Data file was not found on server. "
+            "This usually means INTERNAL_DATA_DIR is not persistent/mounted into the api container."
+        )
+        logger.error(
+            "[Internal Data sync] file not found: project_id=%s error=%s",
+            project_id,
+            exc,
+            exc_info=True,
+        )
+        if settings.get("id"):
+            update_sync_result(settings["id"], status="error", error=msg)
+        finished_at = datetime.utcnow()
+        return {
+            "status": "error",
+            "snapshot_id": None,
+            "project_id": project_id,
+            "version": None,
+            "row_count": None,
+            "error": msg,
+            "started_at": started_at,
+            "finished_at": finished_at,
+        }
+    except PermissionError as exc:
+        msg = (
+            "Internal Data storage path is not accessible (permission denied). "
+            "Please contact administrator (check INTERNAL_DATA_DIR and container volume permissions)."
+        )
+        logger.error(
+            "[Internal Data sync] permission error: project_id=%s error=%s",
+            project_id,
+            exc,
+            exc_info=True,
+        )
+        if settings.get("id"):
+            update_sync_result(settings["id"], status="error", error=msg)
+        finished_at = datetime.utcnow()
+        return {
+            "status": "error",
+            "snapshot_id": None,
+            "project_id": project_id,
+            "version": None,
+            "row_count": None,
+            "error": msg,
             "started_at": started_at,
             "finished_at": finished_at,
         }

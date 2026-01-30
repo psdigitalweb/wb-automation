@@ -64,13 +64,72 @@ async def _wrap_ingest_prices(project_id: int, run_id: int) -> Dict[str, Any]:
 
 async def _wrap_ingest_products(project_id: int, run_id: int) -> Dict[str, Any]:
     await _ingest_products(project_id, loop_delay_s=0)
-    return {
+    stats: Dict[str, Any] = {
         "ok": True,
         "scope": "project",
         "project_id": project_id,
         "domain": "products",
         "finished_at": datetime.utcnow().isoformat(),
     }
+
+    # Optional chaining: after products ingestion, build RRP snapshots from Internal Data.
+    # This covers the common order on fresh DBs: Internal Data already imported, then products arrive.
+    try:
+        from sqlalchemy import text
+        from app.db import engine
+        from app.services.ingest import runs as runs_service
+        from app.tasks.ingest_execute import execute_ingest as execute_ingest_task
+
+        with engine.connect() as conn:
+            has_internal_rrp = conn.execute(
+                text(
+                    """
+                    SELECT COUNT(*)::bigint
+                    FROM internal_product_prices ipp
+                    JOIN internal_data_snapshots ids ON ids.id = ipp.snapshot_id
+                    WHERE ids.project_id = :project_id
+                      AND ids.status IN ('success', 'partial')
+                      AND ipp.rrp IS NOT NULL
+                    LIMIT 1
+                    """
+                ),
+                {"project_id": project_id},
+            ).scalar() or 0
+
+        if int(has_internal_rrp) > 0:
+            if not runs_service.has_active_run(
+                project_id=project_id,
+                marketplace_code="internal",
+                job_code="build_rrp_snapshots",
+            ):
+                build_run = runs_service.create_run_queued(
+                    project_id=project_id,
+                    marketplace_code="internal",
+                    job_code="build_rrp_snapshots",
+                    schedule_id=None,
+                    triggered_by="chained",
+                    params_json={
+                        "chained_from_job": "products",
+                        "chained_from_run_id": int(run_id),
+                    },
+                )
+                build_run_id = int(build_run["id"])
+                res = execute_ingest_task.delay(build_run_id)
+                runs_service.set_run_celery_task_id(build_run_id, res.id)
+                stats["chained_build_rrp_snapshots_run_id"] = build_run_id
+            else:
+                stats["chained_build_rrp_snapshots_skipped"] = "already_running_or_queued"
+        else:
+            stats["chained_build_rrp_snapshots_skipped"] = "no_internal_rrp_rows"
+    except Exception as e:
+        # Best-effort: do not fail products ingestion if chaining fails.
+        logger.warning(
+            f"products: failed to chain build_rrp_snapshots for project_id={project_id} run_id={run_id}: {e}",
+            exc_info=True,
+        )
+        stats["chained_build_rrp_snapshots_error"] = f"{type(e).__name__}: {e}"
+
+    return stats
 
 
 async def _wrap_ingest_supplier_stocks(project_id: int, run_id: int) -> Dict[str, Any]:
@@ -316,6 +375,27 @@ async def _wrap_rrp_xml(project_id: int, run_id: int) -> Dict[str, Any]:
     }
 
 
+async def _wrap_build_rrp_snapshots(project_id: int, run_id: int) -> Dict[str, Any]:
+    """Build RRP snapshots from Internal Data.
+
+    This is the preferred production workflow (no dependency on local XML files).
+    """
+    from app.services.internal_data.sync_rrp import sync_internal_data_to_rrp_snapshots
+
+    result = sync_internal_data_to_rrp_snapshots(project_id=project_id)
+    return {
+        # Treat as ok=True even if data is missing; surface details in `result.errors`.
+        # This mirrors other ingestion jobs that may legitimately produce 0 rows.
+        "ok": True,
+        "scope": "project",
+        "project_id": project_id,
+        "domain": "build_rrp_snapshots",
+        "had_errors": bool((result or {}).get("errors")),
+        "result": result,
+        "finished_at": datetime.utcnow().isoformat(),
+    }
+
+
 async def _wrap_build_tax_statement(project_id: int, run_id: int) -> Dict[str, Any]:
     """Wrapper for build_tax_statement job.
     
@@ -486,6 +566,13 @@ _JOB_DEFINITIONS: Dict[str, JobDefinition] = {
         "supports_schedule": True,
         "supports_manual": True,
     },
+    "build_rrp_snapshots": {
+        "job_code": "build_rrp_snapshots",
+        "title": "Построение RRP snapshots (из Internal Data)",
+        "source_code": "internal",
+        "supports_schedule": True,
+        "supports_manual": True,
+    },
     "build_tax_statement": {
         "job_code": "build_tax_statement",
         "title": "Расчёт налогового отчёта",
@@ -506,6 +593,7 @@ _REGISTRY: Dict[Tuple[str, str], RunCallable] = {
     ("wildberries", "frontend_prices"): _wrap_frontend_prices,
     ("wildberries", "wb_finances"): _wrap_wb_finances,
     ("internal", "rrp_xml"): _wrap_rrp_xml,
+    ("internal", "build_rrp_snapshots"): _wrap_build_rrp_snapshots,
     ("internal", "build_tax_statement"): _wrap_build_tax_statement,
 }
 

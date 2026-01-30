@@ -12,6 +12,55 @@ from typing import Any, Dict
 from app.celery_app import celery_app
 
 
+def _get_frontend_prices_proxy_config(project_id: int) -> tuple[str | None, str | None]:
+    """Return (proxy_url, proxy_scheme) for frontend_prices only.
+
+    Safety:
+    - Raises on misconfiguration when enabled (to avoid silent non-proxy runs).
+    - Does NOT include host/user/pass in exception messages.
+    """
+    from urllib.parse import quote
+
+    from app.db_project_proxy_settings import get_project_proxy_settings
+    from app.utils.proxy_secrets_encryption import decrypt_proxy_secret
+
+    proxy_settings = get_project_proxy_settings(int(project_id))
+    enabled = bool(proxy_settings and proxy_settings.get("enabled"))
+    if not enabled:
+        return None, None
+
+    scheme = (proxy_settings.get("scheme") or "http").strip().lower()
+    host = (proxy_settings.get("host") or "").strip()
+    port = int(proxy_settings.get("port") or 0)
+    rotate_mode = (proxy_settings.get("rotate_mode") or "fixed").strip().lower()
+
+    if rotate_mode != "fixed":
+        raise ValueError("proxy_invalid_rotate_mode")
+    if scheme not in ("http", "https"):
+        raise ValueError("proxy_invalid_scheme")
+    if not host:
+        raise ValueError("proxy_host_required")
+    if port < 1 or port > 65535:
+        raise ValueError("proxy_invalid_port")
+
+    username = proxy_settings.get("username")
+    password_plain: str | None = None
+    if proxy_settings.get("password_encrypted"):
+        password_plain = decrypt_proxy_secret(proxy_settings["password_encrypted"])
+
+    auth = ""
+    if username is not None and str(username) != "":
+        user_escaped = quote(str(username), safe="")
+        if password_plain is not None and str(password_plain) != "":
+            pass_escaped = quote(str(password_plain), safe="")
+            auth = f"{user_escaped}:{pass_escaped}@"
+        else:
+            auth = f"{user_escaped}@"
+
+    proxy_url = f"{scheme}://{auth}{host}:{port}"
+    return proxy_url, scheme
+
+
 @celery_app.task(name="app.tasks.ingestion.prices")
 def ingest_prices_task(project_id: int) -> Dict[str, Any]:
     from app.ingest_prices import ingest_prices as _ingest_prices
@@ -176,11 +225,15 @@ def ingest_frontend_prices_task(project_id: int, run_id: int | None = None) -> D
     if max_pages > 0:
         max_pages = min(max_pages, 50)
 
+    # Project-scoped proxy settings (applies ONLY to frontend_prices)
+    proxy_url, proxy_scheme = _get_frontend_prices_proxy_config(int(project_id))
+
     print(
         "ingest_frontend_prices_task: "
         f"project_id={project_id} brand_id={brand_id} run_id={run_id} "
         f"base_url_template={'set' if (base_url_template and str(base_url_template).strip()) else 'none'} "
-        f"max_pages={max_pages} sleep_ms={sleep_ms} sleep_jitter_ms={sleep_jitter_ms}"
+        f"max_pages={max_pages} sleep_ms={sleep_ms} sleep_jitter_ms={sleep_jitter_ms} "
+        f"proxy_used={'yes' if proxy_url else 'no'} proxy_scheme={proxy_scheme or 'none'}"
     )
 
     # Determine run_started_at for stable snapshot buckets (hourly) if run_id is provided.
@@ -200,6 +253,8 @@ def ingest_frontend_prices_task(project_id: int, run_id: int | None = None) -> D
             run_id=run_id,
             project_id=project_id,
             run_started_at=run_started_at,
+            proxy_url=proxy_url,
+            proxy_scheme=proxy_scheme,
         )
     )
 

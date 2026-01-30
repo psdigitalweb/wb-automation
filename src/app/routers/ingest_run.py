@@ -19,6 +19,7 @@ IngestDomain = Literal[
     "prices",
     "frontend_prices",
     "rrp_xml",
+    "build_rrp_snapshots",
 ]
 
 

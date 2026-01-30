@@ -29,6 +29,8 @@ from app.routers.ingest import router as ingest_router
 from app.routers.projects import router as projects_router
 from app.routers.marketplaces import router as marketplaces_router
 from app.routers.internal_data import router as internal_data_router
+# Project-scoped proxy settings (frontend_prices)
+from app.routers.project_proxy_settings import router as project_proxy_settings_router
 # Import category import endpoints (they register on the same router)
 import app.routers.internal_data_category_import  # noqa: F401
 from app.routers.cogs import router as cogs_router
@@ -67,6 +69,9 @@ app.include_router(marketplaces_router)
 
 # Internal Data router (project-scoped)
 app.include_router(internal_data_router)
+
+# Project proxy settings router (project-scoped)
+app.include_router(project_proxy_settings_router)
 
 # COGS router (project-scoped)
 app.include_router(cogs_router)
@@ -181,6 +186,38 @@ async def startup_event():
                 logger.error("=" * 80)
             elif encrypted_count > 0:
                 logger.info(f"Found {encrypted_count} encrypted token(s), PROJECT_SECRETS_KEY is available")
+    except ProgrammingError:
+        # Tables don't exist yet (migrations not applied)
+        pass
+    except Exception as e:
+        logger.warning(f"Security check failed: {e}")
+
+    try:
+        # Security check: PROJECT_PROXY_SECRET_KEY must be set if encrypted proxy passwords exist
+        from app.utils.proxy_secrets_encryption import has_project_proxy_secrets_key
+
+        with engine.connect() as conn:
+            result = conn.execute(
+                text(
+                    """
+                    SELECT COUNT(*) FROM project_proxy_settings
+                    WHERE password_encrypted IS NOT NULL AND password_encrypted != ''
+                    """
+                )
+            )
+            encrypted_count = result.scalar_one()
+            if encrypted_count > 0 and not has_project_proxy_secrets_key():
+                logger.error("=" * 80)
+                logger.error(
+                    "SECURITY WARNING: Encrypted proxy passwords found but PROJECT_PROXY_SECRET_KEY is not set!"
+                )
+                logger.error(f"Found {encrypted_count} encrypted password(s) in project_proxy_settings")
+                logger.error("PROJECT_PROXY_SECRET_KEY must be set to use/decrypt proxy passwords")
+                logger.error("=" * 80)
+            elif encrypted_count > 0:
+                logger.info(
+                    f"Found {encrypted_count} encrypted proxy password(s), PROJECT_PROXY_SECRET_KEY is available"
+                )
     except ProgrammingError:
         # Tables don't exist yet (migrations not applied)
         pass

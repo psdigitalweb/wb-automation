@@ -38,6 +38,9 @@ services:
     env_file: ../../.env
     environment:
       - PYTHONPATH=/app/src
+      # Where uploaded Internal Data files are stored inside container
+      # Must be writable and persistent (mounted volume below)
+      - INTERNAL_DATA_DIR=/data/internal_data
       # Bootstrap admin user on startup (only if users table is empty)
       # Set BOOTSTRAP_ADMIN=1 in .env to enable, along with BOOTSTRAP_ADMIN_USERNAME, BOOTSTRAP_ADMIN_PASSWORD, BOOTSTRAP_ADMIN_EMAIL
       # Default: disabled (0) for security
@@ -52,6 +55,8 @@ services:
       # Note: Docker Desktop may still resolve this to absolute path, causing mount issues
       # If you see "mkdir /run/desktop/mnt/host/d: file exists" error, restart Docker Desktop
       - ../../:/app:cached
+      # Persistent storage for Internal Data uploads (required on server)
+      - internal_data:/data/internal_data
       # test.xml уже доступен через основной volume ../../:/app, отдельное монтирование не требуется
     # Entrypoint waits for PostgreSQL, runs migrations (with advisory lock protection), then starts uvicorn
     entrypoint: ["python", "/app/scripts/docker-entrypoint.py"]
@@ -162,6 +167,8 @@ services:
 
 volumes:
   postgres_data:
+    driver: local
+  internal_data:
     driver: local
 
 networks:

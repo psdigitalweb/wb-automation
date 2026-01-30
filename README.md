@@ -43,6 +43,11 @@ POSTGRES_DB=wb
 POSTGRES_USER=wb
 POSTGRES_PASSWORD=wbpassword
 
+# Proxy password encryption key (OPTIONAL for dev, REQUIRED if proxy passwords are stored/encrypted)
+# Generate:
+#   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+PROJECT_PROXY_SECRET_KEY=
+
 # Auto-apply migrations in dev mode (OPTIONAL, recommended)
 # Если AUTO_MIGRATE=1, миграции применяются автоматически при старте API
 AUTO_MIGRATE=1

@@ -3,7 +3,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
-import { apiGet, apiPost, apiPut, apiDelete } from '../../../../../lib/apiClient'
+import { apiGet, apiPost, apiPut, apiDelete, getProjectProxySettings } from '../../../../../lib/apiClient'
 import type { ApiError } from '../../../../../lib/apiClient'
 import { usePageTitle } from '../../../../../hooks/usePageTitle'
 import s from './ingestion.module.css'
@@ -65,6 +65,7 @@ export default function ProjectIngestionPage() {
   usePageTitle('Управление загрузкой данных', projectId)
 
   const [activeTab, setActiveTab] = useState<TabKey>('schedules')
+  const [frontendPricesProxyEnabled, setFrontendPricesProxyEnabled] = useState(false)
 
   const [schedules, setSchedules] = useState<Schedule[]>([])
   const [loadingSchedules, setLoadingSchedules] = useState(false)
@@ -119,6 +120,13 @@ export default function ProjectIngestionPage() {
       loadRuns()
     }
   }, [activeTab, projectId])
+
+  useEffect(() => {
+    // proxy badge: best-effort
+    getProjectProxySettings(projectId)
+      .then((s) => setFrontendPricesProxyEnabled(!!s?.enabled))
+      .catch(() => setFrontendPricesProxyEnabled(false))
+  }, [projectId])
 
   useEffect(() => {
     loadJobs()
@@ -1272,7 +1280,25 @@ export default function ProjectIngestionPage() {
                     {schedules.map((s) => (
                       <tr key={s.id}>
                         <td>{s.marketplace_code}</td>
-                        <td>{s.job_code}</td>
+                        <td>
+                          {s.job_code}
+                          {s.job_code === 'frontend_prices' && frontendPricesProxyEnabled && (
+                            <span
+                              style={{
+                                display: 'inline-block',
+                                marginLeft: 6,
+                                padding: '2px 6px',
+                                borderRadius: '999px',
+                                backgroundColor: '#e0f2fe',
+                                color: '#0369a1',
+                                fontSize: 10,
+                                fontWeight: 600,
+                              }}
+                            >
+                              proxy
+                            </span>
+                          )}
+                        </td>
                         <td>
                           <div style={{ fontSize: 13, color: '#111827' }}>{cronToHuman(s.cron_expr)}</div>
                           <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>
@@ -1467,7 +1493,25 @@ export default function ProjectIngestionPage() {
                         <td>{formatDuration(r.duration_ms)}</td>
                         <td>{renderStatusBadge(r.status)}</td>
                         <td>{r.marketplace_code}</td>
-                        <td>{r.job_code}</td>
+                        <td>
+                          {r.job_code}
+                          {r.job_code === 'frontend_prices' && frontendPricesProxyEnabled && (
+                            <span
+                              style={{
+                                display: 'inline-block',
+                                marginLeft: 6,
+                                padding: '2px 6px',
+                                borderRadius: '999px',
+                                backgroundColor: '#e0f2fe',
+                                color: '#0369a1',
+                                fontSize: 10,
+                                fontWeight: 600,
+                              }}
+                            >
+                              proxy
+                            </span>
+                          )}
+                        </td>
                         <td>{r.triggered_by}</td>
                         <td>{renderStatsSummary(r.stats_json)}</td>
                         <td>

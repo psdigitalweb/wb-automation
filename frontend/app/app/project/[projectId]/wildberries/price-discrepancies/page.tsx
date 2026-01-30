@@ -41,11 +41,29 @@ interface DiagnosticInfo {
     brand_id_configured: boolean
     brand_id: number | null
     rrp_snapshots_count: number
+    rrp_snapshots_latest_snapshot_at?: string | null
     price_snapshots_count: number
     products_count: number
     frontend_catalog_price_snapshots_count: number
     stock_snapshots_count: number
     products_with_both_rrp_and_showcase: number
+    internal_data_latest_snapshot?: {
+      id: number | null
+      imported_at: string | null
+      status: string | null
+      rows_imported: number | null
+      rows_failed: number | null
+    } | null
+    internal_data_rrp_rows_found?: number
+    internal_data_rrp_rows_matched_products?: number
+    internal_data_rrp_rows_inserted?: number
+    internal_data_rrp_errors_preview?: Array<{
+      row_index: number | null
+      source_key: string | null
+      error_code: string | null
+      message: string | null
+      created_at: string | null
+    }>
   }
   issues: string[]
   recommendations: string[]
@@ -653,6 +671,9 @@ export default function WbPriceDiscrepanciesPage() {
   const [diagnosing, setDiagnosing] = useState(false)
   const [diagnosticMessage, setDiagnosticMessage] = useState<string | null>(null)
   const [diagnosticInfo, setDiagnosticInfo] = useState<DiagnosticInfo | null>(null)
+  const [buildingRrp, setBuildingRrp] = useState(false)
+  const [rrpBuildMessage, setRrpBuildMessage] = useState<string | null>(null)
+  const [reloadToken, setReloadToken] = useState(0)
 
   const filters = useMemo(
     () => parseFiltersFromSearchParams(searchParams),
@@ -737,7 +758,7 @@ export default function WbPriceDiscrepanciesPage() {
     return () => {
       cancelled = true
     }
-  }, [projectId, filters])
+  }, [projectId, filters, reloadToken])
 
   useEffect(() => {
     let cancelled = false
@@ -793,6 +814,32 @@ export default function WbPriceDiscrepanciesPage() {
     }
   }
 
+  const handleBuildRrpSnapshots = async () => {
+    setBuildingRrp(true)
+    setRrpBuildMessage(null)
+    setError(null)
+    try {
+      const { data: resp } = await apiPost<{ task_id: string; run_id: number | null; domain: string; status: string }>(
+        `/api/v1/projects/${projectId}/ingest/run`,
+        { domain: 'build_rrp_snapshots' },
+      )
+      setRrpBuildMessage(
+        `Построение RRP snapshots запущено (run_id: ${resp.run_id ?? '—'}, task_id: ${resp.task_id}). ` +
+          `Обновление данных может занять 10–60 секунд.`,
+      )
+      // Trigger a couple of reload attempts (best-effort, without polling UI complexity)
+      window.setTimeout(() => setReloadToken((x) => x + 1), 2500)
+      window.setTimeout(() => setReloadToken((x) => x + 1), 8000)
+      window.setTimeout(() => setReloadToken((x) => x + 1), 20000)
+      window.setTimeout(() => setRrpBuildMessage(null), 15000)
+    } catch (e: any) {
+      console.error('Failed to trigger build_rrp_snapshots', e)
+      setError(e?.detail || e?.message || 'Не удалось запустить построение RRP snapshots')
+    } finally {
+      setBuildingRrp(false)
+    }
+  }
+
   return (
     <div className="container">
       <h1>Расхождения цен (РРЦ vs витрина WB)</h1>
@@ -837,9 +884,58 @@ export default function WbPriceDiscrepanciesPage() {
                     RRP snapshots: {diagnosticInfo.data_availability.rrp_snapshots_count}
                   </strong>
                 </li>
+                {diagnosticInfo.data_availability.rrp_snapshots_latest_snapshot_at && (
+                  <li>
+                    Последний RRP snapshot:{' '}
+                    {formatDate(diagnosticInfo.data_availability.rrp_snapshots_latest_snapshot_at)}
+                  </li>
+                )}
                 <li>Products with both RRP and showcase: {diagnosticInfo.data_availability.products_with_both_rrp_and_showcase}</li>
               </ul>
             </div>
+
+            {diagnosticInfo.data_availability.internal_data_latest_snapshot && (
+              <div style={{ marginBottom: 12 }}>
+                <strong>Internal Data (источник РРЦ):</strong>
+                <ul style={{ marginTop: 4, marginBottom: 0, paddingLeft: 20 }}>
+                  <li>
+                    Последний snapshot: #{diagnosticInfo.data_availability.internal_data_latest_snapshot.id}{' '}
+                    ({diagnosticInfo.data_availability.internal_data_latest_snapshot.status || '—'}) —{' '}
+                    {formatDate(diagnosticInfo.data_availability.internal_data_latest_snapshot.imported_at || undefined)}
+                  </li>
+                  {typeof diagnosticInfo.data_availability.internal_data_rrp_rows_found === 'number' && (
+                    <li>RRP строк (найдено): {diagnosticInfo.data_availability.internal_data_rrp_rows_found}</li>
+                  )}
+                  {typeof diagnosticInfo.data_availability.internal_data_rrp_rows_matched_products === 'number' && (
+                    <li>
+                      Матчится с products.vendor_code_norm:{' '}
+                      {diagnosticInfo.data_availability.internal_data_rrp_rows_matched_products}
+                    </li>
+                  )}
+                  {typeof diagnosticInfo.data_availability.internal_data_rrp_rows_inserted === 'number' && (
+                    <li>
+                      Уже вставлено в rrp_snapshots (для этого snapshot):{' '}
+                      {diagnosticInfo.data_availability.internal_data_rrp_rows_inserted}
+                    </li>
+                  )}
+                </ul>
+              </div>
+            )}
+
+            {diagnosticInfo.data_availability.internal_data_rrp_errors_preview &&
+              diagnosticInfo.data_availability.internal_data_rrp_errors_preview.length > 0 && (
+                <div style={{ marginBottom: 12 }}>
+                  <strong>Ошибки парсинга/валидации RRP (превью):</strong>
+                  <ul style={{ marginTop: 4, marginBottom: 0, paddingLeft: 20 }}>
+                    {diagnosticInfo.data_availability.internal_data_rrp_errors_preview.slice(0, 5).map((e, idx) => (
+                      <li key={idx}>
+                        {e.message || '—'}
+                        {e.row_index !== null && e.row_index !== undefined ? ` (row ${e.row_index})` : ''}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             
             {diagnosticInfo.issues.length > 0 && (
               <div style={{ marginBottom: 12 }}>
@@ -894,6 +990,16 @@ export default function WbPriceDiscrepanciesPage() {
             >
               {diagnosing ? 'Запуск...' : 'Собрать отчёт'}
             </button>
+            {diagnosticInfo?.data_availability?.rrp_snapshots_count === 0 && (
+              <button
+                type="button"
+                onClick={handleBuildRrpSnapshots}
+                disabled={buildingRrp}
+                style={{ minWidth: 190 }}
+              >
+                {buildingRrp ? 'Запуск...' : 'Построить RRP snapshots'}
+              </button>
+            )}
             <button type="button" onClick={handleExportCsv}>
               Экспорт CSV
             </button>
@@ -911,6 +1017,20 @@ export default function WbPriceDiscrepanciesPage() {
             }}
           >
             {diagnosticMessage}
+          </div>
+        )}
+        {rrpBuildMessage && (
+          <div
+            style={{
+              marginTop: 12,
+              padding: 12,
+              background: '#dbeafe',
+              border: '1px solid #60a5fa',
+              borderRadius: 4,
+              fontSize: 14,
+            }}
+          >
+            {rrpBuildMessage}
           </div>
         )}
       </div>

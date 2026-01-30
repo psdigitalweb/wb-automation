@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import logging
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Path, Query, UploadFile, status
@@ -59,6 +60,7 @@ from app.services.internal_data.service import (
 
 
 router = APIRouter(prefix="/api/v1", tags=["internal-data"])
+logger = logging.getLogger(__name__)
 
 
 def _settings_to_response(project_id: int, settings: Optional[dict]) -> InternalDataSettingsResponse:
@@ -217,8 +219,22 @@ async def upload_internal_data_file_endpoint(
 
     from app.settings import INTERNAL_DATA_DIR
     import os
+    import time
 
-    os.makedirs(INTERNAL_DATA_DIR, exist_ok=True)
+    started = time.perf_counter()
+    try:
+        os.makedirs(INTERNAL_DATA_DIR, exist_ok=True)
+    except PermissionError as exc:
+        logger.error(
+            "[Internal Data upload] cannot create base dir: INTERNAL_DATA_DIR=%s error=%s",
+            INTERNAL_DATA_DIR,
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Upload storage is not writable. Please contact administrator (check INTERNAL_DATA_DIR volume/permissions).",
+        ) from exc
 
     from datetime import datetime
 
@@ -230,14 +246,71 @@ async def upload_internal_data_file_endpoint(
         storage_key += f".{ext}"
 
     dest_path = os.path.join(INTERNAL_DATA_DIR, storage_key)
-    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+    try:
+        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+    except PermissionError as exc:
+        logger.error(
+            "[Internal Data upload] cannot create dest dir: dest_path=%s error=%s",
+            dest_path,
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Upload storage is not writable. Please contact administrator (check INTERNAL_DATA_DIR volume/permissions).",
+        ) from exc
 
-    with open(dest_path, "wb") as f:
-        while True:
-            chunk = await file.read(65536)
-            if not chunk:
-                break
-            f.write(chunk)
+    total_bytes = 0
+    try:
+        with open(dest_path, "wb") as f:
+            while True:
+                chunk = await file.read(65536)
+                if not chunk:
+                    break
+                total_bytes += len(chunk)
+                f.write(chunk)
+    except PermissionError as exc:
+        logger.error(
+            "[Internal Data upload] permission error while writing: dest_path=%s bytes=%s error=%s",
+            dest_path,
+            total_bytes,
+            exc,
+            exc_info=True,
+        )
+        try:
+            if os.path.exists(dest_path):
+                os.remove(dest_path)
+        except Exception:
+            pass
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to save uploaded file (permission denied). Please contact administrator.",
+        ) from exc
+    except OSError as exc:
+        logger.error(
+            "[Internal Data upload] os error while writing: dest_path=%s bytes=%s error=%s",
+            dest_path,
+            total_bytes,
+            exc,
+            exc_info=True,
+        )
+        try:
+            if os.path.exists(dest_path):
+                os.remove(dest_path)
+        except Exception:
+            pass
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to save uploaded file. Please contact administrator.",
+        ) from exc
+
+    if total_bytes <= 0:
+        try:
+            if os.path.exists(dest_path):
+                os.remove(dest_path)
+        except Exception:
+            pass
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty")
 
     file_format = ext or None
     settings = upsert_internal_data_settings(
@@ -251,6 +324,16 @@ async def upload_internal_data_file_endpoint(
     )
 
     uploaded_at = datetime.utcnow()
+    duration_s = time.perf_counter() - started
+    logger.info(
+        "[Internal Data upload] project_id=%s filename=%s bytes=%s storage_key=%s dest_path=%s duration_s=%.3f",
+        project_id,
+        file.filename,
+        total_bytes,
+        storage_key,
+        dest_path,
+        duration_s,
+    )
     return InternalDataUploadResponse(
         settings=_settings_to_response(project_id, settings),
         uploaded_at=uploaded_at,

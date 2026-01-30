@@ -365,3 +365,55 @@ export async function runWBIngest(
   )
   return res.data
 }
+
+// --- Project proxy settings (frontend_prices) ---
+
+export type ProjectProxySettings = {
+  enabled: boolean
+  scheme: 'http' | 'https' | string
+  host: string
+  port: number
+  username: string | null
+  rotate_mode: 'fixed' | string
+  test_url: string
+  last_test_at: string | null
+  last_test_ok: boolean | null
+  last_test_error: string | null
+  password_set: boolean
+}
+
+export type ProjectProxySettingsUpdate = {
+  enabled?: boolean
+  scheme?: 'http' | 'https' | string
+  host?: string
+  port?: number
+  username?: string | null
+  rotate_mode?: 'fixed' | string
+  test_url?: string
+  password?: string
+}
+
+export type ProjectProxyTestResponse = {
+  ok: boolean
+  error?: string | null
+  status_code?: number | null
+  elapsed_ms?: number | null
+}
+
+export async function getProjectProxySettings(projectId: string): Promise<ProjectProxySettings> {
+  const res = await apiGet<ProjectProxySettings>(`/api/v1/projects/${projectId}/settings/proxy`)
+  return res.data
+}
+
+export async function updateProjectProxySettings(
+  projectId: string,
+  payload: ProjectProxySettingsUpdate
+): Promise<ProjectProxySettings> {
+  const res = await apiPut<ProjectProxySettings>(`/api/v1/projects/${projectId}/settings/proxy`, payload)
+  return res.data
+}
+
+export async function testProjectProxySettings(projectId: string): Promise<ProjectProxyTestResponse> {
+  const res = await apiPost<ProjectProxyTestResponse>(`/api/v1/projects/${projectId}/settings/proxy/test`, {})
+  return res.data
+}
