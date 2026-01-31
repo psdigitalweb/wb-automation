@@ -169,6 +169,22 @@ class WBFinancesIngestRequest(BaseModel):
     date_to: str = Field(..., description="End date in format YYYY-MM-DD")
 
 
+class WBFinancesEventsBuildRequest(BaseModel):
+    """Request body for building WB financial events from raw lines."""
+
+    date_from: str = Field(..., description="Start date in format YYYY-MM-DD")
+    date_to: str = Field(..., description="End date in format YYYY-MM-DD")
+
+
+class WBFinancesEventsBuildResponse(BaseModel):
+    """Response for WB financial events build start."""
+
+    status: str = Field(..., description="e.g. started")
+    task_id: Optional[str] = Field(None, description="Celery task identifier")
+    date_from: str = Field(..., description="Requested start date")
+    date_to: str = Field(..., description="Requested end date")
+
+
 class WBFinancesIngestResponse(BaseModel):
     """Response for WB finances ingestion start."""
 

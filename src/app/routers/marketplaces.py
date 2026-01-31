@@ -38,6 +38,8 @@ from app.schemas.marketplaces import (
     WBMarketplaceUpdate,
     WBFinancesIngestRequest,
     WBFinancesIngestResponse,
+    WBFinancesEventsBuildRequest,
+    WBFinancesEventsBuildResponse,
     WBFinanceReportResponse,
     SystemMarketplacePublicStatus,
 )
@@ -911,6 +913,54 @@ async def start_wb_finances_ingest(
         )
 
     return WBFinancesIngestResponse(
+        status="started",
+        task_id=getattr(result, "id", None),
+        date_from=body.date_from,
+        date_to=body.date_to,
+    )
+
+
+@router.post(
+    "/projects/{project_id}/marketplaces/wildberries/finances/events/build",
+    response_model=WBFinancesEventsBuildResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Build WB financial events",
+    description=(
+        "Enqueue Celery task to build wb_financial_events from raw wb_finance_report_lines. "
+        "Requires project membership."
+    ),
+)
+async def build_wb_finances_events(
+    body: WBFinancesEventsBuildRequest,
+    project_id: int = Path(..., description="Project ID"),
+    current_user: dict = Depends(get_current_active_user),
+    membership: dict = Depends(get_project_membership),
+):
+    """Build WB financial events from raw lines for date range."""
+    from app.tasks.wb_financial_events import build_wb_financial_events_task
+
+    try:
+        datetime.strptime(body.date_from, "%Y-%m-%d")
+        datetime.strptime(body.date_to, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid date format. Use YYYY-MM-DD",
+        )
+
+    try:
+        result = build_wb_financial_events_task.delay(
+            project_id=project_id,
+            date_from=body.date_from,
+            date_to=body.date_to,
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to start build task: {str(e)}",
+        )
+
+    return WBFinancesEventsBuildResponse(
         status="started",
         task_id=getattr(result, "id", None),
         date_from=body.date_from,
