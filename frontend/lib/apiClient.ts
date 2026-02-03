@@ -429,6 +429,9 @@ export interface WBSkuPnlItem {
   product_margin_pct?: number | null
   net_before_cogs_pct?: number | null
   wb_total_pct?: number | null
+  trips_cnt?: number
+  returns_cnt?: number
+  buyout_pct?: number | null
   gmv_per_unit?: number | null // deprecated alias
   profit_per_unit?: number | null // deprecated alias
   profit_unit?: number | null

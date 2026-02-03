@@ -306,6 +306,18 @@ class WBSkuPnlItem(BaseModel):
         default=None,
         description="WB total costs as % of GMV (percent points). NULL if gmv=0.",
     )
+    trips_cnt: int = Field(
+        default=0,
+        description="Trips count for period (delivery_rub rows, amount > 0)",
+    )
+    returns_cnt: int = Field(
+        default=0,
+        description="Returns count for period (sale_gmv rows with negative amount)",
+    )
+    buyout_pct: Optional[Decimal] = Field(
+        default=None,
+        description="Buyout % of trips (percent points): (trips_cnt - returns_cnt) / trips_cnt * 100. NULL if trips_cnt=0.",
+    )
     events_count: int = Field(..., description="Number of source events")
     wb_price_admin: Optional[float] = Field(
         default=None,

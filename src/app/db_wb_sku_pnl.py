@@ -362,7 +362,7 @@ def list_snapshot_rows(
             ),
             src_for_page AS (
                 -- Limit sources to just SKUs on this page, matched by normalized key.
-                SELECT
+                SELECT DISTINCT
                     NULLIF(regexp_replace(trim(both '/' from src.internal_sku), '^.*/', ''), '') AS sku_norm,
                     src.report_id
                 FROM wb_sku_pnl_snapshot_sources src
@@ -373,6 +373,38 @@ def list_snapshot_rows(
                   AND NULLIF(regexp_replace(trim(both '/' from src.internal_sku), '^.*/', ''), '') IN (
                       SELECT sku_norm FROM base_skus
                   )
+            ),
+            kpi_counts AS (
+                -- Counts for Details: trips (delivery_rub rows), returns (return rows), and buyout % of trips.
+                -- IMPORTANT: We intentionally align with snapshot sources (report_id list) to match SKU PnL period semantics.
+                SELECT
+                    sfp.sku_norm,
+                    COUNT(*) FILTER (
+                        WHERE e.event_type = 'delivery_fee'
+                          AND e.amount > 0
+                    ) AS trips_cnt,
+                    COUNT(*) FILTER (
+                        WHERE e.event_type = 'sale_gmv'
+                          AND e.amount < 0
+                    ) AS returns_cnt,
+                    CASE
+                        WHEN COUNT(*) FILTER (WHERE e.event_type = 'delivery_fee' AND e.amount > 0) > 0
+                            THEN (
+                                (
+                                    COUNT(*) FILTER (WHERE e.event_type = 'delivery_fee' AND e.amount > 0)
+                                    - COUNT(*) FILTER (WHERE e.event_type = 'sale_gmv' AND e.amount < 0)
+                                )::numeric
+                                / (COUNT(*) FILTER (WHERE e.event_type = 'delivery_fee' AND e.amount > 0))::numeric
+                                * 100
+                            )
+                        ELSE NULL
+                    END AS buyout_pct
+                FROM src_for_page sfp
+                JOIN wb_financial_events e
+                  ON e.project_id = :project_id
+                 AND e.report_id = sfp.report_id
+                 AND NULLIF(regexp_replace(trim(both '/' from e.internal_sku), '^.*/', ''), '') = sfp.sku_norm
+                GROUP BY sfp.sku_norm
             ),
             selling_price_by_sku AS (
                 -- Batched AVG(retail_price) per sku_norm for the current page only.
@@ -416,6 +448,9 @@ def list_snapshot_rows(
             with_rule AS (
                 SELECT
                     wp.*,
+                    kc.trips_cnt,
+                    kc.returns_cnt,
+                    kc.buyout_pct,
                     CASE
                         WHEN rule.mode = 'fixed' THEN rule.value
                         WHEN rule.mode = 'percent_of_price'
@@ -431,6 +466,8 @@ def list_snapshot_rows(
                         ELSE NULL
                     END AS cogs_per_unit
                 FROM with_prices wp
+                LEFT JOIN kpi_counts kc
+                  ON kc.sku_norm = wp.sku_norm
                 LEFT JOIN LATERAL (
                     SELECT r.mode, r.value, r.price_source_code
                     FROM cogs_direct_rules r
@@ -469,6 +506,9 @@ def list_snapshot_rows(
                 events_count,
                 wb_price_admin,
                 rrp_price,
+                trips_cnt,
+                returns_cnt,
+                buyout_pct,
                 cogs_per_unit
             FROM with_rule
             """
@@ -562,6 +602,9 @@ def list_snapshot_rows(
             "net_before_cogs": float(net_before_cogs_total_d),
             "net_before_cogs_pct": net_before_cogs_pct,
             "wb_total_pct": wb_total_pct,
+            "trips_cnt": int(r.get("trips_cnt") or 0),
+            "returns_cnt": int(r.get("returns_cnt") or 0),
+            "buyout_pct": r.get("buyout_pct"),
             "events_count": int(r["events_count"] or 0),
             "wb_commission_no_vat": wb_comm_no_vat,
             "wb_commission_vat": wb_comm_vat,

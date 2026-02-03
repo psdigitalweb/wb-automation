@@ -27,6 +27,10 @@ function formatQty(value: number): string {
   }).format(value)
 }
 
+function formatInt(value: number): string {
+  return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format(value)
+}
+
 function getDefaultPeriod(): { from: string; to: string } {
   const today = new Date()
   const first = new Date(today.getFullYear(), today.getMonth(), 1)
@@ -828,6 +832,39 @@ export default function WBSkuPnlPage() {
                                   ) : (
                                     <div style={{ color: '#666', fontSize: '13px' }}>Нет РРЦ или продаж для расчёта</div>
                                   )}
+                                </div>
+
+                                <div>
+                                  <h3
+                                    style={{
+                                      margin: '0 0 12px 0',
+                                      fontSize: '14px',
+                                      fontWeight: 600,
+                                      color: '#333',
+                                    }}
+                                  >
+                                    Доставка / возвраты
+                                  </h3>
+                                  <div style={{ display: 'grid', gap: '6px', fontSize: '13px' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
+                                      <span style={{ color: '#666' }}>Поездок до покупателя (delivery_rub)</span>
+                                      <span style={{ fontFamily: 'ui-monospace, monospace' }}>
+                                        {formatInt(row.trips_cnt ?? 0)}
+                                      </span>
+                                    </div>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
+                                      <span style={{ color: '#666' }}>Возвраты (строки)</span>
+                                      <span style={{ fontFamily: 'ui-monospace, monospace' }}>
+                                        {formatInt(row.returns_cnt ?? 0)}
+                                      </span>
+                                    </div>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
+                                      <span style={{ color: '#666' }}>% выкупа (от поездок)</span>
+                                      <span style={{ fontFamily: 'ui-monospace, monospace' }}>
+                                        {row.buyout_pct == null ? '—' : `${formatPct(row.buyout_pct)}%`}
+                                      </span>
+                                    </div>
+                                  </div>
                                 </div>
 
                                 {/* Секция: Источники данных (WB) */}
