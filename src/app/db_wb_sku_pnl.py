@@ -17,29 +17,6 @@ from app.services.wb_financial.sku_pnl_metrics import (
     wb_total_total_abs,
 )
 
-_DEBUG_LOG_PATH = r"d:\Work\EcomCore\.cursor\debug.log"
-
-
-def _dbg(hypothesis_id: str, location: str, message: str, data: Dict[str, Any], run_id: str = "pre-fix") -> None:
-    # NOTE: debug-mode NDJSON logger. Do not log secrets.
-    try:
-        import json
-        import time
-
-        payload = {
-            "sessionId": "debug-session",
-            "runId": run_id,
-            "hypothesisId": hypothesis_id,
-            "location": location,
-            "message": message,
-            "data": data,
-            "timestamp": int(time.time() * 1000),
-        }
-        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
-            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
-
 BATCH_SIZE = 2000
 
 def delete_snapshot(
@@ -259,25 +236,6 @@ def list_snapshot_rows(
     offset: int,
 ) -> tuple[List[Dict[str, Any]], int]:
     """List snapshot rows with filters. Returns (rows, total_count)."""
-    # region agent log
-    _dbg(
-        "H1",
-        "db_wb_sku_pnl.py:list_snapshot_rows:entry",
-        "Entering list_snapshot_rows",
-        {
-            "project_id": project_id,
-            "period_from": str(period_from),
-            "period_to": str(period_to),
-            "version": version,
-            "q_present": bool(q and q.strip()),
-            "subject_id": subject_id,
-            "sort": sort,
-            "order": order,
-            "limit": limit,
-            "offset": offset,
-        },
-    )
-    # endregion agent log
     where = """
         WHERE project_id = :project_id
           AND period_from = :period_from
@@ -327,15 +285,6 @@ def list_snapshot_rows(
     }.get(sort, net_before_cogs_norm_sql)
     dir_sql = "DESC" if order.lower() == "desc" else "ASC"
     order_clause = f"ORDER BY {sort_col} {dir_sql}"
-
-    # region agent log
-    _dbg(
-        "H1",
-        "db_wb_sku_pnl.py:list_snapshot_rows:sql",
-        "Computed order clause",
-        {"order_clause": order_clause, "sort_col": sort_col},
-    )
-    # endregion agent log
 
     # COGS as-of date is period_to (end of selected period)
     # NOTE: We compute rrp_price and wb_price_admin (selling price) in batched CTEs based on the
@@ -523,21 +472,7 @@ def list_snapshot_rows(
                 cogs_per_unit
             FROM with_rule
             """
-    try:
-        rows = conn.execute(text(sql), select_params).mappings().all()
-    except Exception as e:
-        # region agent log
-        _dbg(
-            "H1",
-            "db_wb_sku_pnl.py:list_snapshot_rows:sql_error",
-            "SQL execution failed",
-            {
-                "error": str(e),
-                "sql_tail": sql[-220:],
-            },
-        )
-        # endregion agent log
-        raise
+    rows = conn.execute(text(sql), select_params).mappings().all()
 
     count_row = conn.execute(
         text(f"SELECT COUNT(*) AS c FROM wb_sku_pnl_snapshots {where}"),
