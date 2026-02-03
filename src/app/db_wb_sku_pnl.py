@@ -290,7 +290,13 @@ def list_snapshot_rows(
         "internal_sku": "internal_sku",
     }.get(sort, net_before_cogs_norm_sql)
     dir_sql = "DESC" if order.lower() == "desc" else "ASC"
-    order_clause = f"ORDER BY {sort_col} {dir_sql}"
+    # IMPORTANT: We must apply ORDER BY in the final SELECT as well (Postgres does not guarantee
+    # that ordering inside a CTE is preserved after joins/aggregations).
+    # Add a deterministic tie-breaker to keep pagination stable.
+    if sort == "internal_sku":
+        order_clause = f"ORDER BY {sort_col} {dir_sql}"
+    else:
+        order_clause = f"ORDER BY {sort_col} {dir_sql}, internal_sku ASC"
 
     # COGS as-of date is period_to (end of selected period)
     # NOTE: We compute rrp_price and wb_price_admin (selling price) in batched CTEs based on the
@@ -564,6 +570,7 @@ def list_snapshot_rows(
                 buyout_pct,
                 cogs_per_unit
             FROM with_rule
+            {order_clause}
             """
     rows = conn.execute(text(sql), select_params).mappings().all()
 
