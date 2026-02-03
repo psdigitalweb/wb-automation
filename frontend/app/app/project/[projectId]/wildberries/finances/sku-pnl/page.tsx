@@ -847,13 +847,13 @@ export default function WBSkuPnlPage() {
                                   </h3>
                                   <div style={{ display: 'grid', gap: '6px', fontSize: '13px' }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
-                                      <span style={{ color: '#666' }}>Поездок до покупателя (delivery_rub)</span>
+                                      <span style={{ color: '#666' }}>Поездок до покупателя (Логистика → К клиенту при продаже)</span>
                                       <span style={{ fontFamily: 'ui-monospace, monospace' }}>
                                         {formatInt(row.trips_cnt ?? 0)}
                                       </span>
                                     </div>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
-                                      <span style={{ color: '#666' }}>Возвраты (строки)</span>
+                                      <span style={{ color: '#666' }}>Возвраты (Логистика → возвратные категории)</span>
                                       <span style={{ fontFamily: 'ui-monospace, monospace' }}>
                                         {formatInt(row.returns_cnt ?? 0)}
                                       </span>

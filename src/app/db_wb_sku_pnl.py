@@ -375,36 +375,85 @@ def list_snapshot_rows(
                   )
             ),
             kpi_counts AS (
-                -- Counts for Details: trips (delivery_rub rows), returns (return rows), and buyout % of trips.
-                -- IMPORTANT: We intentionally align with snapshot sources (report_id list) to match SKU PnL period semantics.
+                -- Counts for Details (payload-based, per user definition):
+                -- - Trips: supplier_oper_name='Логистика' AND bonus_type_name='К клиенту при продаже'
+                -- - Returns: supplier_oper_name='Логистика' AND bonus_type_name in return categories
+                -- - Buyout%: (trips - returns) / trips * 100
+                --
+                -- IMPORTANT:
+                -- - We intentionally align with snapshot sources (report_id list) to match SKU PnL period semantics.
+                -- - We count DISTINCT raw lines (report_id+line_id or line_uid_surrogate) to avoid duplicating per-money-field events.
                 SELECT
-                    sfp.sku_norm,
-                    COUNT(*) FILTER (
-                        WHERE e.event_type = 'delivery_fee'
-                          AND e.amount > 0
+                    t.sku_norm,
+                    COUNT(DISTINCT t.line_key) FILTER (
+                        WHERE t.supplier_oper_name = 'Логистика'
+                          AND t.bonus_type_name = 'К клиенту при продаже'
                     ) AS trips_cnt,
-                    COUNT(*) FILTER (
-                        WHERE e.event_type = 'sale_gmv'
-                          AND e.amount < 0
+                    COUNT(DISTINCT t.line_key) FILTER (
+                        WHERE t.supplier_oper_name = 'Логистика'
+                          AND t.bonus_type_name IN (
+                            'Возврат брака (К продавцу)',
+                            'Возврат товара, который приехал по МП, продавцу (К продавцу)',
+                            'Возврат неопознанного товара (К продавцу)',
+                            'От клиента при отмене',
+                            'От клиента при возврате'
+                          )
                     ) AS returns_cnt,
                     CASE
-                        WHEN COUNT(*) FILTER (WHERE e.event_type = 'delivery_fee' AND e.amount > 0) > 0
+                        WHEN COUNT(DISTINCT t.line_key) FILTER (
+                            WHERE t.supplier_oper_name = 'Логистика'
+                              AND t.bonus_type_name = 'К клиенту при продаже'
+                        ) > 0
                             THEN (
                                 (
-                                    COUNT(*) FILTER (WHERE e.event_type = 'delivery_fee' AND e.amount > 0)
-                                    - COUNT(*) FILTER (WHERE e.event_type = 'sale_gmv' AND e.amount < 0)
+                                    COUNT(DISTINCT t.line_key) FILTER (
+                                        WHERE t.supplier_oper_name = 'Логистика'
+                                          AND t.bonus_type_name = 'К клиенту при продаже'
+                                    )
+                                    - COUNT(DISTINCT t.line_key) FILTER (
+                                        WHERE t.supplier_oper_name = 'Логистика'
+                                          AND t.bonus_type_name IN (
+                                            'Возврат брака (К продавцу)',
+                                            'Возврат товара, который приехал по МП, продавцу (К продавцу)',
+                                            'Возврат неопознанного товара (К продавцу)',
+                                            'От клиента при отмене',
+                                            'От клиента при возврате'
+                                          )
+                                    )
                                 )::numeric
-                                / (COUNT(*) FILTER (WHERE e.event_type = 'delivery_fee' AND e.amount > 0))::numeric
+                                / (COUNT(DISTINCT t.line_key) FILTER (
+                                    WHERE t.supplier_oper_name = 'Логистика'
+                                      AND t.bonus_type_name = 'К клиенту при продаже'
+                                ))::numeric
                                 * 100
                             )
                         ELSE NULL
                     END AS buyout_pct
-                FROM src_for_page sfp
-                JOIN wb_financial_events e
-                  ON e.project_id = :project_id
-                 AND e.report_id = sfp.report_id
-                 AND NULLIF(regexp_replace(trim(both '/' from e.internal_sku), '^.*/', ''), '') = sfp.sku_norm
-                GROUP BY sfp.sku_norm
+                FROM (
+                    SELECT
+                        sfp.sku_norm,
+                        CASE
+                            WHEN e.line_id IS NOT NULL
+                                THEN (e.report_id::text || ':' || e.line_id::text)
+                            ELSE e.line_uid_surrogate
+                        END AS line_key,
+                        COALESCE(r.payload->>'supplier_oper_name', r.payload->>'supplierOperName') AS supplier_oper_name,
+                        COALESCE(r.payload->>'bonus_type_name', r.payload->>'bonusTypeName') AS bonus_type_name
+                    FROM src_for_page sfp
+                    JOIN wb_financial_events e
+                      ON e.project_id = :project_id
+                     AND e.report_id = sfp.report_id
+                     AND NULLIF(regexp_replace(trim(both '/' from e.internal_sku), '^.*/', ''), '') = sfp.sku_norm
+                    JOIN wb_finance_report_lines r
+                      ON r.project_id = :project_id
+                     AND r.report_id = e.report_id
+                     AND (
+                        (e.line_id IS NOT NULL AND r.line_id = e.line_id)
+                        OR
+                        (e.line_id IS NULL AND (r.report_id::text || ':' || r.id::text) = e.line_uid_surrogate)
+                     )
+                ) t
+                GROUP BY t.sku_norm
             ),
             selling_price_by_sku AS (
                 -- Batched AVG(retail_price) per sku_norm for the current page only.
