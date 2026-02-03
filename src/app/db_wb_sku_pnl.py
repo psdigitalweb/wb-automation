@@ -382,7 +382,8 @@ def list_snapshot_rows(
                 --
                 -- IMPORTANT:
                 -- - We intentionally align with snapshot sources (report_id list) to match SKU PnL period semantics.
-                -- - We count DISTINCT raw lines (report_id+line_id or line_uid_surrogate) to avoid duplicating per-money-field events.
+                -- - We count DISTINCT raw lines (report_id+line_id or line_uid_surrogate) to avoid duplication.
+                -- - We restrict to delivery_rub-mapped events (event_type='delivery_fee') to avoid exploding joins.
                 SELECT
                     t.sku_norm,
                     COUNT(DISTINCT t.line_key) FILTER (
@@ -440,6 +441,7 @@ def list_snapshot_rows(
                       ON e.project_id = :project_id
                      AND e.report_id = sfp.report_id
                      AND NULLIF(regexp_replace(trim(both '/' from e.internal_sku), '^.*/', ''), '') = sfp.sku_norm
+                     AND e.event_type = 'delivery_fee'
                     JOIN wb_finance_report_lines r
                       ON r.project_id = :project_id
                      AND r.report_id = e.report_id

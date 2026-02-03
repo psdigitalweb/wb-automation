@@ -43,9 +43,6 @@ async function proxy(req: Request, ctx: Ctx) {
 
   for (const targetUrl of targetUrls) {
     try {
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/66ddcc6b-d2d0-4156-a371-04fea067f11b',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'frontend/app/api/v1/[...path]/route.ts:proxy:attempt',message:'Proxy attempt',data:{method,targetUrl,path,search},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H2'})}).catch(()=>{});
-      // #endregion agent log
       const upstream = await fetch(targetUrl, {
         method,
         headers,
@@ -78,22 +75,13 @@ async function proxy(req: Request, ctx: Ctx) {
       )
 
       const raw = await upstream.arrayBuffer()
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/66ddcc6b-d2d0-4156-a371-04fea067f11b',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'frontend/app/api/v1/[...path]/route.ts:proxy:upstream',message:'Proxy upstream response',data:{method,targetUrl,status:upstream.status},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H2'})}).catch(()=>{});
-      // #endregion agent log
       return new NextResponse(raw, { status: upstream.status, headers: respHeaders })
     } catch (e: any) {
       lastErr = e
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/66ddcc6b-d2d0-4156-a371-04fea067f11b',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'frontend/app/api/v1/[...path]/route.ts:proxy:error',message:'Proxy upstream error',data:{method,targetUrl,error:String(e?.message||e),code:e?.code||null},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H4'})}).catch(()=>{});
-      // #endregion agent log
       continue
     }
   }
 
-  // #region agent log
-  fetch('http://127.0.0.1:7242/ingest/66ddcc6b-d2d0-4156-a371-04fea067f11b',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'frontend/app/api/v1/[...path]/route.ts:proxy:fail',message:'Proxy failed all candidates',data:{method,path,search,tried:targetUrls,error:String(lastErr?.message||lastErr)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H4'})}).catch(()=>{});
-  // #endregion agent log
   return NextResponse.json(
     {
       detail: 'API proxy failed',
