@@ -106,8 +106,9 @@ export default function WBSkuPnlPage() {
   const [periodTo, setPeriodTo] = useState(defaultPeriod.to)
   const [search, setSearch] = useState('')
   const [version, setVersion] = useState(1)
+  const [soldOnly, setSoldOnly] = useState(false)
   const [sort, setSort] = useState<
-    'net_before_cogs' | 'net_before_cogs_pct' | 'wb_total_pct' | 'internal_sku'
+    'net_before_cogs' | 'net_before_cogs_pct' | 'wb_total_pct' | 'quantity_sold' | 'internal_sku'
   >('net_before_cogs')
   const [order, setOrder] = useState<'asc' | 'desc'>('desc')
   const [limit, setLimit] = useState(50)
@@ -149,6 +150,7 @@ export default function WBSkuPnlPage() {
         version,
         q: searchDebounced || undefined,
         subject_id: subjectId ?? undefined,
+        sold_only: soldOnly || undefined,
         sort,
         order,
         limit,
@@ -171,6 +173,7 @@ export default function WBSkuPnlPage() {
     version,
     searchDebounced,
     subjectId,
+    soldOnly,
     sort,
     order,
     limit,
@@ -372,7 +375,12 @@ export default function WBSkuPnlPage() {
                 value={sort}
                 onChange={(e) =>
                   setSort(
-                    e.target.value as 'net_before_cogs' | 'net_before_cogs_pct' | 'wb_total_pct' | 'internal_sku'
+                    e.target.value as
+                      | 'net_before_cogs'
+                      | 'net_before_cogs_pct'
+                      | 'wb_total_pct'
+                      | 'quantity_sold'
+                      | 'internal_sku'
                   )
                 }
                 className={s.select}
@@ -380,6 +388,7 @@ export default function WBSkuPnlPage() {
                 <option value="net_before_cogs">Доход до себест.</option>
                 <option value="net_before_cogs_pct">% Доход до себест.</option>
                 <option value="wb_total_pct">% WB итого</option>
+                <option value="quantity_sold">Продано, шт</option>
                 <option value="internal_sku">SKU</option>
               </select>
             </div>
@@ -389,6 +398,20 @@ export default function WBSkuPnlPage() {
                 <option value="desc">По убыванию</option>
                 <option value="asc">По возрастанию</option>
               </select>
+            </div>
+            <div className={s.field}>
+              <span className={s.fieldLabel}>С продажами</span>
+              <label style={{ display: 'flex', gap: 8, alignItems: 'center', height: 38 }}>
+                <input
+                  type="checkbox"
+                  checked={soldOnly}
+                  onChange={(e) => {
+                    setSoldOnly(e.target.checked)
+                    setOffset(0)
+                  }}
+                />
+                <span style={{ color: '#444', fontSize: 13 }}>только с продажами в периоде</span>
+              </label>
             </div>
             <div>
               <button onClick={fetchData} disabled={loading} className={s.button}>

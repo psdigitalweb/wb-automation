@@ -230,6 +230,7 @@ def list_snapshot_rows(
     version: int,
     q: str | None,
     subject_id: int | None,
+    sold_only: bool,
     sort: str,
     order: str,
     limit: int,
@@ -265,6 +266,10 @@ def list_snapshot_rows(
         """
         params["subject_id"] = int(subject_id)
 
+    if sold_only:
+        # NOTE: quantity_sold is a snapshot metric (net sold count for the period).
+        where += " AND quantity_sold > 0"
+
     # IMPORTANT: WB expenses can come with different signs depending on the source.
     # For all KPIs and sorting we normalize WB expenses as positive ABS values.
     wb_total_abs_sql = (
@@ -281,6 +286,7 @@ def list_snapshot_rows(
         "wb_total_pct": f"CASE WHEN gmv IS NULL OR gmv = 0 THEN NULL ELSE ({wb_total_abs_sql} / gmv) END",
         # keep legacy options
         "gmv": "gmv",
+        "quantity_sold": "quantity_sold",
         "internal_sku": "internal_sku",
     }.get(sort, net_before_cogs_norm_sql)
     dir_sql = "DESC" if order.lower() == "desc" else "ASC"

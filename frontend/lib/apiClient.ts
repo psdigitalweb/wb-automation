@@ -481,7 +481,8 @@ export async function getWBProductSubjects(projectId: string): Promise<WBProduct
     version?: number
     q?: string
     subject_id?: number
-    sort?: 'net_before_cogs' | 'net_before_cogs_pct' | 'wb_total_pct' | 'internal_sku' | 'gmv'
+    sold_only?: boolean
+    sort?: 'net_before_cogs' | 'net_before_cogs_pct' | 'wb_total_pct' | 'quantity_sold' | 'internal_sku' | 'gmv'
     order?: 'asc' | 'desc'
     limit?: number
     offset?: number
@@ -493,6 +494,7 @@ export async function getWBProductSubjects(projectId: string): Promise<WBProduct
   if (params.version != null) qs.set('version', String(params.version))
   if (params.q) qs.set('q', params.q)
   if (params.subject_id != null) qs.set('subject_id', String(params.subject_id))
+  if (params.sold_only) qs.set('sold_only', 'true')
   if (params.sort) qs.set('sort', params.sort)
   if (params.order) qs.set('order', params.order)
   if (params.limit != null) qs.set('limit', String(params.limit))
