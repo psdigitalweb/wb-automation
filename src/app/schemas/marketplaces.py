@@ -1,7 +1,8 @@
 """Pydantic schemas for marketplaces."""
 
 from typing import Optional, Dict, Any, List
-from pydantic import BaseModel, Field, field_validator
+from decimal import Decimal
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from datetime import datetime, date
 
 
@@ -213,6 +214,186 @@ class WBFinancesReportsResponse(BaseModel):
     """Response model for list of finance reports."""
 
     reports: List[WBFinanceReportResponse] = Field(..., description="List of finance reports")
+
+
+# WB SKU PnL schemas
+class WBSkuPnlBuildRequest(BaseModel):
+    """Request body for building WB SKU PnL snapshot."""
+
+    period_from: str = Field(..., description="Start date YYYY-MM-DD")
+    period_to: str = Field(..., description="End date YYYY-MM-DD")
+    version: int = Field(1, ge=1, description="Snapshot version")
+    rebuild: bool = Field(True, description="Delete existing and rebuild")
+    ensure_events: bool = Field(
+        True,
+        description="Build wb_financial_events for the period before building SKU PnL snapshot",
+    )
+
+
+class WBSkuPnlBuildResponse(BaseModel):
+    """Response for WB SKU PnL build start."""
+
+    status: str = Field(..., description="e.g. started")
+    task_id: Optional[str] = Field(None, description="Celery task identifier")
+    period_from: str = Field(..., description="Requested period_from")
+    period_to: str = Field(..., description="Requested period_to")
+
+
+class WBSkuPnlSourceItem(BaseModel):
+    """Single source (WB report) contributing to a SKU PnL row."""
+
+    report_id: int = Field(..., description="WB report ID")
+    report_period_from: Optional[str] = Field(None, description="Report period start")
+    report_period_to: Optional[str] = Field(None, description="Report period end")
+    report_type: str = Field(..., description="Report type label (e.g. Реализация)")
+    rows_count: int = Field(..., description="Number of events from this report for this SKU")
+    amount_total: float = Field(..., description="Sum of event amounts from this report for this SKU")
+
+
+class WBSkuPnlItem(BaseModel):
+    """Single SKU PnL row."""
+
+    model_config = ConfigDict(json_encoders={Decimal: float})
+
+    internal_sku: str = Field(..., description="Internal SKU")
+    product_name: Optional[str] = Field(
+        default=None,
+        description="WB product name/title (for identification in details)",
+    )
+    product_image_url: Optional[str] = Field(
+        default=None,
+        description="WB product main image URL (https) (for identification in details)",
+    )
+    # Backward-compatible alias (deprecated)
+    product_image: Optional[str] = Field(
+        default=None,
+        description="(Deprecated) Use product_image_url",
+    )
+    wb_category: Optional[str] = Field(
+        default=None,
+        description="WB product category/subject name (for identification in details)",
+    )
+    quantity_sold: int = Field(..., description="Quantity sold (from sale_gmv events)")
+    gmv: float = Field(..., description="GMV (sale_gmv)")
+    avg_price_realization_unit: Optional[Decimal] = Field(
+        default=None,
+        description="Average price realization per unit (gmv / quantity_sold)",
+    )
+    wb_commission_total: float = Field(
+        ..., description="wb_commission_no_vat + wb_commission_vat"
+    )
+    acquiring_fee: float = Field(..., description="Acquiring fee")
+    delivery_fee: float = Field(..., description="Delivery fee")
+    rebill_logistics_cost: float = Field(default=0, description="Rebill logistics cost")
+    pvz_fee: float = Field(..., description="PVZ fee")
+    wb_total_total: float = Field(
+        ...,
+        description="WB total costs (ABS-sum of commission/logistics/acquiring). Always >= 0.",
+    )
+    wb_total_unit: Optional[Decimal] = Field(
+        default=None,
+        description="WB total costs per unit (wb_total_total / quantity_sold). Always >= 0.",
+    )
+    net_before_cogs: float = Field(
+        ...,
+        description="Income before COGS (gmv - wb_total_total), with normalized WB costs sign",
+    )
+    net_before_cogs_pct: Optional[Decimal] = Field(
+        default=None,
+        description="Income before COGS as % of GMV (percent points). NULL if gmv=0.",
+    )
+    wb_total_pct: Optional[Decimal] = Field(
+        default=None,
+        description="WB total costs as % of GMV (percent points). NULL if gmv=0.",
+    )
+    events_count: int = Field(..., description="Number of source events")
+    wb_price_admin: Optional[float] = Field(
+        default=None,
+        description="WB admin price (from price_snapshots) as-of end of the selected period",
+    )
+    rrp_price: Optional[float] = Field(
+        default=None,
+        description="RRP (from Internal Data, latest successful snapshot)",
+    )
+    cogs_per_unit: Optional[Decimal] = Field(
+        default=None,
+        description="COGS per unit (calculated from cogs_direct_rules as-of period_to)",
+    )
+    cogs_total: Optional[Decimal] = Field(
+        default=None,
+        description="COGS total for the period (cogs_per_unit * quantity_sold)",
+    )
+    income_before_cogs_unit: Optional[Decimal] = Field(
+        default=None,
+        description="Income before COGS per unit (avg_price_realization_unit - wb_total_unit)",
+    )
+    income_before_cogs_pct_rrp: Optional[Decimal] = Field(
+        default=None,
+        description="Income before COGS per unit as % of RRP (percent points). NULL if rrp=0.",
+    )
+    wb_total_pct_rrp: Optional[Decimal] = Field(
+        default=None,
+        description="WB total costs per unit as % of RRP (percent points). NULL if rrp=0.",
+    )
+    product_profit: Optional[Decimal] = Field(
+        default=None,
+        description="Profit after COGS (net_before_cogs - cogs_total)",
+    )
+    product_margin_pct: Optional[Decimal] = Field(
+        default=None,
+        description="Profit margin after COGS as % of GMV (percent points). NULL if gmv=0.",
+    )
+    gmv_per_unit: Optional[Decimal] = Field(
+        default=None,
+        description="(Deprecated) Use avg_price_realization_unit",
+    )
+    profit_per_unit: Optional[Decimal] = Field(
+        default=None,
+        description="(Deprecated) Use profit_unit",
+    )
+    profit_unit: Optional[Decimal] = Field(
+        default=None,
+        description="Profit per unit after COGS (avg_price_realization_unit - wb_total_unit - cogs_per_unit)",
+    )
+    margin_pct_unit: Optional[Decimal] = Field(
+        default=None,
+        description="Unit margin % of revenue (percent points). NULL if avg_price_realization_unit=0.",
+    )
+    profit_pct_of_rrp_unit: Optional[Decimal] = Field(
+        default=None,
+        description="(Deprecated) Use profit_pct_rrp",
+    )
+    profit_pct_rrp: Optional[Decimal] = Field(
+        default=None,
+        description="Profit per unit as % of RRP (percent points). NULL if rrp=0.",
+    )
+    cogs_missing: bool = Field(
+        default=False,
+        description="True if COGS cannot be calculated for this SKU (missing rule or missing price input)",
+    )
+    wb_commission_no_vat: float = Field(default=0)
+    wb_commission_vat: float = Field(default=0)
+    net_payable_metric: float = Field(default=0)
+    wb_sales_commission_metric: float = Field(default=0)
+    sources: List[WBSkuPnlSourceItem] = Field(
+        default_factory=list,
+        description="WB reports that contributed to this SKU total",
+    )
+
+
+class WBSkuPnlListResponse(BaseModel):
+    """Response for WB SKU PnL list."""
+
+    items: List[WBSkuPnlItem] = Field(..., description="SKU PnL rows")
+    total_count: int = Field(..., description="Total rows matching filters")
+
+
+class WBProductSubjectItem(BaseModel):
+    """Single WB subject (product category) for filtering."""
+
+    subject_id: int = Field(..., description="WB subject ID")
+    subject_name: str = Field(..., description="WB subject name")
+    skus_count: int = Field(..., description="Number of products (rows in products) in this subject")
 
 
 # System marketplace settings schemas
