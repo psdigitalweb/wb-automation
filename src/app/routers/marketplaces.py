@@ -38,7 +38,14 @@ from app.schemas.marketplaces import (
     WBMarketplaceUpdate,
     WBFinancesIngestRequest,
     WBFinancesIngestResponse,
+    WBFinancesEventsBuildRequest,
+    WBFinancesEventsBuildResponse,
     WBFinanceReportResponse,
+    WBSkuPnlBuildRequest,
+    WBSkuPnlBuildResponse,
+    WBSkuPnlItem,
+    WBSkuPnlListResponse,
+    WBProductSubjectItem,
     SystemMarketplacePublicStatus,
 )
 from app.utils.wb_token_validator import validate_wb_token
@@ -916,6 +923,197 @@ async def start_wb_finances_ingest(
         date_from=body.date_from,
         date_to=body.date_to,
     )
+
+
+@router.post(
+    "/projects/{project_id}/marketplaces/wildberries/finances/events/build",
+    response_model=WBFinancesEventsBuildResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Build WB financial events",
+    description=(
+        "Enqueue Celery task to build wb_financial_events from raw wb_finance_report_lines. "
+        "Requires project membership."
+    ),
+)
+async def build_wb_finances_events(
+    body: WBFinancesEventsBuildRequest,
+    project_id: int = Path(..., description="Project ID"),
+    current_user: dict = Depends(get_current_active_user),
+    membership: dict = Depends(get_project_membership),
+):
+    """Build WB financial events from raw lines for date range."""
+    from app.tasks.wb_financial_events import build_wb_financial_events_task
+
+    try:
+        datetime.strptime(body.date_from, "%Y-%m-%d")
+        datetime.strptime(body.date_to, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid date format. Use YYYY-MM-DD",
+        )
+
+    try:
+        result = build_wb_financial_events_task.delay(
+            project_id=project_id,
+            date_from=body.date_from,
+            date_to=body.date_to,
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to start build task: {str(e)}",
+        )
+
+    return WBFinancesEventsBuildResponse(
+        status="started",
+        task_id=getattr(result, "id", None),
+        date_from=body.date_from,
+        date_to=body.date_to,
+    )
+
+
+@router.post(
+    "/projects/{project_id}/marketplaces/wildberries/finances/sku-pnl/build",
+    response_model=WBSkuPnlBuildResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Build WB SKU PnL snapshot",
+    description="Enqueue Celery task to build SKU PnL snapshot from wb_financial_events.",
+)
+async def build_wb_sku_pnl(
+    body: WBSkuPnlBuildRequest,
+    project_id: int = Path(..., description="Project ID"),
+    current_user: dict = Depends(get_current_active_user),
+    membership: dict = Depends(get_project_membership),
+):
+    """Build WB SKU PnL snapshot for period."""
+    from app.tasks.wb_sku_pnl import build_wb_sku_pnl_snapshot_task
+
+    try:
+        datetime.strptime(body.period_from, "%Y-%m-%d")
+        datetime.strptime(body.period_to, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid date format. Use YYYY-MM-DD",
+        )
+
+    try:
+        result = build_wb_sku_pnl_snapshot_task.delay(
+            project_id=project_id,
+            period_from=body.period_from,
+            period_to=body.period_to,
+            version=body.version,
+            rebuild=body.rebuild,
+            ensure_events=body.ensure_events,
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to start build task: {str(e)}",
+        )
+
+    return WBSkuPnlBuildResponse(
+        status="started",
+        task_id=getattr(result, "id", None),
+        period_from=body.period_from,
+        period_to=body.period_to,
+    )
+
+
+@router.get(
+    "/projects/{project_id}/marketplaces/wildberries/finances/sku-pnl",
+    response_model=WBSkuPnlListResponse,
+    summary="List WB SKU PnL snapshot",
+    description="Get SKU PnL rows with filters and pagination.",
+)
+async def list_wb_sku_pnl(
+    project_id: int = Path(..., description="Project ID"),
+    period_from: str = Query(..., description="Period start YYYY-MM-DD"),
+    period_to: str = Query(..., description="Period end YYYY-MM-DD"),
+    version: int = Query(1, ge=1, description="Snapshot version"),
+    q: Optional[str] = Query(None, description="Search by internal_sku"),
+    subject_id: Optional[int] = Query(None, description="WB subject_id filter (from products)"),
+    sold_only: bool = Query(False, description="Only SKUs with quantity_sold > 0 in the snapshot"),
+    sort: str = Query(
+        "net_before_cogs",
+        description="Sort: net_before_cogs|net_before_cogs_pct|wb_total_pct|quantity_sold|gmv|internal_sku",
+    ),
+    order: str = Query("desc", description="Order: asc|desc"),
+    limit: int = Query(50, ge=1, le=500, description="Page size"),
+    offset: int = Query(0, ge=0, description="Offset"),
+    current_user: dict = Depends(get_current_active_user),
+    membership: dict = Depends(get_project_membership),
+):
+    """List WB SKU PnL snapshot rows."""
+    from datetime import date as _date
+
+    from app.db import engine
+    from app.db_wb_sku_pnl import list_snapshot_rows
+
+    try:
+        period_from_obj = _date.fromisoformat(period_from)
+        period_to_obj = _date.fromisoformat(period_to)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid date format. Use YYYY-MM-DD",
+        )
+
+    with engine.connect() as conn:
+        rows, total_count = list_snapshot_rows(
+            conn, project_id, period_from_obj, period_to_obj,
+            version, q, subject_id, sold_only, sort, order, limit, offset,
+        )
+
+    return WBSkuPnlListResponse(
+        items=[WBSkuPnlItem(**r) for r in rows],
+        total_count=total_count,
+    )
+
+
+@router.get(
+    "/projects/{project_id}/marketplaces/wildberries/products/subjects",
+    response_model=List[WBProductSubjectItem],
+    summary="List WB product subjects",
+    description="Distinct WB subject_id/subject_name from products for the project (for UI filters).",
+)
+async def list_wb_product_subjects(
+    project_id: int = Path(..., description="Project ID"),
+    current_user: dict = Depends(get_current_active_user),
+    membership: dict = Depends(get_project_membership),
+):
+    from app.db import engine
+    from sqlalchemy import text
+
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT subject_id, subject_name, COUNT(*)::bigint AS skus_count
+                    FROM products
+                    WHERE project_id = :project_id
+                      AND subject_id IS NOT NULL
+                      AND subject_name IS NOT NULL
+                    GROUP BY subject_id, subject_name
+                    ORDER BY subject_name ASC
+                    """
+                ),
+                {"project_id": project_id},
+            ).mappings().all()
+    except Exception as e:
+        raise
+
+    return [
+        WBProductSubjectItem(
+            subject_id=int(r["subject_id"]),
+            subject_name=str(r["subject_name"]),
+            skus_count=int(r["skus_count"] or 0),
+        )
+        for r in rows
+        if r.get("subject_id") is not None and r.get("subject_name")
+    ]
 
 
 @router.get(

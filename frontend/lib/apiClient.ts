@@ -5,6 +5,10 @@
 import { getAccessToken, getRefreshToken, saveTokens, clearAuth } from './auth'
 import { getApiBase } from './api'
 
+// Feature flag for verbose API debug logging (must be defined to avoid ReferenceError in runtime).
+// Keep disabled by default.
+const debugEnabled = false
+
 export interface ApiDebug {
   url: string
   status: number
@@ -68,18 +72,6 @@ export async function apiRequest<T = any>(
   const apiBase = getApiBase()
   const fullUrl = url.startsWith('http') ? url : `${apiBase}${url}`
 
-  const debugEnabled = process.env.NEXT_PUBLIC_DEBUG === 'true'
-
-  // #region agent log
-  try {
-    const origin =
-      typeof window !== 'undefined' && (window as any)?.location?.origin
-        ? (window as any).location.origin
-        : 'server'
-    fetch('http://127.0.0.1:7242/ingest/66ddcc6b-d2d0-4156-a371-04fea067f11b',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'apiClient.ts:apiRequest','message':'apiRequest built URL','data':{origin,apiBase,url,fullUrl,method:options?.method||'GET'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'CORS1'})}).catch(()=>{});
-  } catch {}
-  // #endregion
-
   // Get access token
   let accessToken = getAccessToken()
 
@@ -114,11 +106,6 @@ export async function apiRequest<T = any>(
   try {
     res = await fetch(fullUrl, fetchOptions)
   } catch (fetchError: any) {
-    // #region agent log
-    try {
-      fetch('http://127.0.0.1:7242/ingest/66ddcc6b-d2d0-4156-a371-04fea067f11b',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'apiClient.ts:103','message':'fetch exception','data':{url:fullUrl,error:fetchError?.message||String(fetchError),name:fetchError?.name},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H6'})}).catch(()=>{});
-    } catch {}
-    // #endregion
     // Handle network errors (CORS, connection refused, etc.)
     throw {
       detail: fetchError?.message || 'Failed to fetch',
@@ -136,15 +123,6 @@ export async function apiRequest<T = any>(
       },
     } as ApiError
   }
-
-  // #region agent log
-  try {
-    const proxy = res.headers.get('x-ecomcore-proxy')
-    const proxyTarget = res.headers.get('x-ecomcore-proxy-target')
-    const ct = res.headers.get('content-type')
-    fetch('http://127.0.0.1:7242/ingest/66ddcc6b-d2d0-4156-a371-04fea067f11b',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'apiClient.ts:afterFetch','message':'fetch response received','data':{fullUrl,status:res.status,proxy,proxyTarget,contentType:ct},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'PROXY_OBS'})}).catch(()=>{});
-  } catch {}
-  // #endregion
 
   // If 401, try to refresh token and retry
   if (res.status === 401 && accessToken) {
@@ -328,7 +306,9 @@ export interface WBIngestStatus {
   last_run_at: string | null
   last_status: string | null
   is_running: boolean
-}export interface IngestRunResponse {
+}
+
+export interface IngestRunResponse {
   id: number
   schedule_id: number | null
   project_id: number
@@ -350,7 +330,9 @@ export interface WBIngestStatus {
 export async function getWBIngestStatus(projectId: string): Promise<WBIngestStatus[]> {
   const res = await apiGet<WBIngestStatus[]>(`/api/v1/projects/${projectId}/ingestions/wb/status`)
   return res.data
-}/**
+}
+
+/**
  * Manually trigger a WB ingest job
  */
 export async function runWBIngest(
@@ -367,7 +349,6 @@ export async function runWBIngest(
 }
 
 // --- Project proxy settings (frontend_prices) ---
-
 export type ProjectProxySettings = {
   enabled: boolean
   scheme: 'http' | 'https' | string
@@ -411,9 +392,134 @@ export async function updateProjectProxySettings(
 ): Promise<ProjectProxySettings> {
   const res = await apiPut<ProjectProxySettings>(`/api/v1/projects/${projectId}/settings/proxy`, payload)
   return res.data
+}export async function testProjectProxySettings(projectId: string): Promise<ProjectProxyTestResponse> {
+  const res = await apiPost<ProjectProxyTestResponse>(`/api/v1/projects/${projectId}/settings/proxy/test`, {})
+  return res.data
 }
 
-export async function testProjectProxySettings(projectId: string): Promise<ProjectProxyTestResponse> {
-  const res = await apiPost<ProjectProxyTestResponse>(`/api/v1/projects/${projectId}/settings/proxy/test`, {})
+// --- WB SKU PnL ---
+export interface WBSkuPnlSourceItem {
+  report_id: number
+  report_period_from: string | null
+  report_period_to: string | null
+  report_type: string
+  rows_count: number
+  amount_total: number
+}
+
+export interface WBSkuPnlItem {
+  internal_sku: string
+  product_name?: string | null
+  product_image_url?: string | null
+  product_image?: string | null
+  wb_category?: string | null
+  quantity_sold: number
+  gmv: number
+  avg_price_realization_unit?: number | null
+  wb_price_admin?: number | null
+  rrp_price?: number | null
+  cogs_per_unit?: number | null
+  cogs_total?: number | null
+  income_before_cogs_unit?: number | null
+  income_before_cogs_pct_rrp?: number | null
+  wb_total_total?: number
+  wb_total_unit?: number | null
+  wb_total_pct_unit?: number | null
+  wb_total_pct_rrp?: number | null
+  product_profit?: number | null
+  product_margin_pct?: number | null
+  net_before_cogs_pct?: number | null
+  wb_total_pct?: number | null
+  trips_cnt?: number
+  returns_cnt?: number
+  buyout_pct?: number | null
+  gmv_per_unit?: number | null // deprecated alias
+  profit_per_unit?: number | null // deprecated alias
+  profit_unit?: number | null
+  margin_pct_unit?: number | null
+  profit_pct_of_rrp_unit?: number | null // deprecated alias
+  profit_pct_rrp?: number | null
+  cogs_missing?: boolean
+  wb_commission_total: number
+  wb_commission_pct_unit?: number | null
+  acquiring_fee: number
+  delivery_fee: number
+  pvz_fee: number
+  rebill_logistics_cost?: number
+  net_before_cogs: number
+  events_count: number
+  wb_commission_no_vat?: number
+  wb_commission_vat?: number
+  net_payable_metric?: number
+  wb_sales_commission_metric?: number
+  sources?: WBSkuPnlSourceItem[]
+}
+
+export interface WBSkuPnlListResponse {
+  items: WBSkuPnlItem[]
+  total_count: number
+}
+
+export interface WBProductSubjectItem {
+  subject_id: number
+  subject_name: string
+  skus_count: number
+}
+
+export async function getWBProductSubjects(projectId: string): Promise<WBProductSubjectItem[]> {
+  try {
+    const res = await apiGet<WBProductSubjectItem[]>(
+      `/api/v1/projects/${projectId}/marketplaces/wildberries/products/subjects`
+    )
+    return res.data
+  } catch (e) {
+    throw e
+  }
+}export async function getWBSkuPnl(
+  projectId: string,
+  params: {
+    period_from: string
+    period_to: string
+    version?: number
+    q?: string
+    subject_id?: number
+    sold_only?: boolean
+    sort?: 'net_before_cogs' | 'net_before_cogs_pct' | 'wb_total_pct' | 'quantity_sold' | 'internal_sku' | 'gmv'
+    order?: 'asc' | 'desc'
+    limit?: number
+    offset?: number
+  }
+): Promise<WBSkuPnlListResponse> {
+  const qs = new URLSearchParams()
+  qs.set('period_from', params.period_from)
+  qs.set('period_to', params.period_to)
+  if (params.version != null) qs.set('version', String(params.version))
+  if (params.q) qs.set('q', params.q)
+  if (params.subject_id != null) qs.set('subject_id', String(params.subject_id))
+  if (params.sold_only) qs.set('sold_only', 'true')
+  if (params.sort) qs.set('sort', params.sort)
+  if (params.order) qs.set('order', params.order)
+  if (params.limit != null) qs.set('limit', String(params.limit))
+  if (params.offset != null) qs.set('offset', String(params.offset))
+  const res = await apiGet<WBSkuPnlListResponse>(
+    `/api/v1/projects/${projectId}/marketplaces/wildberries/finances/sku-pnl?${qs.toString()}`
+  )
+  return res.data
+}export async function buildWBSkuPnl(
+  projectId: string,
+  body: {
+    period_from: string
+    period_to: string
+    version?: number
+    rebuild?: boolean
+    ensure_events?: boolean
+  }
+): Promise<{ status: string; task_id: string | null; period_from: string; period_to: string }> {
+  const res = await apiPost<{
+    status: string
+    task_id: string | null
+    period_from: string
+    period_to: string
+  }>(`/api/v1/projects/${projectId}/marketplaces/wildberries/finances/sku-pnl/build`, body)
   return res.data
 }

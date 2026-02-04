@@ -43,12 +43,6 @@ async function proxy(req: Request, ctx: Ctx) {
 
   for (const targetUrl of targetUrls) {
     try {
-      // #region agent log
-      try {
-        fetch('http://127.0.0.1:7242/ingest/66ddcc6b-d2d0-4156-a371-04fea067f11b',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/api/v1/[...path]/route.ts:proxy','message':'proxy upstream request','data':{method,targetUrl,hasAuth:!!auth,hasCookie:!!cookie},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'AUTH_PROXY1'})}).catch(()=>{});
-      } catch {}
-      // #endregion
-
       const upstream = await fetch(targetUrl, {
         method,
         headers,
@@ -79,12 +73,6 @@ async function proxy(req: Request, ctx: Ctx) {
         'x-ecomcore-set-cookie',
         (Array.isArray(setCookies) && setCookies.length) || upstream.headers.get('set-cookie') ? '1' : '0'
       )
-
-      // #region agent log
-      try {
-        fetch('http://127.0.0.1:7242/ingest/66ddcc6b-d2d0-4156-a371-04fea067f11b',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/api/v1/[...path]/route.ts:proxy','message':'proxy upstream response','data':{status:upstream.status,contentType:upstream.headers.get('content-type'),setCookieCount:Array.isArray(setCookies)?setCookies.length:0,hasSetCookieHeader:!!upstream.headers.get('set-cookie')},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'AUTH_PROXY2'})}).catch(()=>{});
-      } catch {}
-      // #endregion
 
       const raw = await upstream.arrayBuffer()
       return new NextResponse(raw, { status: upstream.status, headers: respHeaders })

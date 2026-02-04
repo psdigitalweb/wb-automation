@@ -60,7 +60,7 @@ services:
       # test.xml уже доступен через основной volume ../../:/app, отдельное монтирование не требуется
     # Entrypoint waits for PostgreSQL, runs migrations (with advisory lock protection), then starts uvicorn
     entrypoint: ["python", "/app/scripts/docker-entrypoint.py"]
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --app-dir /app/src
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app/src --app-dir /app/src
     depends_on:
       - postgres
     # Публикуем порт для прямого доступа к API (удобно для разработки)
