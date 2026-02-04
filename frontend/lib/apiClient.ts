@@ -424,6 +424,7 @@ export interface WBSkuPnlItem {
   income_before_cogs_pct_rrp?: number | null
   wb_total_total?: number
   wb_total_unit?: number | null
+  wb_total_pct_unit?: number | null
   wb_total_pct_rrp?: number | null
   product_profit?: number | null
   product_margin_pct?: number | null
@@ -440,6 +441,7 @@ export interface WBSkuPnlItem {
   profit_pct_rrp?: number | null
   cogs_missing?: boolean
   wb_commission_total: number
+  wb_commission_pct_unit?: number | null
   acquiring_fee: number
   delivery_fee: number
   pvz_fee: number

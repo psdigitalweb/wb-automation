@@ -144,6 +144,7 @@ export default function WBSkuPnlPage() {
     try {
       setLoading(true)
       setError(null)
+
       const data = await getWBSkuPnl(projectId, {
         period_from: periodFrom,
         period_to: periodTo,
@@ -160,6 +161,7 @@ export default function WBSkuPnlPage() {
       setTotalCount(data.total_count)
     } catch (e) {
       const err = e as ApiError
+
       setError(err?.detail || 'Не удалось загрузить данные')
       setItems([])
       setTotalCount(0)
@@ -768,10 +770,12 @@ export default function WBSkuPnlPage() {
                                     <DetailsSection
                                       title="WB"
                                       items={[
-                                        { label: 'Комиссия WB / шт', value: (row.wb_commission_total ?? 0) / soldQty },
+                                        { label: 'Комиссия WB / шт, руб', value: (row.wb_commission_total ?? 0) / soldQty },
+                                        { label: 'Комиссия WB, % / шт', value: row.wb_commission_pct_unit },
                                         { label: 'Логистика / шт', value: logisticsTotal(row) / soldQty },
                                         { label: 'Эквайринг / шт', value: (row.acquiring_fee ?? 0) / soldQty },
-                                        { label: 'WB итого / шт', value: row.wb_total_unit ?? wbTotalTotal(row) / soldQty },
+                                        { label: 'WB итого / шт, руб', value: row.wb_total_unit ?? wbTotalTotal(row) / soldQty },
+                                        { label: 'WB итого, % / шт', value: row.wb_total_pct_unit },
                                       ]}
                                     />
                                   ) : (

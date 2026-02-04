@@ -282,6 +282,10 @@ class WBSkuPnlItem(BaseModel):
     wb_commission_total: float = Field(
         ..., description="wb_commission_no_vat + wb_commission_vat"
     )
+    wb_commission_pct_unit: Optional[Decimal] = Field(
+        default=None,
+        description="WB commission per unit as % of avg_price_realization_unit (percent points). NULL if avg_price_realization_unit=0.",
+    )
     acquiring_fee: float = Field(..., description="Acquiring fee")
     delivery_fee: float = Field(..., description="Delivery fee")
     rebill_logistics_cost: float = Field(default=0, description="Rebill logistics cost")
@@ -293,6 +297,10 @@ class WBSkuPnlItem(BaseModel):
     wb_total_unit: Optional[Decimal] = Field(
         default=None,
         description="WB total costs per unit (wb_total_total / quantity_sold). Always >= 0.",
+    )
+    wb_total_pct_unit: Optional[Decimal] = Field(
+        default=None,
+        description="WB total costs per unit as % of avg_price_realization_unit (percent points). NULL if avg_price_realization_unit=0.",
     )
     net_before_cogs: float = Field(
         ...,

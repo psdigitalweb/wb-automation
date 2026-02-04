@@ -441,11 +441,7 @@ def list_snapshot_rows(
                 FROM (
                     SELECT
                         sfp.sku_norm,
-                        CASE
-                            WHEN e.line_id IS NOT NULL
-                                THEN (e.report_id::text || ':' || e.line_id::text)
-                            ELSE e.line_uid_surrogate
-                        END AS line_key,
+                        (e.report_id::text || ':' || e.line_id::text) AS line_key,
                         COALESCE(r.payload->>'supplier_oper_name', r.payload->>'supplierOperName') AS supplier_oper_name,
                         COALESCE(r.payload->>'bonus_type_name', r.payload->>'bonusTypeName') AS bonus_type_name
                     FROM src_for_page sfp
@@ -454,14 +450,32 @@ def list_snapshot_rows(
                      AND e.report_id = sfp.report_id
                      AND NULLIF(regexp_replace(trim(both '/' from e.internal_sku), '^.*/', ''), '') = sfp.sku_norm
                      AND e.event_type = 'delivery_fee'
+                     AND e.line_id IS NOT NULL
                     JOIN wb_finance_report_lines r
                       ON r.project_id = :project_id
                      AND r.report_id = e.report_id
-                     AND (
-                        (e.line_id IS NOT NULL AND r.line_id = e.line_id)
-                        OR
-                        (e.line_id IS NULL AND (r.report_id::text || ':' || r.id::text) = e.line_uid_surrogate)
-                     )
+                     AND r.line_id = e.line_id
+
+                    UNION ALL
+
+                    -- Fallback for rare cases where WB event has no line_id (keep semantics).
+                    SELECT
+                        sfp.sku_norm,
+                        e.line_uid_surrogate AS line_key,
+                        COALESCE(r.payload->>'supplier_oper_name', r.payload->>'supplierOperName') AS supplier_oper_name,
+                        COALESCE(r.payload->>'bonus_type_name', r.payload->>'bonusTypeName') AS bonus_type_name
+                    FROM src_for_page sfp
+                    JOIN wb_financial_events e
+                      ON e.project_id = :project_id
+                     AND e.report_id = sfp.report_id
+                     AND NULLIF(regexp_replace(trim(both '/' from e.internal_sku), '^.*/', ''), '') = sfp.sku_norm
+                     AND e.event_type = 'delivery_fee'
+                     AND e.line_id IS NULL
+                     AND e.line_uid_surrogate IS NOT NULL
+                    JOIN wb_finance_report_lines r
+                      ON r.project_id = :project_id
+                     AND r.report_id = e.report_id
+                     AND (r.report_id::text || ':' || r.id::text) = e.line_uid_surrogate
                 ) t
                 GROUP BY t.sku_norm
             ),
@@ -590,6 +604,11 @@ def list_snapshot_rows(
             return None
         return v * Decimal("100")
 
+    def _pct_points_safe(n: Optional[Decimal], d: Optional[Decimal]) -> Optional[Decimal]:
+        if n is None or d is None or d == 0:
+            return None
+        return (n / d) * Decimal("100")
+
     out: List[Dict[str, Any]] = []
     for r in rows:
         qty = int(r.get("quantity_sold") or 0)
@@ -616,7 +635,9 @@ def list_snapshot_rows(
         net_before_cogs_total_d = gmv_d - wb_total_total_d
 
         # Unit values
+        wb_comm = wb_comm_no_vat + wb_comm_vat
         avg_price_realization_unit = safe_div(gmv_d, Decimal(qty)) if qty > 0 else None
+        wb_commission_unit = safe_div(_d(wb_comm), Decimal(qty)) if qty > 0 else None
         wb_total_unit = safe_div(wb_total_total_d, Decimal(qty)) if qty > 0 else None
 
         rrp_price = float(r["rrp_price"]) if r.get("rrp_price") is not None else None
@@ -636,9 +657,10 @@ def list_snapshot_rows(
         )
         net_before_cogs_pct = _pct_points(net_before_cogs_total_d, gmv_d) if gmv_d > 0 else None
         wb_total_pct = _pct_points(wb_total_total_d, gmv_d) if gmv_d > 0 else None
+        wb_commission_pct_unit = _pct_points_safe(wb_commission_unit, avg_price_realization_unit)
+        wb_total_pct_unit = _pct_points_safe(wb_total_unit, avg_price_realization_unit)
 
         cogs_missing = cogs_unit is None
-        wb_comm = wb_comm_no_vat + wb_comm_vat
 
         out.append({
             "internal_sku": r["internal_sku"],
@@ -650,12 +672,14 @@ def list_snapshot_rows(
             "gmv": gmv,
             "avg_price_realization_unit": unit_metrics.avg_price_realization_unit,
             "wb_commission_total": wb_comm,
+            "wb_commission_pct_unit": wb_commission_pct_unit,
             "acquiring_fee": acquiring_fee,
             "delivery_fee": delivery_fee,
             "rebill_logistics_cost": rebill_logistics_cost,
             "pvz_fee": pvz_fee,
             "wb_total_total": wb_total_total,
             "wb_total_unit": unit_metrics.wb_total_unit,
+            "wb_total_pct_unit": wb_total_pct_unit,
             "income_before_cogs_unit": unit_metrics.income_before_cogs_unit,
             "income_before_cogs_pct_rrp": unit_metrics.income_before_cogs_pct_rrp,
             "wb_total_pct_rrp": unit_metrics.wb_total_pct_rrp,
