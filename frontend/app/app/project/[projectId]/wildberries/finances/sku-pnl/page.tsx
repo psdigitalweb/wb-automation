@@ -509,7 +509,7 @@ export default function WBSkuPnlPage() {
                             {formatQty(row.quantity_sold)}
                           </td>
                           <td style={{ padding: '12px', textAlign: 'right' }}>
-                            {row.rrp_price == null ? '—' : formatRUB(row.rrp_price)}
+                            {row.rrp_price == null ? '—' : formatRUB(row.rrp_price, 0)}
                           </td>
                           <td style={{ padding: '12px', textAlign: 'right' }}>
                             {row.wb_price_admin == null ? '—' : formatRUB(row.wb_price_admin)}
@@ -693,7 +693,7 @@ export default function WBSkuPnlPage() {
                                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
                                       <span style={{ color: '#666' }}>РРЦ</span>
                                       <span style={{ fontFamily: 'ui-monospace, monospace' }}>
-                                        {row.rrp_price == null ? '—' : formatRUB(row.rrp_price)}
+                                        {row.rrp_price == null ? '—' : formatRUB(row.rrp_price, 0)}
                                       </span>
                                     </div>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
@@ -748,7 +748,6 @@ export default function WBSkuPnlPage() {
                                     title="WB"
                                     items={[
                                       { label: 'Комиссия WB', value: row.wb_commission_total ?? 0 },
-                                      { label: 'Логистика', value: logisticsTotal(row) },
                                       { label: 'Эквайринг', value: row.acquiring_fee ?? 0 },
                                       { label: 'WB итого', value: wbTotalTotal(row) },
                                     ]}
@@ -772,7 +771,6 @@ export default function WBSkuPnlPage() {
                                       items={[
                                         { label: 'Комиссия WB / шт, руб', value: (row.wb_commission_total ?? 0) / soldQty },
                                         { label: 'Комиссия WB, % / шт', value: row.wb_commission_pct_unit },
-                                        { label: 'Логистика / шт', value: logisticsTotal(row) / soldQty },
                                         { label: 'Эквайринг / шт', value: (row.acquiring_fee ?? 0) / soldQty },
                                         { label: 'WB итого / шт, руб', value: row.wb_total_unit ?? wbTotalTotal(row) / soldQty },
                                         { label: 'WB итого, % / шт', value: row.wb_total_pct_unit },
@@ -788,110 +786,278 @@ export default function WBSkuPnlPage() {
                                     style={{
                                       margin: '0 0 12px 0',
                                       fontSize: '14px',
-                                      fontWeight: 600,
-                                      color: '#333',
+                                      fontWeight: 700,
+                                      color: '#111827',
                                     }}
                                   >
-                                    COGS / прибыль — на единицу
+                                    Логистика
                                   </h3>
-                                  <div style={{ display: 'grid', gap: '6px', fontSize: '13px' }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
-                                      <span style={{ color: '#666' }}>COGS / шт</span>
-                                      <span style={{ fontFamily: 'ui-monospace, monospace' }}>
-                                        {row.cogs_per_unit == null ? '—' : formatRUB(row.cogs_per_unit)}
-                                      </span>
-                                    </div>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
-                                      <span style={{ color: '#666' }}>Profit / шт</span>
-                                      <span style={{ fontFamily: 'ui-monospace, monospace' }}>
-                                        {row.profit_unit == null && row.profit_per_unit == null
-                                          ? '—'
-                                          : formatRUB((row.profit_unit ?? row.profit_per_unit) as number)}
-                                      </span>
-                                    </div>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
-                                      <span style={{ color: '#666' }}>Margin % (от выручки, unit)</span>
-                                      <span style={{ fontFamily: 'ui-monospace, monospace' }}>
-                                        {marginPctUnit == null ? '—' : `${formatPct(marginPctUnit)}%`}
-                                      </span>
-                                    </div>
-                                    {profitPctOfRrpUnit != null ? (
+
+                                  {(() => {
+                                    const logisticsTotalRub = logisticsTotal(row)
+                                    const logisticsPerSoldUnit =
+                                      soldQty > 0 ? logisticsTotalRub / soldQty : null
+
+                                    const MetricLine = ({
+                                      label,
+                                      value,
+                                      tooltip,
+                                      emphasize,
+                                    }: {
+                                      label: string
+                                      value: React.ReactNode
+                                      tooltip?: string
+                                      emphasize?: boolean
+                                    }) => (
                                       <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
-                                        <span style={{ color: '#666' }}>Profit / шт, % от РРЦ</span>
-                                        <span style={{ fontFamily: 'ui-monospace, monospace' }}>
-                                          {`${formatPct(profitPctOfRrpUnit)}%`}
+                                        <span
+                                          style={{
+                                            color: '#6b7280',
+                                            textDecoration: tooltip ? 'underline dotted' : 'none',
+                                            textUnderlineOffset: 3,
+                                            cursor: tooltip ? 'help' : 'default',
+                                          }}
+                                          title={tooltip}
+                                        >
+                                          {label}
+                                        </span>
+                                        <span
+                                          style={{
+                                            fontFamily: 'ui-monospace, monospace',
+                                            fontWeight: emphasize ? 700 : 400,
+                                            color: emphasize ? '#111827' : '#374151',
+                                            textAlign: 'right',
+                                            whiteSpace: 'nowrap',
+                                          }}
+                                        >
+                                          {value}
                                         </span>
                                       </div>
-                                    ) : null}
-                                  </div>
-                                </div>
+                                    )
 
-                                <div>
-                                  <h3
-                                    style={{
-                                      margin: '0 0 12px 0',
-                                      fontSize: '14px',
-                                      fontWeight: 600,
-                                      color: '#333',
-                                    }}
-                                  >
-                                    % от РРЦ (не от выручки)
-                                  </h3>
-                                  {row.rrp_price != null && soldQty > 0 ? (
-                                    <div style={{ fontSize: '13px', color: '#444' }}>
-                                      <div style={{ display: 'grid', gap: '6px' }}>
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
-                                          <span style={{ color: '#666' }}>Доход до себест., % от РРЦ</span>
-                                          <span style={{ fontFamily: 'ui-monospace, monospace' }}>
-                                            {row.income_before_cogs_pct_rrp == null
-                                              ? '—'
-                                              : `${formatPct(row.income_before_cogs_pct_rrp)}%`}
-                                          </span>
+                                    return (
+                                      <div
+                                        style={{
+                                          padding: '12px 14px',
+                                          borderRadius: 10,
+                                          border: '1px solid #e5e7eb',
+                                          background: '#ffffff',
+                                          display: 'grid',
+                                          gap: '16px',
+                                        }}
+                                      >
+                                        {/* Фактические расходы */}
+                                        <div>
+                                          <h4 style={{ margin: '0 0 8px 0', fontSize: '12px', fontWeight: 700, color: '#374151', letterSpacing: 0.3 }}>
+                                            Фактические расходы
+                                          </h4>
+                                          <div style={{ display: 'grid', gap: '6px', fontSize: '13px' }}>
+                                            <MetricLine
+                                              label="Логистика, всего ₽"
+                                              value={formatRUB(logisticsTotalRub)}
+                                              emphasize
+                                            />
+                                            <MetricLine
+                                              label="Логистика / проданную единицу, ₽"
+                                              value={logisticsPerSoldUnit == null ? '—' : formatRUB(logisticsPerSoldUnit)}
+                                              tooltip={
+                                                'Аллокация всех логистических расходов Wildberries\n' +
+                                                'на фактически проданные единицы.\n' +
+                                                'Включает стоимость возвратов.'
+                                              }
+                                              emphasize
+                                            />
+                                          </div>
                                         </div>
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
-                                          <span style={{ color: '#666' }}>WB итого, % от РРЦ</span>
-                                          <span style={{ fontFamily: 'ui-monospace, monospace' }}>
-                                            {row.wb_total_pct_rrp == null ? '—' : `${formatPct(row.wb_total_pct_rrp)}%`}
-                                          </span>
+
+                                        {/* Операции (справочно) */}
+                                        <div>
+                                          <h4 style={{ margin: '0 0 8px 0', fontSize: '12px', fontWeight: 700, color: '#374151', letterSpacing: 0.3 }}>
+                                            Операции (справочно, не влияет на прибыль)
+                                          </h4>
+                                          <div style={{ display: 'grid', gap: '6px', fontSize: '13px' }}>
+                                            <MetricLine
+                                              label="Прямые доставки (к клиенту)"
+                                              value={row.trips_cnt == null ? '—' : formatInt(row.trips_cnt)}
+                                              tooltip="Операционные прямые доставки. Считается по строкам логистики WB с bonus_type_name вида «К клиенту…». Не равно количеству продаж."
+                                            />
+                                            <MetricLine
+                                              label="Обратные операции (возвраты)"
+                                              value={row.returns_cnt == null ? '—' : formatInt(row.returns_cnt)}
+                                              tooltip="Операционные обратные операции. Считается по строкам логистики WB: «От клиента…» и «Возврат … (К продавцу)», включая брак/неопознанный. Нужны для тарифа возврата."
+                                            />
+                                            <MetricLine
+                                              label="Процент выкупа, %"
+                                              value={row.buyout_pct == null ? '—' : `${formatPct(row.buyout_pct)}%`}
+                                            />
+                                          </div>
                                         </div>
                                       </div>
-                                    </div>
-                                  ) : (
-                                    <div style={{ color: '#666', fontSize: '13px' }}>Нет РРЦ или продаж для расчёта</div>
-                                  )}
+                                    )
+                                  })()}
                                 </div>
 
-                                <div>
+                                <div style={{ gridColumn: '1 / -1' }}>
                                   <h3
                                     style={{
                                       margin: '0 0 12px 0',
                                       fontSize: '14px',
-                                      fontWeight: 600,
-                                      color: '#333',
+                                      fontWeight: 700,
+                                      color: '#111827',
                                     }}
                                   >
-                                    Доставка / возвраты
+                                    Доходность
                                   </h3>
-                                  <div style={{ display: 'grid', gap: '6px', fontSize: '13px' }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
-                                      <span style={{ color: '#666' }}>Поездок до покупателя (Логистика → К клиенту при продаже)</span>
-                                      <span style={{ fontFamily: 'ui-monospace, monospace' }}>
-                                        {formatInt(row.trips_cnt ?? 0)}
-                                      </span>
-                                    </div>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
-                                      <span style={{ color: '#666' }}>Возвраты (Логистика → возвратные категории)</span>
-                                      <span style={{ fontFamily: 'ui-monospace, monospace' }}>
-                                        {formatInt(row.returns_cnt ?? 0)}
-                                      </span>
-                                    </div>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
-                                      <span style={{ color: '#666' }}>% выкупа (от поездок)</span>
-                                      <span style={{ fontFamily: 'ui-monospace, monospace' }}>
-                                        {row.buyout_pct == null ? '—' : `${formatPct(row.buyout_pct)}%`}
-                                      </span>
-                                    </div>
-                                  </div>
+
+                                  {(() => {
+                                    const profitUnit = (row.profit_unit ?? row.profit_per_unit) as number | null | undefined
+                                    const rrp = row.rrp_price
+                                    const avgPrice = avgSalePrice
+
+                                    const marginPctRevenue = marginPctUnit
+                                    const marginPctRrp = profitPctOfRrpUnit
+
+                                    const avgPriceVsRrpPct =
+                                      avgPrice != null && rrp != null && rrp !== 0 ? (avgPrice / rrp) * 100 : null
+
+                                    const markupPct =
+                                      profitUnit != null && row.cogs_per_unit != null && row.cogs_per_unit !== 0
+                                        ? (profitUnit / row.cogs_per_unit) * 100
+                                        : null
+
+                                    const cogsRuleText = (() => {
+                                      if (row.cogs_per_unit == null) return '—'
+                                      if (rrp == null || rrp === 0) return '—'
+                                      const pct = (row.cogs_per_unit / rrp) * 100
+                                      const rounded0 = Math.round(pct)
+                                      const pretty =
+                                        Math.abs(pct - rounded0) <= 0.05 ? `${rounded0}%` : `${new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 1 }).format(pct)}%`
+                                      return `${pretty} от РРЦ`
+                                    })()
+
+                                    const MetricLine = ({
+                                      label,
+                                      value,
+                                      tooltip,
+                                      emphasize,
+                                    }: {
+                                      label: string
+                                      value: React.ReactNode
+                                      tooltip?: string
+                                      emphasize?: boolean
+                                    }) => (
+                                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
+                                        <span
+                                          style={{
+                                            color: '#6b7280',
+                                            textDecoration: tooltip ? 'underline dotted' : 'none',
+                                            textUnderlineOffset: 3,
+                                            cursor: tooltip ? 'help' : 'default',
+                                          }}
+                                          title={tooltip}
+                                        >
+                                          {label}
+                                        </span>
+                                        <span
+                                          style={{
+                                            fontFamily: 'ui-monospace, monospace',
+                                            fontWeight: emphasize ? 700 : 400,
+                                            color: emphasize ? '#111827' : '#374151',
+                                            textAlign: 'right',
+                                            whiteSpace: 'nowrap',
+                                          }}
+                                        >
+                                          {value}
+                                        </span>
+                                      </div>
+                                    )
+
+                                    return (
+                                      <div style={{ display: 'grid', gap: '10px' }}>
+                                        {/* FACT */}
+                                        <div
+                                          style={{
+                                            padding: '12px 14px',
+                                            borderRadius: 10,
+                                            border: '1px solid #e5e7eb',
+                                            background: '#ffffff',
+                                          }}
+                                        >
+                                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'baseline' }}>
+                                            <div style={{ fontSize: 12, fontWeight: 800, color: '#111827', letterSpacing: 0.3 }}>
+                                              ФАКТ
+                                            </div>
+                                            <div style={{ fontSize: 12, color: '#6b7280' }}>Фактическая доходность (от выручки)</div>
+                                          </div>
+                                          <div style={{ marginTop: 8, display: 'grid', gap: '6px', fontSize: '13px' }}>
+                                            <MetricLine
+                                              label="Прибыль, ₽ / шт"
+                                              value={profitUnit == null ? '—' : formatRUB(profitUnit)}
+                                              emphasize
+                                            />
+                                            <MetricLine
+                                              label="Маржа, % от выручки"
+                                              value={marginPctRevenue == null ? '—' : `${formatPct(marginPctRevenue)}%`}
+                                              emphasize
+                                            />
+                                          </div>
+                                        </div>
+
+                                        <div
+                                          style={{
+                                            display: 'grid',
+                                            gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+                                            gap: '10px',
+                                          }}
+                                        >
+                                          {/* ПЛАН / МОДЕЛЬ */}
+                                          <div
+                                            style={{
+                                              padding: '12px 14px',
+                                              borderRadius: 10,
+                                              border: '1px solid #e5e7eb',
+                                              background: '#f9fafb',
+                                            }}
+                                          >
+                                            <div style={{ fontSize: 12, fontWeight: 800, color: '#111827', letterSpacing: 0.3 }}>ПЛАН / МОДЕЛЬ</div>
+                                            <div style={{ marginTop: 8, display: 'grid', gap: '6px', fontSize: '13px' }}>
+                                              <MetricLine
+                                                label="Маржа, % от РРЦ"
+                                                value={marginPctRrp == null ? '—' : `${formatPct(marginPctRrp)}%`}
+                                                tooltip="Плановая маржа. База — РРЦ. Не отражает фактическую доходность."
+                                              />
+                                              <MetricLine label="Правило COGS (текст)" value={cogsRuleText} />
+                                              <MetricLine
+                                                label="Средняя цена к РРЦ, %"
+                                                value={avgPriceVsRrpPct == null ? '—' : `${formatPct(avgPriceVsRrpPct)}%`}
+                                                tooltip="Отношение средней цены реализации к РРЦ. Показывает влияние СПП и скидок."
+                                              />
+                                            </div>
+                                          </div>
+
+                                          {/* СПРАВОЧНО */}
+                                          <div
+                                            style={{
+                                              padding: '12px 14px',
+                                              borderRadius: 10,
+                                              border: '1px solid #e5e7eb',
+                                              background: '#ffffff',
+                                              opacity: 0.85,
+                                            }}
+                                          >
+                                            <div style={{ fontSize: 12, fontWeight: 800, color: '#111827', letterSpacing: 0.3 }}>СПРАВОЧНО</div>
+                                            <div style={{ marginTop: 8, display: 'grid', gap: '6px', fontSize: '13px' }}>
+                                              <MetricLine
+                                                label="Наценка, % от себестоимости"
+                                                value={markupPct == null ? '—' : `${formatPct(markupPct)}%`}
+                                                tooltip="Отношение прибыли к себестоимости. Справочный показатель, не для оценки убыточности."
+                                              />
+                                            </div>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    )
+                                  })()}
                                 </div>
 
                                 {/* Секция: Источники данных (WB) */}

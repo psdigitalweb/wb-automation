@@ -404,6 +404,21 @@ export default function ProjectSettingsPage({ params }: { params: { projectId: s
                   Финансовые отчёты →
                 </Link>
                 <Link
+                  href={`/app/project/${projectId}/wildberries/finances/sku-pnl`}
+                  style={{
+                    fontSize: '0.9rem',
+                    color: '#1e40af',
+                    textDecoration: 'none',
+                    padding: '6px 10px',
+                    borderRadius: '999px',
+                    backgroundColor: '#eef2ff',
+                    border: '1px solid #c7d2fe',
+                    fontWeight: 600,
+                  }}
+                >
+                  SKU PnL →
+                </Link>
+                <Link
                   href={`/app/project/${projectId}/ingestion`}
                   style={{ fontSize: '0.9rem', color: '#2563eb', textDecoration: 'none' }}
                 >

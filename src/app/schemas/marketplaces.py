@@ -314,13 +314,22 @@ class WBSkuPnlItem(BaseModel):
         default=None,
         description="WB total costs as % of GMV (percent points). NULL if gmv=0.",
     )
-    trips_cnt: int = Field(
-        default=0,
-        description="Trips count for period (delivery_rub rows, amount > 0)",
+    trips_cnt: Optional[int] = Field(
+        default=None,
+        description=(
+            "Operational trips count for period: WB logistics operations "
+            "(supplier_oper_name='Логистика' AND bonus_type_name LIKE 'К клиенту%'). "
+            "NULL if diagnostics data is not available."
+        ),
     )
-    returns_cnt: int = Field(
-        default=0,
-        description="Returns count for period (sale_gmv rows with negative amount)",
+    returns_cnt: Optional[int] = Field(
+        default=None,
+        description=(
+            "Operational returns count for period: WB logistics return operations "
+            "(supplier_oper_name='Логистика' AND bonus_type_name in reverse categories: "
+            "'От клиента%' or 'Возврат ... (К продавцу)' including defect/unidentified). "
+            "NULL if diagnostics data is not available."
+        ),
     )
     buyout_pct: Optional[Decimal] = Field(
         default=None,

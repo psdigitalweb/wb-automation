@@ -394,90 +394,82 @@ def list_snapshot_rows(
                 --
                 -- IMPORTANT:
                 -- - We intentionally align with snapshot sources (report_id list) to match SKU PnL period semantics.
-                -- - We count DISTINCT raw lines (report_id+line_id or line_uid_surrogate) to avoid duplication.
-                -- - We restrict to delivery_rub-mapped events (event_type='delivery_fee') to avoid exploding joins.
+                -- - We compute diagnostics directly from raw wb_finance_report_lines (not via wb_financial_events),
+                --   so trips/returns are operational and do not collapse to "rows with delivery_fee event".
+                WITH ops AS (
+                    SELECT
+                        sfp.sku_norm,
+                        CASE
+                            WHEN r.line_id IS NOT NULL
+                                THEN (r.report_id::text || ':' || r.line_id::text)
+                            ELSE (r.report_id::text || ':' || r.id::text)
+                        END AS line_key,
+                        COALESCE(r.payload->>'supplier_oper_name', r.payload->>'supplierOperName') AS supplier_oper_name,
+                        COALESCE(r.payload->>'bonus_type_name', r.payload->>'bonusTypeName') AS bonus_type_name
+                    FROM src_for_page sfp
+                    JOIN sku_to_nm sn
+                      ON sn.sku_norm = sfp.sku_norm
+                    JOIN wb_finance_report_lines r
+                      ON r.project_id = :project_id
+                     AND r.report_id = sfp.report_id
+                     AND (
+                        CASE
+                            WHEN COALESCE(r.payload->>'nm_id', r.payload->>'nmId') ~ '^[0-9]+$'
+                                THEN COALESCE(r.payload->>'nm_id', r.payload->>'nmId')::bigint
+                            ELSE NULL
+                        END
+                     ) = sn.nm_id
+                )
                 SELECT
-                    t.sku_norm,
-                    COUNT(DISTINCT t.line_key) FILTER (
-                        WHERE t.supplier_oper_name = 'Логистика'
-                          AND t.bonus_type_name = 'К клиенту при продаже'
+                    sku_norm,
+                    COUNT(DISTINCT line_key) FILTER (
+                        WHERE supplier_oper_name = 'Логистика'
+                          AND bonus_type_name LIKE 'К клиенту%'
                     ) AS trips_cnt,
-                    COUNT(DISTINCT t.line_key) FILTER (
-                        WHERE t.supplier_oper_name = 'Логистика'
-                          AND t.bonus_type_name IN (
-                            'Возврат брака (К продавцу)',
-                            'От клиента при отмене',
-                            'От клиента при возврате'
+                    COUNT(DISTINCT line_key) FILTER (
+                        WHERE supplier_oper_name = 'Логистика'
+                          AND (
+                            bonus_type_name LIKE 'От клиента%'
+                            OR bonus_type_name LIKE 'Возврат % (К продавцу)%'
+                            OR bonus_type_name IN (
+                              'Возврат брака (К продавцу)',
+                              'Возврат неопознанного товара (К продавцу)'
+                            )
                           )
                     ) AS returns_cnt,
                     CASE
-                        WHEN COUNT(DISTINCT t.line_key) FILTER (
-                            WHERE t.supplier_oper_name = 'Логистика'
-                              AND t.bonus_type_name = 'К клиенту при продаже'
+                        WHEN COUNT(DISTINCT line_key) FILTER (
+                            WHERE supplier_oper_name = 'Логистика'
+                              AND bonus_type_name LIKE 'К клиенту%'
                         ) > 0
                             THEN (
                                 (
-                                    COUNT(DISTINCT t.line_key) FILTER (
-                                        WHERE t.supplier_oper_name = 'Логистика'
-                                          AND t.bonus_type_name = 'К клиенту при продаже'
+                                    COUNT(DISTINCT line_key) FILTER (
+                                        WHERE supplier_oper_name = 'Логистика'
+                                          AND bonus_type_name LIKE 'К клиенту%'
                                     )
-                                    - COUNT(DISTINCT t.line_key) FILTER (
-                                        WHERE t.supplier_oper_name = 'Логистика'
-                                          AND t.bonus_type_name IN (
-                                            'Возврат брака (К продавцу)',
-                                            'От клиента при отмене',
-                                            'От клиента при возврате'
+                                    - COUNT(DISTINCT line_key) FILTER (
+                                        WHERE supplier_oper_name = 'Логистика'
+                                          AND (
+                                            bonus_type_name LIKE 'От клиента%'
+                                            OR bonus_type_name LIKE 'Возврат % (К продавцу)%'
+                                            OR bonus_type_name IN (
+                                              'Возврат брака (К продавцу)',
+                                              'Возврат неопознанного товара (К продавцу)'
+                                            )
                                           )
                                     )
                                 )::numeric
-                                / (COUNT(DISTINCT t.line_key) FILTER (
-                                    WHERE t.supplier_oper_name = 'Логистика'
-                                      AND t.bonus_type_name = 'К клиенту при продаже'
+                                / (COUNT(DISTINCT line_key) FILTER (
+                                    WHERE supplier_oper_name = 'Логистика'
+                                      AND bonus_type_name LIKE 'К клиенту%'
                                 ))::numeric
                                 * 100
                             )
                         ELSE NULL
                     END AS buyout_pct
-                FROM (
-                    SELECT
-                        sfp.sku_norm,
-                        (e.report_id::text || ':' || e.line_id::text) AS line_key,
-                        COALESCE(r.payload->>'supplier_oper_name', r.payload->>'supplierOperName') AS supplier_oper_name,
-                        COALESCE(r.payload->>'bonus_type_name', r.payload->>'bonusTypeName') AS bonus_type_name
-                    FROM src_for_page sfp
-                    JOIN wb_financial_events e
-                      ON e.project_id = :project_id
-                     AND e.report_id = sfp.report_id
-                     AND NULLIF(regexp_replace(trim(both '/' from e.internal_sku), '^.*/', ''), '') = sfp.sku_norm
-                     AND e.event_type = 'delivery_fee'
-                     AND e.line_id IS NOT NULL
-                    JOIN wb_finance_report_lines r
-                      ON r.project_id = :project_id
-                     AND r.report_id = e.report_id
-                     AND r.line_id = e.line_id
-
-                    UNION ALL
-
-                    -- Fallback for rare cases where WB event has no line_id (keep semantics).
-                    SELECT
-                        sfp.sku_norm,
-                        e.line_uid_surrogate AS line_key,
-                        COALESCE(r.payload->>'supplier_oper_name', r.payload->>'supplierOperName') AS supplier_oper_name,
-                        COALESCE(r.payload->>'bonus_type_name', r.payload->>'bonusTypeName') AS bonus_type_name
-                    FROM src_for_page sfp
-                    JOIN wb_financial_events e
-                      ON e.project_id = :project_id
-                     AND e.report_id = sfp.report_id
-                     AND NULLIF(regexp_replace(trim(both '/' from e.internal_sku), '^.*/', ''), '') = sfp.sku_norm
-                     AND e.event_type = 'delivery_fee'
-                     AND e.line_id IS NULL
-                     AND e.line_uid_surrogate IS NOT NULL
-                    JOIN wb_finance_report_lines r
-                      ON r.project_id = :project_id
-                     AND r.report_id = e.report_id
-                     AND (r.report_id::text || ':' || r.id::text) = e.line_uid_surrogate
-                ) t
-                GROUP BY t.sku_norm
+                FROM ops
+                GROUP BY sku_norm
             ),
             selling_price_by_sku AS (
                 -- Batched AVG(retail_price) per sku_norm for the current page only.
@@ -586,7 +578,10 @@ def list_snapshot_rows(
             FROM with_rule
             {order_clause}
             """
-    rows = conn.execute(text(sql), select_params).mappings().all()
+    try:
+        rows = conn.execute(text(sql), select_params).mappings().all()
+    except Exception as e:
+        raise
 
     count_row = conn.execute(
         text(f"SELECT COUNT(*) AS c FROM wb_sku_pnl_snapshots {where}"),
@@ -686,8 +681,8 @@ def list_snapshot_rows(
             "net_before_cogs": float(net_before_cogs_total_d),
             "net_before_cogs_pct": net_before_cogs_pct,
             "wb_total_pct": wb_total_pct,
-            "trips_cnt": int(r.get("trips_cnt") or 0),
-            "returns_cnt": int(r.get("returns_cnt") or 0),
+            "trips_cnt": int(r["trips_cnt"]) if r.get("trips_cnt") is not None else None,
+            "returns_cnt": int(r["returns_cnt"]) if r.get("returns_cnt") is not None else None,
             "buyout_pct": r.get("buyout_pct"),
             "events_count": int(r["events_count"] or 0),
             "wb_commission_no_vat": wb_comm_no_vat,
