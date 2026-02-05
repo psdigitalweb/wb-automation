@@ -130,7 +130,7 @@ def upgrade() -> None:
         ondelete="CASCADE",
     )
     op.create_index(
-        "uq_wb_financial_allocations_project_period_type_method_version_sku",
+        "uq_wb_fin_alloc_proj_period_type_mth_ver_sku",
         "wb_financial_allocations",
         ["project_id", "period_from", "period_to", "allocation_type", "method", "version", "internal_sku"],
         unique=True,
@@ -139,7 +139,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_index(
-        "uq_wb_financial_allocations_project_period_type_method_version_sku",
+        "uq_wb_fin_alloc_proj_period_type_mth_ver_sku",
         table_name="wb_financial_allocations",
     )
     op.drop_table("wb_financial_allocations")

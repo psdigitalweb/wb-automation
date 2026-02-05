@@ -1,4 +1,4 @@
-﻿# Environment files
+# Environment files
 .env
 .env.*
 !.env.example
@@ -43,3 +43,7 @@ redisdata/
 
 # Nginx secrets
 nginx/.htpasswd
+
+# Let's Encrypt (prod; certs stored in Docker volume by default)
+infra/docker/letsencrypt/
+infra/docker/letsencrypt-webroot/

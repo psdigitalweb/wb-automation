@@ -122,9 +122,21 @@ Start-Sleep -Seconds 5
 - **8000**: API (http://localhost:8000)
 - **3000**: Frontend dev server (http://localhost:3000)
 
+## Production HTTPS (ecomcore.ru)
+
+Для продакшена с HTTPS (Let's Encrypt) используется overlay `docker-compose.prod.yml`:
+
+```bash
+cd infra/docker
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+```
+
+Первый запуск (получение сертификата), продление и открытие портов **80/443** описаны в **[scripts/deploy_https.md](../../scripts/deploy_https.md)**.
+
 ## Структура
 
 - `docker-compose.yml` - основной файл конфигурации
+- `docker-compose.prod.yml` - overlay для прода: nginx 80+443, certbot, авто-renew
 - `.env` - **ОБЯЗАТЕЛЬНО** в корне репозитория: `D:\Work\EcomCore\.env` (НЕ в `infra/docker/`)
 
 **Важно:** Docker Compose использует `env_file: ../../.env` (относительно `infra/docker/`), что указывает на корневой `.env` файл.
