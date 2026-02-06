@@ -237,6 +237,7 @@ class WBSkuPnlBuildResponse(BaseModel):
     task_id: Optional[str] = Field(None, description="Celery task identifier")
     period_from: str = Field(..., description="Requested period_from")
     period_to: str = Field(..., description="Requested period_to")
+    trace_id: Optional[str] = Field(None, description="Request trace id for diagnostics")
 
 
 class WBSkuPnlSourceItem(BaseModel):

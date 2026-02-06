@@ -988,6 +988,23 @@ async def build_wb_sku_pnl(
 ):
     """Build WB SKU PnL snapshot for period."""
     from app.tasks.wb_sku_pnl import build_wb_sku_pnl_snapshot_task
+    import json
+    import uuid
+    from pathlib import Path as PathLib
+
+    trace_id = str(uuid.uuid4())[:8]
+    _log_path = PathLib(__file__).resolve().parent.parent.parent.parent / ".cursor" / "debug.log"
+    logger.info(
+        "build_wb_sku_pnl entry trace_id=%s project_id=%s period_from=%s period_to=%s version=%s",
+        trace_id, project_id, body.period_from, body.period_to, body.version,
+    )
+    # #region agent log
+    try:
+        with open(_log_path, "a", encoding="utf-8") as _f:
+            _f.write(json.dumps({"location": "marketplaces.py:build_wb_sku_pnl", "message": "build_wb_sku_pnl entry", "data": {"project_id": project_id, "period_from": body.period_from, "period_to": body.period_to}, "timestamp": __import__("time").time() * 1000, "sessionId": "debug-session", "hypothesisId": "H2"}) + "\n")
+    except Exception:
+        pass
+    # #endregion
 
     try:
         datetime.strptime(body.period_from, "%Y-%m-%d")
@@ -1007,17 +1024,35 @@ async def build_wb_sku_pnl(
             rebuild=body.rebuild,
             ensure_events=body.ensure_events,
         )
+        task_id = getattr(result, "id", None)
+        logger.info("build_wb_sku_pnl task enqueued task_id=%s", task_id)
+        # #region agent log
+        try:
+            with open(_log_path, "a", encoding="utf-8") as _f:
+                _f.write(json.dumps({"location": "marketplaces.py:build_wb_sku_pnl", "message": "build_wb_sku_pnl after delay", "data": {"task_id": task_id}, "timestamp": __import__("time").time() * 1000, "sessionId": "debug-session", "hypothesisId": "H2"}) + "\n")
+        except Exception:
+            pass
+        # #endregion
     except Exception as e:
+        logger.exception("build_wb_sku_pnl delay failed: %s", e)
+        # #region agent log
+        try:
+            with open(_log_path, "a", encoding="utf-8") as _f:
+                _f.write(json.dumps({"location": "marketplaces.py:build_wb_sku_pnl", "message": "build_wb_sku_pnl error", "data": {"error": str(e)}, "timestamp": __import__("time").time() * 1000, "sessionId": "debug-session", "hypothesisId": "H2"}) + "\n")
+        except Exception:
+            pass
+        # #endregion
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to start build task: {str(e)}",
+            detail=f"Failed to start build task: {str(e)} (trace_id={trace_id})",
         )
 
     return WBSkuPnlBuildResponse(
         status="started",
-        task_id=getattr(result, "id", None),
+        task_id=task_id,
         period_from=body.period_from,
         period_to=body.period_to,
+        trace_id=trace_id,
     )
 
 

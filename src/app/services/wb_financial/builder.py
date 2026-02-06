@@ -5,6 +5,7 @@ Handles payload_hash changes: deletes old events and rebuilds when raw line chan
 """
 from __future__ import annotations
 
+import json
 import re
 from collections import defaultdict
 from datetime import date, datetime
@@ -27,7 +28,7 @@ from app.services.wb_financial.event_mapping import (
     NON_MONEY_KEYS,
     resolve_amount_for_event,
 )
-from app.services.wb_financial.sku_resolver import resolve_internal_sku
+from app.services.wb_financial.sku_resolver import resolve_internal_sku, resolve_internal_skus_bulk
 
 # Keywords for unmapped money candidate detection
 MONEY_KEYWORDS = re.compile(
@@ -119,6 +120,24 @@ def build_wb_financial_events(
     for aliases, _, _ in FIELD_TO_EVENT:
         mapped_keys.update(aliases)
 
+    # Pre-fetch nm_id -> internal_sku for all nm_ids in payloads (one query)
+    nm_ids_set: set = set()
+    for row in rows:
+        payload = row.get("payload")
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except Exception:
+                continue
+        if isinstance(payload, dict):
+            nid = payload.get("nm_id") or payload.get("nmId")
+            if nid is not None:
+                try:
+                    nm_ids_set.add(int(nid))
+                except (ValueError, TypeError):
+                    pass
+    nm_id_to_sku = resolve_internal_skus_bulk(project_id, list(nm_ids_set))
+
     raw_mapped_sums: Dict[int, float] = defaultdict(float)
     unmapped_samples: List[Dict[str, Any]] = []
 
@@ -181,7 +200,7 @@ def build_wb_financial_events(
             except (ValueError, TypeError):
                 nm_id_val = None
         vendor_code_val = payload.get("vendor_code") or payload.get("vendorCode")
-        internal_sku_val = resolve_internal_sku(project_id_val, nm_id_val) if nm_id_val else None
+        internal_sku_val = nm_id_to_sku.get(nm_id_val) if nm_id_val else None
 
         # currency
         currency_val = (
@@ -193,13 +212,26 @@ def build_wb_financial_events(
         if not isinstance(currency_val, str):
             currency_val = "RUB"
 
+        # Returns: WB can send positive amounts even for returns; for PnL we need signed events.
+        doc_type = (payload.get("doc_type_name") or payload.get("docTypeName") or "").strip()
+        oper_name = (
+            payload.get("supplier_oper_name")
+            or payload.get("supplierOperName")
+            or payload.get("operation_type")
+            or payload.get("operationType")
+            or ""
+        ).strip()
+        sign = -1.0 if (doc_type == "Возврат" or oper_name == "Возврат") else 1.0
+
         # Iterate FIELD_TO_EVENT
         for aliases, event_type, scope in FIELD_TO_EVENT:
             amount_val, source_field = resolve_amount_for_event(payload, aliases)
-            if amount_val is None or source_field is None:
+            if amount_val is None or source_field is None or amount_val == 0:
                 continue
-            if amount_val == 0:
-                continue
+            amount_val = float(amount_val) * sign
+
+            # SKU PnL builder filters scope='sku'; when line has nm_id, store as sku so it is included.
+            effective_scope = "sku" if nm_id_val is not None else scope
 
             if report_id_val is not None:
                 raw_mapped_sums[int(report_id_val)] += amount_val
@@ -217,7 +249,7 @@ def build_wb_financial_events(
                 vendor_code=vendor_code_val,
                 internal_sku=internal_sku_val,
                 event_type=event_type,
-                scope=scope,
+                scope=effective_scope,
                 amount=amount_val,
                 currency=str(currency_val),
                 source_field=source_field,

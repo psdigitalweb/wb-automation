@@ -514,12 +514,13 @@ export async function getWBProductSubjects(projectId: string): Promise<WBProduct
     rebuild?: boolean
     ensure_events?: boolean
   }
-): Promise<{ status: string; task_id: string | null; period_from: string; period_to: string }> {
+): Promise<{ status: string; task_id: string | null; period_from: string; period_to: string; trace_id?: string }> {
   const res = await apiPost<{
     status: string
     task_id: string | null
     period_from: string
     period_to: string
+    trace_id?: string
   }>(`/api/v1/projects/${projectId}/marketplaces/wildberries/finances/sku-pnl/build`, body)
   return res.data
 }

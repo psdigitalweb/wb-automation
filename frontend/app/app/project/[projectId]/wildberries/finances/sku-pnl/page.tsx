@@ -207,19 +207,29 @@ export default function WBSkuPnlPage() {
   const handleBuild = async () => {
     setBuildLoading(true)
     setError(null)
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/66ddcc6b-d2d0-4156-a371-04fea067f11b',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'sku-pnl/page.tsx:handleBuild',message:'handleBuild called',data:{projectId,periodFrom,periodTo,version},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H1'})}).catch(()=>{});
+    // #endregion
     try {
-      await buildWBSkuPnl(projectId, {
+      const result = await buildWBSkuPnl(projectId, {
         period_from: periodFrom,
         period_to: periodTo,
         version,
         rebuild: true,
         ensure_events: true,
       })
-      setToast('Сбор запущен. Обновите через минуту.')
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/66ddcc6b-d2d0-4156-a371-04fea067f11b',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'sku-pnl/page.tsx:handleBuild',message:'handleBuild success',data:{status:result?.status,task_id:result?.task_id},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H1'})}).catch(()=>{});
+      // #endregion
+      setToast(result?.trace_id ? `Сбор запущен (trace_id=${result.trace_id}). Обновите через минуту.` : 'Сбор запущен. Обновите через минуту.')
       setTimeout(() => setToast(null), 5000)
     } catch (e) {
       const err = e as ApiError
-      setError(err?.detail || 'Не удалось запустить сбор')
+      const detail = err?.detail ?? (err && typeof (err as any).message === 'string' ? (err as any).message : 'Не удалось запустить сбор')
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/66ddcc6b-d2d0-4156-a371-04fea067f11b',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'sku-pnl/page.tsx:handleBuild',message:'handleBuild error',data:{detail,status:(err as ApiError)?.status},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H1'})}).catch(()=>{});
+      // #endregion
+      setError(detail)
     } finally {
       setBuildLoading(false)
     }
@@ -447,9 +457,12 @@ export default function WBSkuPnlPage() {
             />
           </div>
         ) : items.length === 0 ? (
-          <div style={{ padding: '40px', textAlign: 'center', color: '#666' }}>
-            <p>Нет данных за период. Нажмите «Собрать срез» или измените фильтр.</p>
-            <button onClick={handleBuild} disabled={buildLoading} className={s.button} style={{ marginTop: 16 }}>
+          <div style={{ padding: '40px', textAlign: 'center', color: '#666', maxWidth: 560, margin: '0 auto' }}>
+            <p style={{ marginBottom: 8 }}>Нет данных за период (в срезе 0 записей).</p>
+            <p style={{ marginBottom: 16, fontSize: 13 }}>
+              Нажмите «Собрать срез» — сбор запустится в фоне. Через минуту нажмите «Обновить» выше. Если данных по-прежнему нет, проверьте: за период загружены отчёты WB (Финансы → отчёты) и есть события по SKU.
+            </p>
+            <button onClick={handleBuild} disabled={buildLoading} className={s.button} style={{ marginTop: 8 }}>
               Собрать срез
             </button>
           </div>

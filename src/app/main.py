@@ -45,14 +45,18 @@ from app.api_example_protected import router as protected_router
 
 app = FastAPI(title="E-com Core")
 
-# Настройка CORS для работы с frontend
+# Настройка CORS для работы с frontend (на сервере задайте CORS_ORIGINS через запятую)
+_cors_origins = [
+    "http://localhost:3000",
+    "http://localhost:80",
+    "http://localhost",
+]
+_cors_extra = os.getenv("CORS_ORIGINS", "")
+if _cors_extra:
+    _cors_origins.extend(o.strip() for o in _cors_extra.split(",") if o.strip())
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",  # Next.js dev server
-        "http://localhost:80",    # Nginx proxy
-        "http://localhost",       # Nginx proxy (без порта)
-    ],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
