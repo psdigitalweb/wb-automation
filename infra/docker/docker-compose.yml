@@ -13,6 +13,7 @@ services:
     networks:
       - ecomcore-network
     volumes:
+      - /etc/letsencrypt:/etc/letsencrypt:ro
       # Persistent volume для данных PostgreSQL
       # Без этого volume данные теряются при docker compose down
       - postgres_data:/var/lib/postgresql/data
@@ -152,11 +153,13 @@ services:
     image: nginx:alpine
     ports:
       - "80:80"
+      - "443:443"
     volumes:
       # Windows Docker Desktop fix: use relative path from compose file location
       # Note: If nginx fails to start with mount error, try restarting Docker Desktop
-      - ../../nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ../../nginx/.htpasswd:/etc/nginx/.htpasswd:ro
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/.htpasswd:/etc/nginx/.htpasswd:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
     depends_on:
       - frontend
       - api
