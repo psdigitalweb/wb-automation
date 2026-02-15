@@ -18,6 +18,27 @@ export default function WildberriesPage() {
         <h2 style={{ marginTop: 0 }}>Инструменты</h2>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <Link
+            href={`/app/project/${projectId}/wildberries/finances/unit-pnl`}
+            style={{
+              display: 'inline-block',
+              padding: '12px 20px',
+              backgroundColor: '#0070f3',
+              color: 'white',
+              textDecoration: 'none',
+              borderRadius: 6,
+              fontWeight: 500,
+              transition: 'background-color 0.2s',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = '#0051cc'
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = '#0070f3'
+            }}
+          >
+            Unit PnL (WB finances)
+          </Link>
+          <Link
             href={`/app/project/${projectId}/wildberries/price-discrepancies`}
             style={{
               display: 'inline-block',

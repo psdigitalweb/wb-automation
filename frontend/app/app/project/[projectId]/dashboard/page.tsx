@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { apiGet, apiPost, apiGetData } from '../../../../../lib/apiClient'
+import { apiGet, apiPost, apiGetData, getWBFinanceReportsLatest } from '../../../../../lib/apiClient'
 import type { ApiDebug, ApiError } from '../../../../../lib/apiClient'
 import { usePageTitle } from '../../../../../hooks/usePageTitle'
 
@@ -73,6 +73,11 @@ export default function ProjectDashboard() {
   const [project, setProject] = useState<Project | null>(null)
   const [priceDiscrepanciesCount, setPriceDiscrepanciesCount] = useState<number | null>(null)
   const [loadingDiscrepancies, setLoadingDiscrepancies] = useState(false)
+  const [latestWbReport, setLatestWbReport] = useState<{
+    report_id: number
+    period_from: string | null
+    period_to: string | null
+  } | null>(null)
   const DEBUG_UI = process.env.NEXT_PUBLIC_DEBUG === 'true'
 
   // Reset state when projectId changes to prevent showing data from previous project
@@ -96,6 +101,17 @@ export default function ProjectDashboard() {
   useEffect(() => {
     if (wbEnabled && projectId) {
       loadPriceDiscrepanciesCount()
+    }
+  }, [wbEnabled, projectId])
+
+  useEffect(() => {
+    if (wbEnabled && projectId) {
+      getWBFinanceReportsLatest(projectId).then((r) => {
+        if (r) setLatestWbReport({ report_id: r.report_id, period_from: r.period_from, period_to: r.period_to })
+        else setLatestWbReport(null)
+      })
+    } else {
+      setLatestWbReport(null)
     }
   }, [wbEnabled, projectId])
 
@@ -514,6 +530,114 @@ export default function ProjectDashboard() {
                       </div>
                     </div>
                   </Link>
+
+                  <div
+                    className="card"
+                    style={{
+                      padding: 16,
+                      border: '1px solid #e5e7eb',
+                      borderRadius: 8,
+                      background: '#fff',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 8,
+                    }}
+                  >
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+                        <div style={{ fontSize: 20, flexShrink: 0 }}>💰</div>
+                        <div style={{ fontSize: 18, fontWeight: 600, color: '#111827' }}>
+                          Прибыльность WB (Unit PnL)
+                        </div>
+                      </div>
+                      <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6, marginLeft: 30 }}>
+                        Юнит-экономика по финансовым отчётам Wildberries
+                      </div>
+                      {latestWbReport && (
+                        <div style={{ fontSize: 12, color: '#374151', marginBottom: 8, marginLeft: 30 }}>
+                          Последний отчёт:{' '}
+                          {latestWbReport.report_id} ·{' '}
+                          {latestWbReport.period_from
+                            ? new Date(latestWbReport.period_from).toLocaleDateString('ru-RU', {
+                                day: '2-digit',
+                                month: '2-digit',
+                                year: 'numeric',
+                              })
+                            : '—'}
+                          –
+                          {latestWbReport.period_to
+                            ? new Date(latestWbReport.period_to).toLocaleDateString('ru-RU', {
+                                day: '2-digit',
+                                month: '2-digit',
+                                year: 'numeric',
+                              })
+                            : '—'}
+                        </div>
+                      )}
+                      {!latestWbReport && (
+                        <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 8, marginLeft: 30 }}>
+                          Нет загруженных финансовых отчётов.{' '}
+                          <Link
+                            href={`/app/project/${projectId}/wildberries/finances/reports`}
+                            style={{ color: '#2563eb', textDecoration: 'underline' }}
+                          >
+                            Перейти к списку отчётов
+                          </Link>
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, marginTop: 'auto', flexWrap: 'wrap' }}>
+                      {latestWbReport ? (
+                        <Link
+                          href={`/app/project/${projectId}/wildberries/finances/unit-pnl?report_id=${latestWbReport.report_id}`}
+                          style={{
+                            display: 'inline-block',
+                            padding: '8px 14px',
+                            fontSize: 13,
+                            backgroundColor: '#0d6efd',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: 4,
+                            textDecoration: 'none',
+                            fontWeight: 500,
+                          }}
+                        >
+                          Открыть последний отчёт
+                        </Link>
+                      ) : (
+                        <span
+                          style={{
+                            display: 'inline-block',
+                            padding: '8px 14px',
+                            fontSize: 13,
+                            backgroundColor: '#dee2e6',
+                            color: '#6c757d',
+                            border: 'none',
+                            borderRadius: 4,
+                            cursor: 'not-allowed',
+                          }}
+                        >
+                          Открыть последний отчёт
+                        </span>
+                      )}
+                      <Link
+                        href={`/app/project/${projectId}/wildberries/finances/reports`}
+                        style={{
+                          display: 'inline-block',
+                          padding: '8px 14px',
+                          fontSize: 13,
+                          backgroundColor: 'transparent',
+                          color: '#0d6efd',
+                          border: '1px solid #0d6efd',
+                          borderRadius: 4,
+                          textDecoration: 'none',
+                          fontWeight: 500,
+                        }}
+                      >
+                        Список отчётов
+                      </Link>
+                    </div>
+                  </div>
                 </div>
               </div>
             )}

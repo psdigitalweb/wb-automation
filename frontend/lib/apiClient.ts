@@ -213,7 +213,9 @@ export async function apiRequest<T = any>(
 
   // Parse response
   if (!rawText) return { data: {} as T, debug: debugObj }
-  if (isJson && parsed !== null) return { data: parsed as T, debug: debugObj }
+  if (isJson && parsed !== null) {
+    return { data: parsed as T, debug: debugObj }
+  }
 
   // If backend returned non-JSON with 200, surface it as ApiError for UI.
   throw {
@@ -464,6 +466,227 @@ export interface WBProductSubjectItem {
   subject_id: number
   subject_name: string
   skus_count: number
+}
+
+// Unit PnL (WB finance report lines aggregated by nm_id)
+
+export interface WBUnitPnlRow {
+  nm_id: number
+  vendor_code?: string | null
+  title?: string | null
+  photos: string[]
+  sale_amount: number
+  transfer_amount: number
+  logistics_cost: number
+  storage_cost: number
+  acceptance_cost: number
+  other_withholdings: number
+  penalties: number
+  loyalty_comp_display: number
+  total_to_pay: number
+  sales_cnt: number
+  returns_cnt: number
+  net_sales_cnt: number
+  deliveries_qty?: number | null
+  returns_log_qty?: number | null
+  buyout_rate?: number | null
+  wb_price_avg?: number | null
+  spp_avg?: number | null
+  fact_price_avg?: number | null
+  rrp_price?: number | null
+  rrp_missing?: boolean
+  cogs_per_unit?: number | null
+  cogs_total?: number | null
+  cogs_rule_text?: string | null
+  cogs_missing?: boolean
+  commission_vv_signed?: number | null
+  acquiring?: number | null
+  wb_total_signed?: number | null
+  wb_total_cost_per_unit?: number | null
+  profit_per_unit?: number | null
+  margin_pct_of_revenue?: number | null
+  margin_pct_of_rrp?: number | null
+  markup_pct_of_cogs?: number | null
+}
+
+export interface WBUnitPnlResponse {
+  scope: { mode: string; report_id?: number; rr_dt_from?: string; rr_dt_to?: string }
+  rows_total: number
+  items: WBUnitPnlRow[]
+  header_totals: {
+    lines_total?: number
+    scope_lines_total?: number
+    skus_total?: number
+    rows_total?: number
+    filter_header?: boolean
+    sale?: number
+    transfer_for_goods?: number
+    logistics_cost?: number
+    storage_cost?: number
+    acceptance_cost?: number
+    other_withholdings?: number
+    penalties?: number
+    loyalty_comp_display?: number
+    total_to_pay?: number
+    rrp_sales_model?: number | null
+    wb_take_from_rrp?: number | null
+    wb_take_pct_of_rrp?: number | null
+    rrp_coverage_pct?: number | null
+    rrp_net_units_covered?: number | null
+    net_units_total?: number | null
+  }
+  debug?: Record<string, number>
+}
+
+export interface WBUnitPnlDetailsResponse {
+  nm_id: number
+  scope: Record<string, unknown>
+  product?: { title?: string; vendor_code?: string; photos: string[] } | null
+  base_calc: {
+    wb_price_avg?: number
+    spp_avg?: number
+    fact_price_avg?: number
+    rrp_price?: number | null
+    delta_fact_to_rrp_pct?: number | null
+  }
+  commission_vv_signed?: number | null
+  acquiring?: number | null
+  wb_total_signed?: number | null
+  wb_total_pct_of_sale?: number | null
+  wb_costs_per_unit: {
+    total?: number | null
+    breakdown?: {
+      commission?: number | null
+      acquiring?: number | null
+      logistics?: number | null
+      storage?: number | null
+      acceptance?: number | null
+      withholdings?: number | null
+      penalties?: number | null
+      total?: number | null
+    }
+    logistics_cost?: number
+    storage_cost?: number
+    acceptance_cost?: number
+    other_withholdings?: number
+    penalties?: number
+  }
+  logistics_counts: {
+    deliveries_qty?: number | null
+    returns_log_qty?: number | null
+    buyout_rate?: number | null
+  }
+  profitability?: {
+    profit_per_unit?: number
+    margin_pct_of_revenue?: number
+    margin_pct_of_rrp?: number
+    cogs_rule_text?: string
+    markup_pct_of_cogs?: number
+    rrp_missing?: boolean
+    cogs_missing?: boolean
+    cogs_per_unit?: number
+    cogs_total?: number
+  }
+  debug?: {
+    retail_price_nonzero_rows?: number
+    spp_nonzero_rows?: number
+    retail_amount_nonzero_rows?: number
+  }
+}
+
+export interface WBFinanceReportSearchItem {
+  report_id: number
+  period_from: string | null
+  period_to: string | null
+  currency: string | null
+  total_amount: number | null
+  rows_count: number
+  first_seen_at: string | null
+  last_seen_at: string | null
+}
+
+export interface WBFinanceReportLatest {
+  report_id: number
+  period_from: string | null
+  period_to: string | null
+  currency: string | null
+  total_amount: number | null
+  rows_count: number
+  first_seen_at: string
+  last_seen_at: string
+}
+
+export async function getWBFinanceReportsLatest(
+  projectId: string
+): Promise<WBFinanceReportLatest | null> {
+  try {
+    const res = await apiGet<WBFinanceReportLatest>(
+      `/api/v1/projects/${projectId}/marketplaces/wildberries/finances/reports/latest`
+    )
+    return res.data
+  } catch {
+    return null
+  }
+}
+
+export async function getWBFinanceReportsSearch(
+  projectId: string,
+  params: { query?: string; limit?: number }
+): Promise<WBFinanceReportSearchItem[]> {
+  const qs = new URLSearchParams()
+  if (params.query) qs.set('query', params.query)
+  if (params.limit != null) qs.set('limit', String(params.limit))
+  const res = await apiGet<WBFinanceReportSearchItem[]>(
+    `/api/v1/projects/${projectId}/marketplaces/wildberries/finances/reports/search?${qs.toString()}`
+  )
+  return res.data
+}
+
+export async function getWBUnitPnl(
+  projectId: string,
+  params: {
+    report_id?: number
+    rr_dt_from?: string
+    rr_dt_to?: string
+    limit?: number
+    offset?: number
+    sort?: string
+    order?: string
+    q?: string
+    category?: number
+    filter_header?: boolean
+  }
+): Promise<WBUnitPnlResponse> {
+  const qs = new URLSearchParams()
+  if (params.report_id != null) qs.set('report_id', String(params.report_id))
+  if (params.rr_dt_from) qs.set('rr_dt_from', params.rr_dt_from)
+  if (params.rr_dt_to) qs.set('rr_dt_to', params.rr_dt_to)
+  if (params.limit != null) qs.set('limit', String(params.limit))
+  if (params.offset != null) qs.set('offset', String(params.offset))
+  if (params.sort) qs.set('sort', params.sort)
+  if (params.order) qs.set('order', params.order)
+  if (params.q) qs.set('q', params.q)
+  if (params.category != null) qs.set('category', String(params.category))
+  if (params.filter_header) qs.set('filter_header', '1')
+  const res = await apiGet<WBUnitPnlResponse>(
+    `/api/v1/projects/${projectId}/marketplaces/wildberries/finances/unit-pnl?${qs.toString()}`
+  )
+  return res.data
+}
+
+export async function getWBUnitPnlDetails(
+  projectId: string,
+  nmId: number,
+  params: { report_id?: number; rr_dt_from?: string; rr_dt_to?: string }
+): Promise<WBUnitPnlDetailsResponse> {
+  const qs = new URLSearchParams()
+  if (params.report_id != null) qs.set('report_id', String(params.report_id))
+  if (params.rr_dt_from) qs.set('rr_dt_from', params.rr_dt_from)
+  if (params.rr_dt_to) qs.set('rr_dt_to', params.rr_dt_to)
+  const res = await apiGet<WBUnitPnlDetailsResponse>(
+    `/api/v1/projects/${projectId}/marketplaces/wildberries/finances/unit-pnl/${nmId}?${qs.toString()}`
+  )
+  return res.data
 }
 
 export async function getWBProductSubjects(projectId: string): Promise<WBProductSubjectItem[]> {

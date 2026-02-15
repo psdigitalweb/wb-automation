@@ -62,6 +62,7 @@ export default function ProjectSettingsPage({ params }: { params: { projectId: s
   const [isPolling, setIsPolling] = useState(false)
   const lastStatusesHashRef = useRef<string>('')
   const [proxySettings, setProxySettings] = useState<ProjectProxySettings | null>(null)
+  const [frontendPricesBrandCount, setFrontendPricesBrandCount] = useState<number>(1)
 
   useEffect(() => {
     const load = async () => {
@@ -103,6 +104,23 @@ export default function ProjectSettingsPage({ params }: { params: { projectId: s
         clearInterval(pollingIntervalRef.current)
       }
     }
+  }, [projectId])
+
+  useEffect(() => {
+    if (!projectId) return
+    apiGet<{ marketplace_code?: string; settings_json?: { brand_id?: number; frontend_prices?: { brands?: { enabled?: boolean }[] } } }[]>(
+      `/api/v1/projects/${projectId}/marketplaces`
+    )
+      .then(({ data }) => {
+        const wb = Array.isArray(data) ? data.find((m: any) => m.marketplace_code === 'wildberries') : null
+        const s = wb?.settings_json
+        const brands = s?.frontend_prices?.brands
+        const n = Array.isArray(brands)
+          ? brands.filter((b: any) => b.enabled !== false).length
+          : s?.brand_id != null ? 1 : 0
+        setFrontendPricesBrandCount(n > 0 ? n : 1)
+      })
+      .catch(() => setFrontendPricesBrandCount(1))
   }, [projectId])
 
   // Load ingest statuses when wbEnabled changes
@@ -470,6 +488,21 @@ export default function ProjectSettingsPage({ params }: { params: { projectId: s
                             <div>
                               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                                 <span>{status.title}</span>
+                                {status.job_code === 'frontend_prices' && (
+                                  <span
+                                    style={{
+                                      display: 'inline-block',
+                                      padding: '2px 8px',
+                                      borderRadius: '999px',
+                                      backgroundColor: '#f3f4f6',
+                                      color: '#374151',
+                                      fontSize: 11,
+                                      fontWeight: 600,
+                                    }}
+                                  >
+                                    Брендов: {frontendPricesBrandCount}
+                                  </span>
+                                )}
                                 {status.job_code === 'frontend_prices' && frontendPricesProxyEnabled && (
                                   <span
                                     style={{

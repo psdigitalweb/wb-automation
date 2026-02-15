@@ -38,12 +38,21 @@ export default function ProjectsPage() {
   }, [isCreateFormOpen])
 
   const loadProjects = async () => {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/66ddcc6b-d2d0-4156-a371-04fea067f11b',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'projects/page.tsx:loadProjects:entry',message:'loadProjects started',data:{},timestamp:Date.now(),runId:'run1',hypothesisId:'H1'})}).catch(()=>{})
+    // #endregion
     try {
       setLoading(true)
       const projects = await apiGetData<Project[]>('/api/v1/projects')
-      setProjects(projects)
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/66ddcc6b-d2d0-4156-a371-04fea067f11b',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'projects/page.tsx:loadProjects:success',message:'apiGetData returned',data:{isArray:Array.isArray(projects),length:Array.isArray(projects)?projects.length:undefined,firstId:Array.isArray(projects)&&projects[0]?(projects[0] as any).id:undefined},timestamp:Date.now(),runId:'run1',hypothesisId:'H3'})}).catch(()=>{})
+      // #endregion
+      setProjects(Array.isArray(projects) ? projects : [])
       setLoading(false)
-    } catch (error) {
+    } catch (error: any) {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/66ddcc6b-d2d0-4156-a371-04fea067f11b',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'projects/page.tsx:loadProjects:catch',message:'loadProjects error',data:{detail:(error as any)?.detail,status:(error as any)?.status,url:(error as any)?.url,parsed:(error as any)?.parsed,bodyPreview:(error as any)?.debug?.bodyPreview},timestamp:Date.now(),runId:'run1',hypothesisId:'H2'})}).catch(()=>{})
+      // #endregion
       console.error('Failed to load projects:', error)
       setLoading(false)
     }

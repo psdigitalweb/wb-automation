@@ -66,6 +66,7 @@ export default function ProjectIngestionPage() {
 
   const [activeTab, setActiveTab] = useState<TabKey>('schedules')
   const [frontendPricesProxyEnabled, setFrontendPricesProxyEnabled] = useState(false)
+  const [frontendPricesBrandCount, setFrontendPricesBrandCount] = useState<number>(1)
 
   const [schedules, setSchedules] = useState<Schedule[]>([])
   const [loadingSchedules, setLoadingSchedules] = useState(false)
@@ -122,15 +123,55 @@ export default function ProjectIngestionPage() {
   }, [activeTab, projectId])
 
   useEffect(() => {
-    // proxy badge: best-effort
     getProjectProxySettings(projectId)
       .then((s) => setFrontendPricesProxyEnabled(!!s?.enabled))
       .catch(() => setFrontendPricesProxyEnabled(false))
   }, [projectId])
 
   useEffect(() => {
+    apiGet<{ marketplace_code?: string; settings_json?: { brand_id?: number; frontend_prices?: { brands?: { enabled?: boolean }[] } } }[]>(
+      `/api/v1/projects/${projectId}/marketplaces`
+    )
+      .then(({ data }) => {
+        const wb = Array.isArray(data) ? data.find((m: any) => m.marketplace_code === 'wildberries') : null
+        const s = wb?.settings_json
+        const brands = s?.frontend_prices?.brands
+        const n = Array.isArray(brands)
+          ? brands.filter((b: any) => b.enabled !== false).length
+          : s?.brand_id != null ? 1 : 0
+        setFrontendPricesBrandCount(n > 0 ? n : 1)
+      })
+      .catch(() => setFrontendPricesBrandCount(1))
+  }, [projectId])
+
+  useEffect(() => {
     loadJobs()
   }, [])
+
+  // Poll run details when viewing a running frontend_prices run (for live progress debug)
+  useEffect(() => {
+    if (
+      !runDetails ||
+      runDetails.job_code !== 'frontend_prices' ||
+      runDetails.status !== 'running'
+    ) {
+      return
+    }
+    const interval = setInterval(() => {
+      loadRunDetails(runDetails.id)
+    }, 2500)
+    return () => clearInterval(interval)
+  }, [runDetails?.id, runDetails?.job_code, runDetails?.status])
+
+  // Poll runs list when there is a running frontend_prices (to show phase_label in table)
+  const hasRunningFrontendPrices = runs.some(
+    (r) => r.job_code === 'frontend_prices' && r.status === 'running'
+  )
+  useEffect(() => {
+    if (!hasRunningFrontendPrices) return
+    const interval = setInterval(() => loadRuns(), 4000)
+    return () => clearInterval(interval)
+  }, [hasRunningFrontendPrices])
 
   const handleApiError = (e: any, fallback: string) => {
     const err = e as ApiError
@@ -418,6 +459,11 @@ export default function ProjectIngestionPage() {
   const renderStatsSummary = (stats: any) => {
     if (!stats || typeof stats !== 'object') return '-'
 
+    // Live progress label (frontend_prices debug)
+    if (typeof stats.phase_label === 'string' && stats.phase_label.trim()) {
+      return stats.phase_label.slice(0, 80)
+    }
+
     const asNum = (v: any): number | null => {
       const n = typeof v === 'number' ? v : parseInt(String(v ?? ''), 10)
       return Number.isFinite(n) ? n : null
@@ -486,6 +532,17 @@ export default function ProjectIngestionPage() {
       const distinct = stats.distinct_nm_id != null ? `uniq:${stats.distinct_nm_id}` : null
       const parts = [`p:${fmtPage(stats.page, stats.total_pages)}`, saved, distinct, lastReqHint].filter(Boolean)
       return parts.join(' ').slice(0, 80)
+    }
+
+    // frontend_prices: multi-brand run summary
+    if (stats.domain === 'frontend_prices' && (stats.brands_total != null || stats.succeeded_brands != null)) {
+      const total = asNum(stats.brands_total) ?? 0
+      const ok = Array.isArray(stats.succeeded_brands) ? stats.succeeded_brands.length : 0
+      const fail = Array.isArray(stats.failed_brands) ? stats.failed_brands.length : 0
+      const items = asNum(stats.items_total)
+      const status = stats.status === 'partial' ? 'partial' : stats.ok ? 'ok' : 'fail'
+      const parts = [`${ok}/${total} брендов`, status === 'partial' ? 'partial' : null, items != null ? `items:${items}` : null].filter(Boolean)
+      return parts.join(' ')
     }
 
     if ('inserted' in stats || 'updated' in stats) {
@@ -1277,11 +1334,29 @@ export default function ProjectIngestionPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {schedules.map((s) => (
+                    {schedules
+                      .filter((s) => jobs.some((j) => j.job_code === s.job_code))
+                      .map((s) => (
                       <tr key={s.id}>
                         <td>{s.marketplace_code}</td>
                         <td>
                           {s.job_code}
+                          {s.job_code === 'frontend_prices' && (
+                            <span
+                              style={{
+                                display: 'inline-block',
+                                marginLeft: 6,
+                                padding: '2px 6px',
+                                borderRadius: '999px',
+                                backgroundColor: '#f3f4f6',
+                                color: '#374151',
+                                fontSize: 10,
+                                fontWeight: 600,
+                              }}
+                            >
+                              Брендов: {frontendPricesBrandCount}
+                            </span>
+                          )}
                           {s.job_code === 'frontend_prices' && frontendPricesProxyEnabled && (
                             <span
                               style={{
@@ -1358,7 +1433,7 @@ export default function ProjectIngestionPage() {
                           </button>
                         </td>
                       </tr>
-                    ))}
+                      ))}
                   </tbody>
                 </table>
               </div>
@@ -1495,6 +1570,22 @@ export default function ProjectIngestionPage() {
                         <td>{r.marketplace_code}</td>
                         <td>
                           {r.job_code}
+                          {r.job_code === 'frontend_prices' && (
+                            <span
+                              style={{
+                                display: 'inline-block',
+                                marginLeft: 6,
+                                padding: '2px 6px',
+                                borderRadius: '999px',
+                                backgroundColor: '#f3f4f6',
+                                color: '#374151',
+                                fontSize: 10,
+                                fontWeight: 600,
+                              }}
+                            >
+                              Брендов: {frontendPricesBrandCount}
+                            </span>
+                          )}
                           {r.job_code === 'frontend_prices' && frontendPricesProxyEnabled && (
                             <span
                               style={{
@@ -1578,6 +1669,93 @@ export default function ProjectIngestionPage() {
               <p>
                 <strong>Duration:</strong> {formatDuration(runDetails.duration_ms)}
               </p>
+
+              {runDetails.job_code === 'frontend_prices' && runDetails.stats_json && (
+                <div
+                  style={{
+                    marginTop: 16,
+                    padding: 12,
+                    background: '#1f2937',
+                    color: '#e5e7eb',
+                    borderRadius: 8,
+                    fontSize: 13,
+                  }}
+                >
+                  <strong style={{ color: '#fcd34d' }}>Live progress (отладка)</strong>
+                  <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 4 }}>
+                    При running — обновляется каждые 2.5 с. При failed — сохраняется последнее состояние перед ошибкой.
+                  </div>
+                  <div style={{ marginTop: 8 }}>
+                    <div>
+                      <strong>Операция:</strong>{' '}
+                      {runDetails.stats_json.phase_label ?? runDetails.stats_json.phase ?? '—'}
+                    </div>
+                    {runDetails.stats_json.sleeping === true && (
+                      <div style={{ marginTop: 4, color: '#93c5fd' }}>
+                        Пауза: осталось <strong>{runDetails.stats_json.sleep_remaining_seconds ?? '?'}</strong> сек
+                      </div>
+                    )}
+                    {runDetails.stats_json.last_request && (
+                      <div style={{ marginTop: 8 }}>
+                        <strong>Последний ответ WB:</strong>
+                        <pre
+                          style={{
+                            marginTop: 4,
+                            padding: 8,
+                            background: '#111827',
+                            borderRadius: 4,
+                            fontSize: 11,
+                            overflow: 'auto',
+                            maxHeight: 120,
+                          }}
+                        >
+                          {JSON.stringify(runDetails.stats_json.last_request, null, 2)}
+                        </pre>
+                      </div>
+                    )}
+                    {Array.isArray(runDetails.stats_json.last_events) &&
+                      runDetails.stats_json.last_events.length > 0 && (
+                        <div style={{ marginTop: 8 }}>
+                          <strong>Последние события ({runDetails.stats_json.last_events.length}):</strong>
+                          <ul
+                            style={{
+                              marginTop: 4,
+                              paddingLeft: 20,
+                              maxHeight: 200,
+                              overflow: 'auto',
+                            }}
+                          >
+                            {runDetails.stats_json.last_events
+                              .slice()
+                              .reverse()
+                              .map((ev: any, i: number) => (
+                                <li key={i} style={{ marginBottom: 4 }}>
+                                  <span style={{ color: '#9ca3af' }}>
+                                    {ev.at
+                                      ? new Date(ev.at).toLocaleTimeString('ru-RU', {
+                                          hour: '2-digit',
+                                          minute: '2-digit',
+                                          second: '2-digit',
+                                        })
+                                      : ''}
+                                  </span>{' '}
+                                  {ev.msg ?? ev.phase ?? '—'}
+                                  {ev.status_code != null && (
+                                    <span style={{ marginLeft: 6, color: '#fcd34d' }}>
+                                      HTTP {ev.status_code}
+                                    </span>
+                                  )}
+                                  {ev.error && (
+                                    <span style={{ marginLeft: 6, color: '#f87171' }}>{ev.error}</span>
+                                  )}
+                                </li>
+                              ))}
+                          </ul>
+                        </div>
+                      )}
+                  </div>
+                </div>
+              )}
 
               <details style={{ marginTop: 8 }}>
                 <summary style={{ cursor: 'pointer' }}>

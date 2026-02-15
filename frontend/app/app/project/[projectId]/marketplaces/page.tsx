@@ -26,7 +26,7 @@ interface WBMarketplaceStatus {
   is_enabled: boolean
   is_configured: boolean
   credentials: { api_token: boolean }
-  settings: { brand_id: number | null }
+  settings: { brand_id?: number | null }
   updated_at: string
 }
 
@@ -60,7 +60,6 @@ export default function ProjectMarketplacesPage() {
   const [wbStatus, setWbStatus] = useState<WBMarketplaceStatus | null>(null)
   const [wbShowForm, setWbShowForm] = useState(false)
   const [wbToken, setWbToken] = useState('')
-  const [wbBrandId, setWbBrandId] = useState<string>('')
   const [wbLoading, setWbLoading] = useState(false)
   const [wbError, setWbError] = useState<string | null>(null)
 
@@ -107,16 +106,13 @@ export default function ProjectMarketplacesPage() {
         const wbStatusRes = await apiGet<WBMarketplaceStatus>(`/api/v1/projects/${projectId}/marketplaces/wb`)
         const wbStatusData = wbStatusRes.data
         setWbStatus(wbStatusData)
-        const brandId = wbStatusData.settings?.brand_id
-        setWbBrandId(brandId ? String(brandId) : '')
-        // Show form if enabled but not configured
+        // Show form if enabled but not configured (token missing)
         setWbShowForm(wbStatusData.is_enabled && !wbStatusData.is_configured)
       } catch (e: any) {
         // If WB status endpoint fails (e.g. backend not restarted yet), keep wbStatus null.
         // UI will fall back to project marketplace list for enabled/disabled state.
         console.warn('[WB_DEBUG] Failed to load WB status', e)
         setWbStatus(null)
-        setWbBrandId('')
         setWbShowForm(false)
       }
       
@@ -273,38 +269,15 @@ export default function ProjectMarketplacesPage() {
 
   const handleWBSave = async () => {
     if (!wbToken.trim() && !wbStatus?.credentials?.api_token) {
-      setWbError('Please enter WB Token')
-      return
-    }
-    if (!wbBrandId.trim()) {
-      setWbError('Please enter Brand ID')
-      return
-    }
-    const brandIdNum = parseInt(wbBrandId)
-    if (isNaN(brandIdNum) || brandIdNum <= 0) {
-      setWbError('Brand ID must be a number greater than 0')
+      setWbError('Введите WB Token')
       return
     }
 
     try {
       setWbLoading(true)
       setWbError(null)
-      
-      const updateData: any = {
-        is_enabled: true
-      }
-      
-      // Only include brand_id if valid
-      if (brandIdNum > 0) {
-        updateData.brand_id = brandIdNum
-      }
-      
-      // Only include api_token if provided
-      if (wbToken.trim()) {
-        updateData.api_token = wbToken.trim()
-      }
-      
-      console.log('[WB_DEBUG] Sending updateData', updateData)
+      const updateData: { is_enabled: boolean; api_token?: string } = { is_enabled: true }
+      if (wbToken.trim()) updateData.api_token = wbToken.trim()
       
       const { data: updatedStatus } = await apiPut<WBMarketplaceStatus>(
         `/api/v1/projects/${projectId}/marketplaces/wildberries`,
@@ -449,15 +422,24 @@ export default function ProjectMarketplacesPage() {
                           {wbLoading ? 'Loading...' : ((isWB ? wbEnabled : isEnabled) ? 'Disable' : 'Enable')}
                         </button>
                         {isWB && wbEnabled && (
-                          <button
-                            onClick={() => {
-                              console.log('[WB_DEBUG] Configure button clicked', { wbShowForm, wbEnabled, wbConnected })
-                              setWbShowForm(!wbShowForm)
-                            }}
-                            style={{ backgroundColor: '#0070f3', marginRight: '10px' }}
-                          >
-                            {wbShowForm ? 'Hide' : 'Configure'}
-                          </button>
+                          <>
+                            <button
+                              onClick={() => {
+                                console.log('[WB_DEBUG] Configure button clicked', { wbShowForm, wbEnabled, wbConnected })
+                                setWbShowForm(!wbShowForm)
+                              }}
+                              style={{ backgroundColor: '#0070f3', marginRight: '10px' }}
+                            >
+                              {wbShowForm ? 'Hide' : 'Configure'}
+                            </button>
+                            <button
+                              onClick={() => handleConfigure('wildberries')}
+                              style={{ backgroundColor: '#6c757d', marginRight: '10px' }}
+                              title="Настройки маркетплейса: витринные цены, пагинация и др."
+                            >
+                              Настройки
+                            </button>
+                          </>
                         )}
                         {!isWB && isEnabled && (
                           <button
@@ -496,31 +478,19 @@ export default function ProjectMarketplacesPage() {
                                 type="password"
                                 value={wbToken}
                                 onChange={(e) => setWbToken(e.target.value)}
-                                placeholder={wbStatus?.has_token ? 'Leave empty to keep current token' : 'Enter Wildberries API token'}
+                                placeholder={wbStatus?.credentials?.api_token ? 'Оставьте пустым, чтобы не менять' : 'Введите API токен Wildberries'}
                                 disabled={wbLoading}
                                 style={{ width: '100%', padding: '8px', fontSize: '14px' }}
                               />
                             </div>
                             
-                            <div style={{ marginBottom: '20px' }}>
-                              <label htmlFor="wb-brand-id" style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
-                                WB Brand ID
-                              </label>
-                              <input
-                                id="wb-brand-id"
-                                type="number"
-                                value={wbBrandId}
-                                onChange={(e) => setWbBrandId(e.target.value)}
-                                placeholder="Enter Brand ID (e.g., 41189)"
-                                disabled={wbLoading}
-                                style={{ width: '100%', padding: '8px', fontSize: '14px' }}
-                              />
-                            </div>
-                            
+                            <p style={{ fontSize: 13, color: '#666', marginBottom: 15 }}>
+                              Бренды настраиваются в <strong>Настройки</strong> маркетплейса (кнопка «Настройки»).
+                            </p>
                             <div style={{ display: 'flex', gap: '10px' }}>
                               <button
                                 onClick={handleWBSave}
-                                disabled={wbLoading || (!wbToken.trim() && !wbStatus?.has_token)}
+                                disabled={wbLoading || (!wbToken.trim() && !wbStatus?.credentials?.api_token)}
                                 style={{ backgroundColor: '#007bff', color: 'white', padding: '10px 20px' }}
                               >
                                 {wbLoading ? 'Saving...' : 'Save'}

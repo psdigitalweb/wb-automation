@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useMemo, useState, useEffect } from 'react'
+import Link from 'next/link'
 import { useParams, useRouter } from 'next/navigation'
 import { apiGet, apiPost, ApiError } from '@/lib/apiClient'
 
@@ -127,7 +128,7 @@ export default function WBFinancesReportsPage() {
   return (
     <div className="container">
       <div style={{ marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h1>WB Finances — Reports</h1>
+        <h1>Финансовые отчёты Wildberries</h1>
         <div style={{ display: 'flex', gap: '10px' }}>
           <button onClick={loadReports} disabled={loading}>
             {loading ? 'Обновление...' : 'Обновить список'}
@@ -273,6 +274,7 @@ export default function WBFinancesReportsPage() {
                 <th style={{ padding: '12px', textAlign: 'left', fontWeight: 'bold' }}>Period From</th>
                 <th style={{ padding: '12px', textAlign: 'left', fontWeight: 'bold' }}>Period To</th>
                 <th style={{ padding: '12px', textAlign: 'right', fontWeight: 'bold' }}>Rows Count</th>
+                <th style={{ padding: '12px', textAlign: 'left', fontWeight: 'bold' }}></th>
               </tr>
             </thead>
             <tbody>
@@ -288,6 +290,14 @@ export default function WBFinancesReportsPage() {
                   <td style={{ padding: '12px' }}>{formatDate(report.period_from)}</td>
                   <td style={{ padding: '12px' }}>{formatDate(report.period_to)}</td>
                   <td style={{ padding: '12px', textAlign: 'right' }}>{report.rows_count}</td>
+                  <td style={{ padding: '12px' }}>
+                    <Link
+                      href={`/app/project/${projectId}/wildberries/finances/unit-pnl?report_id=${report.report_id}`}
+                      style={{ color: '#007bff', textDecoration: 'none' }}
+                    >
+                      Детализация
+                    </Link>
+                  </td>
                 </tr>
               ))}
             </tbody>
