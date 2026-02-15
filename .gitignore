@@ -43,3 +43,12 @@ redisdata/
 
 # Nginx secrets
 nginx/.htpasswd
+
+.project_proxy_secret_key
+audit/
+*.dump
+celerybeat-schedule*
+infra/docker/*.dump
+backup_*.dump
+docs/verification/
+*.bak_*
