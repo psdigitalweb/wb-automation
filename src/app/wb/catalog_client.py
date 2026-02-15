@@ -5,20 +5,40 @@ Used for scraping frontend prices for comparison/validation.
 """
 
 import asyncio
+import random
 import httpx
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
+from app import settings
 from app.utils.httpx_client import make_async_client
 
 
 class CatalogClient:
     """Client for WB public catalog API."""
     
-    def __init__(self, *, proxy_url: str | None = None, proxy_scheme: str | None = None):
-        self.timeout = 30
-        self.max_retries = 3
+    def __init__(
+        self,
+        *,
+        proxy_url: str | None = None,
+        proxy_scheme: str | None = None,
+        http_min_retries: Optional[int] = None,
+        http_timeout_jitter_sec: Optional[Union[int, float]] = None,
+    ):
+        base_timeout = getattr(settings, "FRONTEND_PRICES_HTTP_TIMEOUT", 30)
+        # With proxy, latency is higher; use at least 60s to reduce ReadTimeout.
+        self.timeout = max(base_timeout, 60) if proxy_url else base_timeout
+        # With rotating proxy: each attempt can use a new IP. Prefer UI/project setting over env.
+        if proxy_url and http_min_retries is not None:
+            self.max_retries = max(3, int(http_min_retries))
+        else:
+            min_retries = getattr(settings, "FRONTEND_PRICES_HTTP_MIN_RETRIES", 10)
+            self.max_retries = max(3, min_retries) if proxy_url else 3
         self.retry_delay = 1.0
+        if http_timeout_jitter_sec is not None:
+            self.timeout_jitter = float(http_timeout_jitter_sec)
+        else:
+            self.timeout_jitter = getattr(settings, "FRONTEND_PRICES_HTTP_TIMEOUT_JITTER", 10)
         self.last_request_meta: Dict[str, Any] = {}
         self.proxy_url: str | None = proxy_url
         if proxy_scheme is not None and str(proxy_scheme).strip():
@@ -65,11 +85,15 @@ class CatalogClient:
         last_error: str | None = None
         for attempt in range(self.max_retries):
             try:
-                print(f"catalog_client._request_with_retry: attempt {attempt + 1}/{self.max_retries}")
-                # Guard against indefinite hangs even if transport stalls.
+                # Per-attempt timeout with jitter so we don't kill requests too early (proxy/rotating IP).
+                timeout_this = float(self.timeout) + random.uniform(0, float(self.timeout_jitter))
+                print(
+                    f"catalog_client._request_with_retry: attempt {attempt + 1}/{self.max_retries} "
+                    f"timeout={timeout_this:.1f}s"
+                )
                 response = await asyncio.wait_for(
                     client.request(method, url, **kwargs),
-                    timeout=float(self.timeout) + 5.0,
+                    timeout=timeout_this,
                 )
                 last_status = response.status_code if response else None
                 last_error = None
@@ -97,9 +121,9 @@ class CatalogClient:
                 
                 # Retry on 5xx errors
                 if attempt < self.max_retries - 1:
-                    delay = self.retry_delay * (2 ** attempt)
+                    delay = self.retry_delay * (2 ** attempt) * (0.8 + 0.4 * random.random())
                     print(
-                        f"catalog_client: HTTP {response.status_code}; next_step=sleep; sleep_s={delay}; "
+                        f"catalog_client: HTTP {response.status_code}; next_step=sleep; sleep_s={delay:.1f}; "
                         f"attempt={attempt + 1}/{self.max_retries}"
                     )
                     await asyncio.sleep(delay)
@@ -114,9 +138,9 @@ class CatalogClient:
                 }
                 if attempt < self.max_retries - 1:
                     # Connection problems are common here; be more patient to improve completeness.
-                    delay = min(10 * (attempt + 1), 60)  # 10s, 20s, 30s ... capped 60s
+                    delay = min(10 * (attempt + 1), 60) * (0.8 + 0.4 * random.random())  # 10s, 20s, ... capped 60s + jitter
                     print(
-                        f"catalog_client: exception={type(e).__name__}; next_step=sleep; sleep_s={delay}; "
+                        f"catalog_client: exception={type(e).__name__}; next_step=sleep; sleep_s={delay:.1f}; "
                         f"attempt={attempt + 1}/{self.max_retries}"
                     )
                     await asyncio.sleep(delay)

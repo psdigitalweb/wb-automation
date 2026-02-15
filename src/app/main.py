@@ -1,5 +1,7 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import HTTPException
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import ProgrammingError
 import os
@@ -31,6 +33,7 @@ from app.routers.marketplaces import router as marketplaces_router
 from app.routers.internal_data import router as internal_data_router
 # Project-scoped proxy settings (frontend_prices)
 from app.routers.project_proxy_settings import router as project_proxy_settings_router
+from app.routers.frontend_brand_pool import router as frontend_brand_pool_router
 # Import category import endpoints (they register on the same router)
 import app.routers.internal_data_category_import  # noqa: F401
 from app.routers.cogs import router as cogs_router
@@ -45,7 +48,32 @@ from app.api_example_protected import router as protected_router
 
 app = FastAPI(title="E-com Core")
 
-# Настройка CORS для работы с frontend
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Return 500 with exception message so frontend can log it (debug). Skip HTTPException."""
+    if isinstance(exc, HTTPException):
+        raise exc
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"Internal Server Error: {exc!s}"},
+    )
+
+
+# Настройка CORS для работы с frontend (на сервере задайте CORS_ORIGINS через запятую)
+_cors_origins = [
+    "http://localhost:3000",
+    "http://localhost:80",
+    "http://localhost",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:80",
+    "http://127.0.0.1",
+]
+_cors_extra = os.getenv("CORS_ORIGINS", "")
+if _cors_extra:
+    _cors_origins.extend(o.strip() for o in _cors_extra.split(",") if o.strip())
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -72,6 +100,8 @@ app.include_router(internal_data_router)
 
 # Project proxy settings router (project-scoped)
 app.include_router(project_proxy_settings_router)
+# Frontend brand pool (WB frontend prices by-pool ingestion)
+app.include_router(frontend_brand_pool_router)
 
 # COGS router (project-scoped)
 app.include_router(cogs_router)

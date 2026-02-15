@@ -47,3 +47,20 @@ FRONTEND_PRICES_MAX_RUNTIME_SECONDS = _get_env_int("FRONTEND_PRICES_MAX_RUNTIME_
 FRONTEND_PRICES_MAX_TOTAL_RETRY_WAIT_SECONDS = _get_env_int("FRONTEND_PRICES_MAX_TOTAL_RETRY_WAIT_SECONDS", 300)
 FRONTEND_PRICES_MAX_RETRY_SLEEP_SECONDS = _get_env_int("FRONTEND_PRICES_MAX_RETRY_SLEEP_SECONDS", 120)
 FRONTEND_PRICES_RATE_LIMIT_BACKOFF_MINUTES = _get_env_int("FRONTEND_PRICES_RATE_LIMIT_BACKOFF_MINUTES", 15)
+# HTTP timeout (seconds). With proxy, responses are often slower — set 60–90 locally if you see ReadTimeout.
+FRONTEND_PRICES_HTTP_TIMEOUT = _get_env_int("FRONTEND_PRICES_HTTP_TIMEOUT", 30)
+# With rotating proxy: min retries per request before giving up (each attempt = new IP). Default 10.
+FRONTEND_PRICES_HTTP_MIN_RETRIES = _get_env_int("FRONTEND_PRICES_HTTP_MIN_RETRIES", 10)
+# Random jitter (seconds) added to timeout per attempt to avoid killing requests too early. Default 10.
+FRONTEND_PRICES_HTTP_TIMEOUT_JITTER = _get_env_int("FRONTEND_PRICES_HTTP_TIMEOUT_JITTER", 10)
+def _get_env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return float(raw)
+    except Exception:
+        return default
+# Min share of expected_total we must have saved to consider run success (0.0–1.0). Default 0.8 = 80%.
+FRONTEND_PRICES_MIN_COVERAGE_RATIO = _get_env_float("FRONTEND_PRICES_MIN_COVERAGE_RATIO", 0.80)# Local dev: allow unauthenticated access to actual-v2-preview (default False, do not enable in prod)
+ALLOW_UNAUTH_LOCAL = os.getenv("ALLOW_UNAUTH_LOCAL", "false").lower() in ("true", "1", "yes")

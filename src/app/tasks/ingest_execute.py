@@ -98,6 +98,12 @@ def execute_ingest(run_id: int) -> dict:
             )
             tb = json.dumps(stats, ensure_ascii=False)[:50000]
             logger.warning(f"execute_ingest: job returned ok=False, failing run_id={run_id}, reason={reason}")
+            # Preserve debug progress (phase_label, last_request, last_events) from set_run_progress
+            current = get_run(run_id)
+            if current and isinstance(current.get("stats_json"), dict):
+                for k in ("phase_label", "last_request", "last_events", "sleeping", "sleep_remaining_seconds"):
+                    if k in current["stats_json"]:
+                        stats = {**stats, k: current["stats_json"][k]}
             finish_run_failed(
                 run_id=run_id,
                 error_message=str(reason),
@@ -116,6 +122,12 @@ def execute_ingest(run_id: int) -> dict:
             }
 
         logger.info(f"execute_ingest: calling finish_run_success, run_id={run_id}")
+        # Preserve debug progress from set_run_progress for UI
+        current = get_run(run_id)
+        if current and isinstance(current.get("stats_json"), dict):
+            for k in ("phase_label", "last_request", "last_events", "sleeping", "sleep_remaining_seconds"):
+                if k in current["stats_json"]:
+                    stats = {**stats, k: current["stats_json"][k]}
         finish_run_success(run_id, stats_json=stats)
         logger.info(f"execute_ingest: finish_run_success completed, run_id={run_id}")
         

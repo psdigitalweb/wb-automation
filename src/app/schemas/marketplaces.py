@@ -425,6 +425,221 @@ class WBProductSubjectItem(BaseModel):
     skus_count: int = Field(..., description="Number of products (rows in products) in this subject")
 
 
+# Discounts preview schemas
+
+class DiscountsPreviewSampleRow(BaseModel):
+    """Single sample row for manual verification."""
+
+    report_id: Optional[int] = None
+    line_id: Optional[int] = None
+    sale_dt: Optional[str] = None
+    qty: Optional[int] = None
+    retail_price: Optional[float] = None
+    sale_percent: Optional[float] = None
+    retail_amount: Optional[float] = None
+
+
+class DiscountsPreviewResponse(BaseModel):
+    """Response for discounts-preview endpoint (read-only aggregation from wb_finance_report_lines)."""
+
+    total_qty: int = Field(..., description="Total quantity sold in period")
+    admin_price_unit: Optional[float] = Field(None, description="Weighted avg retail_price (admin price)")
+    seller_discount_pct: Optional[float] = Field(None, description="Weighted avg sale_percent")
+    seller_final_price_unit: Optional[float] = Field(None, description="Weighted avg retail_price*(1 - sale_percent/100)")
+    wb_realized_price_unit: Optional[float] = Field(None, description="sum(retail_amount)/sum(qty)")
+    wb_spp_discount_unit: Optional[float] = Field(None, description="max(seller_final - wb_realized, 0)")
+    wb_spp_pct: Optional[float] = Field(None, description="wb_spp_discount_unit / seller_final_price_unit * 100")
+    sample_rows: List[DiscountsPreviewSampleRow] = Field(default_factory=list)
+
+
+# Actual PnL v2 preview schemas
+
+class ActualV2PreviewSampleRow(BaseModel):
+    """Single sample row for manual verification of Actual PnL v2."""
+
+    report_id: Optional[int] = None
+    line_id: Optional[int] = None
+    line_date: Optional[str] = None
+    retail_amount: Optional[float] = None
+    doc_type_name: Optional[str] = None
+    supplier_oper_name: Optional[str] = None
+    ppvz_vw: Optional[float] = None
+    ppvz_vw_nds: Optional[float] = None
+    acquiring_fee: Optional[float] = None
+    sale_row: Optional[float] = None
+    commission_vv_row: Optional[float] = None
+    acquiring_row: Optional[float] = None
+    logistics_total_row: Optional[float] = None
+    logistics_delivery: Optional[float] = None
+    logistics_transport: Optional[float] = None
+    logistics_pvz: Optional[float] = None
+    logistics_storage: Optional[float] = None
+    logistics_acceptance: Optional[float] = None
+    other_total_row: Optional[float] = None
+    other_fines: Optional[float] = None
+    other_deductions: Optional[float] = None
+    other_loyalty: Optional[float] = None
+    other_vv_adjustment: Optional[float] = None
+    other_sticker: Optional[float] = None
+    transfer_for_goods_row: Optional[float] = None
+    total_to_pay_row: Optional[float] = None
+
+
+class ActualV2PreviewResponse(BaseModel):
+    """Response for actual-v2-preview endpoint (read-only aggregation from wb_finance_report_lines)."""
+
+    rows_total: int = Field(0, description="Count of rows in selection (diagnostic)")
+    sale_rows_nonzero: int = Field(0, description="Count of rows where retail_amount != 0 (diagnostic)")
+    sale: float = Field(..., description="Σ retail_amount * sign (Вайлдберриз реализовал Товар)")
+    commission_vv_signed: float = Field(
+        ...,
+        description="Σ(ppvz_vw + ppvz_vw_nds) — ВВ+НДС со знаком из отчёта",
+    )
+    transfer_for_goods: float = Field(..., description="К перечислению за товар = SALE + commission_vv_signed - acquiring")
+    acquiring: float = Field(..., description="Эквайринг/Комиссии за организацию платежей")
+    logistics_delivery: float = Field(0, description="Услуги по доставке товара покупателю")
+    logistics_transport: float = Field(0, description="Возмещение издержек по перевозке/складским операциям")
+    logistics_pvz: float = Field(0, description="Возмещение за выдачу и возврат товаров на ПВЗ")
+    logistics_storage: float = Field(0, description="Хранение")
+    logistics_acceptance: float = Field(0, description="Операции на приемке")
+    logistics_total: float = Field(0, description="Сумма всех статей логистики")
+    other_fines: float = Field(0, description="Общая сумма штрафов")
+    other_deductions: float = Field(0, description="Удержания")
+    other_loyalty: float = Field(0, description="Компенсация скидки по программе лояльности")
+    other_vv_adjustment: float = Field(0, description="Корректировка Вознаграждения ВБ (ВВ)")
+    other_sticker: float = Field(0, description="Стикер МП")
+    other_total: float = Field(0, description="Сумма всех статей OTHER")
+    total_to_pay: float = Field(..., description="Итого к оплате = transfer_for_goods - logistics - other")
+    wb_total_cost_actual: float = Field(
+        ...,
+        description="Общие косты WB = (-commission_vv_signed) + acquiring + logistics + other",
+    )
+    wb_total_cost_pct_of_sale: Optional[float] = Field(
+        None,
+        description="wb_total_cost_actual / sale if sale > 0",
+    )
+    retail_price: Optional[float] = Field(None, description="Пока не считается (нет источника)")
+    reconciliation: Optional[Dict[str, float]] = Field(
+        None,
+        description="transfer_expected, transfer_delta, wb_cost_expected, wb_cost_delta",
+    )
+    sample_rows: List[ActualV2PreviewSampleRow] = Field(default_factory=list)
+
+
+# Weekly Summary schemas (WB header totals)
+
+class WBWeeklySummarySampleRow(BaseModel):
+    """Sample row for Weekly Summary debug."""
+
+    report_id: Optional[int] = None
+    line_id: Optional[int] = None
+    line_date: Optional[str] = None
+    doc_type_name: Optional[str] = None
+    supplier_oper_name: Optional[str] = None
+    retail_amount: Optional[float] = None
+    ppvz_for_pay: Optional[float] = None
+    delivery_rub: Optional[float] = None
+    storage_fee: Optional[float] = None
+    acceptance: Optional[float] = None
+    deduction: Optional[float] = None
+    penalty: Optional[float] = None
+    cashback_discount: Optional[float] = None
+    is_return: Optional[bool] = None
+    sale_row: Optional[float] = None
+    transfer_row: Optional[float] = None
+
+
+class WBWeeklySummaryResponse(BaseModel):
+    """Weekly Summary aggregate — matches WB Excel header totals."""
+
+    field_mapping: Dict[str, str] = Field(default_factory=dict)
+    rows_total: int = Field(0)
+    sale: float = Field(..., description="SALE = Σ sale_row")
+    transfer_for_goods: float = Field(..., description="TRANSFER_FOR_GOODS = Σ transfer_row")
+    logistics_cost: float = Field(0)
+    storage_cost: float = Field(0)
+    acceptance_cost: float = Field(0)
+    other_withholdings: float = Field(0)
+    penalties: float = Field(0)
+    loyalty_comp_display: float = Field(0, description="Display only, not in TOTAL_TO_PAY")
+    total_to_pay: float = Field(...)
+    reconciliation: Dict[str, float] = Field(default_factory=dict)
+    debug: Dict[str, float] = Field(default_factory=dict)
+    sample_rows: List[WBWeeklySummarySampleRow] = Field(default_factory=list)
+
+
+# Unit PnL schemas (WB finance report lines aggregated by nm_id)
+
+class WBUnitPnlRow(BaseModel):
+    """Single SKU row in Unit PnL table."""
+    nm_id: int
+    vendor_code: Optional[str] = None
+    title: Optional[str] = None
+    photos: List[str] = Field(default_factory=list)
+    sale_amount: float = 0
+    transfer_amount: float = 0
+    logistics_cost: float = 0
+    storage_cost: float = 0
+    acceptance_cost: float = 0
+    other_withholdings: float = 0
+    penalties: float = 0
+    loyalty_comp_display: float = 0
+    total_to_pay: float = 0
+    sales_cnt: int = 0
+    returns_cnt: int = 0
+    net_sales_cnt: int = 0
+    deliveries_qty: Optional[int] = None
+    returns_log_qty: Optional[int] = None
+    buyout_rate: Optional[float] = None
+    wb_price_avg: Optional[float] = None
+    spp_avg: Optional[float] = None
+    fact_price_avg: Optional[float] = None
+    rrp_price: Optional[float] = None
+    rrp_missing: bool = False
+    cogs_rule_text: Optional[str] = None
+    margin_pct_of_rrp: Optional[float] = None
+    markup_pct_of_cogs: Optional[float] = None
+    delta_fact_to_rrp_pct: Optional[float] = None
+    commission_vv_signed: Optional[float] = None
+    acquiring: Optional[float] = None
+    wb_total_signed: Optional[float] = None
+    wb_total_cost_per_unit: Optional[float] = None
+    cogs_per_unit: Optional[float] = None
+    cogs_total: Optional[float] = None
+    profit_per_unit: Optional[float] = None
+    margin_pct_of_revenue: Optional[float] = None
+    cogs_missing: bool = False
+
+
+class WBUnitPnlResponse(BaseModel):
+    """Unit PnL table response with header totals.
+    header_totals: scope_lines_total (always by scope), lines_total (by scope or filter per filter_header),
+    skus_total (distinct nm_id after filters), filter_header, rrp_model, sale, transfer_for_goods, etc.
+    """
+    scope: Dict[str, Any] = Field(default_factory=dict)
+    rows_total: int = 0  # = skus_total, for pagination
+    items: List[WBUnitPnlRow] = Field(default_factory=list)
+    header_totals: Dict[str, Any] = Field(default_factory=dict)
+    debug: Optional[Dict[str, Any]] = None
+
+
+class WBUnitPnlDetailsResponse(BaseModel):
+    """Unit PnL details for one nm_id (expand row)."""
+    nm_id: int
+    scope: Dict[str, Any] = Field(default_factory=dict)
+    product: Optional[Dict[str, Any]] = None
+    base_calc: Dict[str, Any] = Field(default_factory=dict)
+    commission_vv_signed: Optional[float] = Field(None, description="WB commission as in report (signed, can be negative)")
+    acquiring: Optional[float] = Field(None, description="Acquiring fee")
+    wb_total_signed: Optional[float] = Field(None, description="WB net effect: commission_vv_signed + acquiring + logistics + storage + acceptance + deduction + penalty")
+    wb_total_pct_of_sale: Optional[float] = Field(None, description="wb_total_signed as % of sale_amount")
+    wb_costs_per_unit: Dict[str, Any] = Field(default_factory=dict)
+    profitability: Dict[str, Any] = Field(default_factory=dict)
+    logistics_counts: Dict[str, Any] = Field(default_factory=dict)
+    raw_lines_preview: Optional[List[Dict[str, Any]]] = None
+    debug: Optional[Dict[str, Any]] = None
+
+
 # System marketplace settings schemas
 
 class SystemMarketplaceSettingsBase(BaseModel):

@@ -47,6 +47,12 @@ from app.schemas.marketplaces import (
     WBSkuPnlListResponse,
     WBProductSubjectItem,
     SystemMarketplacePublicStatus,
+    DiscountsPreviewResponse,
+    ActualV2PreviewResponse,
+    WBWeeklySummaryResponse,
+    WBUnitPnlRow,
+    WBUnitPnlResponse,
+    WBUnitPnlDetailsResponse,
 )
 from app.utils.wb_token_validator import validate_wb_token
 from app.deps import (
@@ -54,6 +60,7 @@ from app.deps import (
     get_project_membership,
     require_project_admin,
 )
+from app.settings import ALLOW_UNAUTH_LOCAL
 from app.db_marketplace_tariffs import get_latest_snapshot
 
 router = APIRouter(prefix="/api/v1", tags=["marketplaces"])
@@ -298,6 +305,7 @@ async def get_wb_marketplace_status_v2_endpoint(
     has_token = bool(pm.get("api_token_encrypted")) if pm else False
 
     brand_id = None
+    has_brands = False
     updated_at = datetime.now()
     if pm:
         settings = pm.get("settings_json")
@@ -305,17 +313,27 @@ async def get_wb_marketplace_status_v2_endpoint(
             if isinstance(settings, str):
                 import json
                 settings = json.loads(settings)
-            brand_id_raw = settings.get("brand_id") if isinstance(settings, dict) else None
-            if brand_id_raw is not None:
-                try:
-                    brand_id = int(brand_id_raw)
-                except (ValueError, TypeError):
-                    brand_id = None
+            if isinstance(settings, dict):
+                brand_id_raw = settings.get("brand_id")
+                if brand_id_raw is not None:
+                    try:
+                        brand_id = int(brand_id_raw)
+                        has_brands = True
+                    except (ValueError, TypeError):
+                        pass
+                fp = settings.get("frontend_prices")
+                if isinstance(fp, dict) and isinstance(fp.get("brands"), list):
+                    for b in fp["brands"]:
+                        if isinstance(b, dict) and b.get("enabled", True):
+                            has_brands = True
+                            break
+        if not has_brands and brand_id is not None:
+            has_brands = True
         pm_updated_at = pm.get("updated_at")
         if isinstance(pm_updated_at, datetime):
             updated_at = pm_updated_at
 
-    is_configured = bool(has_token and brand_id is not None)
+    is_configured = bool(has_token and has_brands)
 
     return WBMarketplaceStatusV2(
         is_enabled=is_enabled,
@@ -415,6 +433,7 @@ async def update_wb_marketplace_endpoint(
 
     settings = updated_pm.get("settings_json")
     brand_id = None
+    has_brands = False
     if settings:
         if isinstance(settings, str):
             import json
@@ -424,14 +443,23 @@ async def update_wb_marketplace_endpoint(
             if brand_id_raw is not None:
                 try:
                     brand_id = int(brand_id_raw)
+                    has_brands = True
                 except (ValueError, TypeError):
-                    brand_id = None
+                    pass
+            fp = settings.get("frontend_prices")
+            if isinstance(fp, dict) and isinstance(fp.get("brands"), list):
+                for b in fp["brands"]:
+                    if isinstance(b, dict) and b.get("enabled", True):
+                        has_brands = True
+                        break
+    if not has_brands and brand_id is not None:
+        has_brands = True
 
     updated_at = updated_pm.get("updated_at")
     if not isinstance(updated_at, datetime):
         updated_at = datetime.now()
 
-    is_configured = bool(has_token and brand_id is not None)
+    is_configured = bool(has_token and has_brands)
 
     return WBMarketplaceStatusV2(
         is_enabled=is_enabled,
@@ -989,6 +1017,15 @@ async def build_wb_sku_pnl(
     """Build WB SKU PnL snapshot for period."""
     from app.tasks.wb_sku_pnl import build_wb_sku_pnl_snapshot_task
 
+    import uuid
+
+    trace_id = str(uuid.uuid4())[:8]
+    logger.info(
+        "build_wb_sku_pnl entry trace_id=%s project_id=%s period_from=%s period_to=%s version=%s",
+        trace_id, project_id, body.period_from, body.period_to, body.version,
+    )
+
+
     try:
         datetime.strptime(body.period_from, "%Y-%m-%d")
         datetime.strptime(body.period_to, "%Y-%m-%d")
@@ -1007,7 +1044,14 @@ async def build_wb_sku_pnl(
             rebuild=body.rebuild,
             ensure_events=body.ensure_events,
         )
+
     except Exception as e:
+
+        task_id = getattr(result, "id", None)
+        logger.info("build_wb_sku_pnl task enqueued task_id=%s", task_id)
+    except Exception as e:
+        logger.exception("build_wb_sku_pnl delay failed: %s", e)
+
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to start build task: {str(e)}",
@@ -1073,6 +1117,244 @@ async def list_wb_sku_pnl(
 
 
 @router.get(
+    "/projects/{project_id}/marketplaces/wildberries/finances/discounts-preview",
+    response_model=DiscountsPreviewResponse,
+    summary="Discounts preview (read-only)",
+    description="Aggregate AdminPrice, SellerDiscount, WBRealizedPrice from wb_finance_report_lines payload (sales only). Returns +10 sample rows for manual verification.",
+)
+async def get_discounts_preview_endpoint(
+    project_id: int = Path(..., description="Project ID"),
+    period_from: str = Query(..., description="Period start YYYY-MM-DD"),
+    period_to: str = Query(..., description="Period end YYYY-MM-DD"),
+    internal_sku: Optional[str] = Query(None, description="Filter by internal SKU"),
+    nm_id: Optional[int] = Query(None, description="Filter by nm_id (alternative to internal_sku)"),
+):
+    """Read-only discounts preview from raw finance lines. No auth for local testing."""
+    from datetime import date as _date
+    from app.db import engine
+    from app.db_discounts_preview import get_discounts_preview
+
+    try:
+        period_from_obj = _date.fromisoformat(period_from)
+        period_to_obj = _date.fromisoformat(period_to)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format YYYY-MM-DD")
+
+    if not internal_sku and nm_id is None:
+        raise HTTPException(status_code=400, detail="Provide internal_sku or nm_id")
+
+    with engine.connect() as conn:
+        result = get_discounts_preview(
+            conn,
+            project_id,
+            period_from_obj,
+            period_to_obj,
+            internal_sku=internal_sku,
+            nm_id=nm_id,
+        )
+
+    return result
+
+
+def _actual_v2_preview_dependencies():
+    """Auth deps for actual-v2-preview; empty when ALLOW_UNAUTH_LOCAL."""
+    if ALLOW_UNAUTH_LOCAL:
+        return []
+    return [Depends(get_current_active_user), Depends(get_project_membership)]
+
+
+@router.get(
+    "/projects/{project_id}/marketplaces/wildberries/finances/actual-v2-preview",
+    response_model=ActualV2PreviewResponse,
+    summary="Actual PnL v2 preview (read-only)",
+    description="Aggregate from wb_finance_report_lines for verification against WB report. transfer_for_goods = К перечислению за товар, total_to_pay = Итого к оплате.",
+    dependencies=_actual_v2_preview_dependencies(),
+)
+async def get_actual_v2_preview_endpoint(
+    project_id: int = Path(..., description="Project ID"),
+    period_from: str = Query(..., description="Period start YYYY-MM-DD"),
+    period_to: str = Query(..., description="Period end YYYY-MM-DD"),
+    report_id: Optional[int] = Query(None, description="Filter by single report_id for testing"),
+    internal_sku: Optional[str] = Query(None, description="Filter by internal SKU"),
+    nm_id: Optional[int] = Query(None, description="Filter by nm_id"),
+):
+    """Read-only Actual PnL v2 preview from raw finance lines."""
+    from datetime import date as _date
+    from app.db import engine
+    from app.db_wb_actual_v2_preview import get_wb_actual_v2_preview
+
+    try:
+        period_from_obj = _date.fromisoformat(period_from)
+        period_to_obj = _date.fromisoformat(period_to)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format YYYY-MM-DD")
+
+    with engine.connect() as conn:
+        result = get_wb_actual_v2_preview(
+            conn,
+            project_id,
+            period_from_obj,
+            period_to_obj,
+            nm_id=nm_id,
+            internal_sku=internal_sku,
+            report_id=report_id,
+        )
+
+    return result
+
+
+@router.get(
+    "/projects/{project_id}/marketplaces/wildberries/finances/weekly-summary",
+    response_model=WBWeeklySummaryResponse,
+    summary="Weekly Summary (read-only)",
+    description="Aggregate for single report_id — matches WB Excel header totals exactly.",
+    dependencies=_actual_v2_preview_dependencies(),
+)
+async def get_wb_weekly_summary_endpoint(
+    project_id: int = Path(..., description="Project ID"),
+    report_id: int = Query(..., description="WB report ID (realizationreport_id)"),
+):
+    """Weekly Summary: SALE, TRANSFER_FOR_GOODS, LOGISTICS_COST, etc. for report_id."""
+    from app.db import engine
+    from app.db_wb_weekly_summary import get_wb_weekly_summary
+
+    with engine.connect() as conn:
+        result = get_wb_weekly_summary(conn, project_id, report_id)
+
+    return result
+
+
+@router.get(
+    "/projects/{project_id}/marketplaces/wildberries/finances/unit-pnl",
+    response_model=WBUnitPnlResponse,
+    summary="Unit PnL table (read-only)",
+    description="Aggregate by nm_id from wb_finance_report_lines. Scope: report_id OR rr_dt_from+rr_dt_to.",
+)
+async def get_wb_unit_pnl(
+    project_id: int = Path(..., description="Project ID"),
+    report_id: Optional[int] = Query(None, description="WB report ID (report mode)"),
+    rr_dt_from: Optional[str] = Query(None, description="Period start YYYY-MM-DD (period mode)"),
+    rr_dt_to: Optional[str] = Query(None, description="Period end YYYY-MM-DD (period mode)"),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    sort: str = Query("total_to_pay", description="Sort: sold_units|total_to_pay|margin_pct_of_revenue|wb_pct_of_sale"),
+    order: str = Query("desc"),
+    q: Optional[str] = Query(None, description="Search by nm_id, vendor_code, title"),
+    category: Optional[int] = Query(None, description="WB subject_id (product category) filter"),
+    filter_header: bool = Query(False, description="When True, header_totals and lines_total use q+category filter"),
+    current_user: dict = Depends(get_current_active_user),
+    membership: dict = Depends(get_project_membership),
+):
+    """Unit PnL: table aggregated by nm_id. Either report_id or (rr_dt_from, rr_dt_to) required."""
+    from datetime import date as _date
+    from app.db import engine
+    from app.db_wb_unit_pnl import get_wb_unit_pnl_table, ReportScope, PeriodScope
+
+    if report_id is not None and rr_dt_from is not None and rr_dt_to is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Provide either report_id OR (rr_dt_from, rr_dt_to), not both",
+        )
+    if report_id is not None:
+        scope = ReportScope(report_id=report_id)
+    elif rr_dt_from is not None and rr_dt_to is not None:
+        try:
+            scope = PeriodScope(
+                rr_dt_from=_date.fromisoformat(rr_dt_from),
+                rr_dt_to=_date.fromisoformat(rr_dt_to),
+            )
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid date format. Use YYYY-MM-DD",
+            )
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Provide report_id OR both rr_dt_from and rr_dt_to",
+        )
+
+    with engine.connect() as conn:
+        result = get_wb_unit_pnl_table(
+            conn, project_id, scope,
+            limit=limit, offset=offset, sort=sort, order=order,
+            q=q, subject_id=category, filter_header=filter_header,
+        )
+
+    return WBUnitPnlResponse(
+        scope=result["scope"],
+        rows_total=result["rows_total"],
+        items=[WBUnitPnlRow(**r) for r in result["items"]],
+        header_totals=result["header_totals"],
+        debug=result.get("debug"),
+    )
+
+
+@router.get(
+    "/projects/{project_id}/marketplaces/wildberries/finances/unit-pnl/{nm_id}",
+    response_model=WBUnitPnlDetailsResponse,
+    summary="Unit PnL details for one nm_id",
+    description="Details for expand row. Scope: report_id OR rr_dt_from+rr_dt_to.",
+)
+async def get_wb_unit_pnl_details_endpoint(
+    project_id: int = Path(..., description="Project ID"),
+    nm_id: int = Path(..., description="nm_id"),
+    report_id: Optional[int] = Query(None, description="WB report ID (report mode)"),
+    rr_dt_from: Optional[str] = Query(None, description="Period start YYYY-MM-DD (period mode)"),
+    rr_dt_to: Optional[str] = Query(None, description="Period end YYYY-MM-DD (period mode)"),
+    current_user: dict = Depends(get_current_active_user),
+    membership: dict = Depends(get_project_membership),
+):
+    """Unit PnL details for one nm_id. Either report_id or (rr_dt_from, rr_dt_to) required."""
+    from datetime import date as _date
+    from app.db import engine
+    from app.db_wb_unit_pnl import get_wb_unit_pnl_details as _get_details, ReportScope, PeriodScope
+
+    if report_id is not None and rr_dt_from is not None and rr_dt_to is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Provide either report_id OR (rr_dt_from, rr_dt_to), not both",
+        )
+    if report_id is not None:
+        scope = ReportScope(report_id=report_id)
+    elif rr_dt_from is not None and rr_dt_to is not None:
+        try:
+            scope = PeriodScope(
+                rr_dt_from=_date.fromisoformat(rr_dt_from),
+                rr_dt_to=_date.fromisoformat(rr_dt_to),
+            )
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid date format. Use YYYY-MM-DD",
+            )
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Provide report_id OR both rr_dt_from and rr_dt_to",
+        )
+
+    with engine.connect() as conn:
+        result = _get_details(conn, project_id, nm_id, scope)
+
+    return WBUnitPnlDetailsResponse(
+        nm_id=result["nm_id"],
+        scope=result["scope"],
+        product=result.get("product"),
+        base_calc=result.get("base_calc", {}),
+        commission_vv_signed=result.get("commission_vv_signed"),
+        acquiring=result.get("acquiring"),
+        wb_total_signed=result.get("wb_total_signed"),
+        wb_total_pct_of_sale=result.get("wb_total_pct_of_sale"),
+        wb_costs_per_unit=result.get("wb_costs_per_unit", {}),
+        profitability=result.get("profitability", {}),
+        logistics_counts=result.get("logistics_counts", {}),
+        raw_lines_preview=result.get("raw_lines_preview"),
+        debug=result.get("debug"),
+    )
+
+
+@router.get(
     "/projects/{project_id}/marketplaces/wildberries/products/subjects",
     response_model=List[WBProductSubjectItem],
     summary="List WB product subjects",
@@ -1117,6 +1399,35 @@ async def list_wb_product_subjects(
 
 
 @router.get(
+    "/projects/{project_id}/marketplaces/wildberries/finances/reports/latest",
+    response_model=WBFinanceReportResponse,
+    summary="Get latest WB finance report",
+    description="Returns the most recent report by period_to DESC. 404 if no reports.",
+)
+async def get_latest_wb_finance_report(
+    project_id: int = Path(..., description="Project ID"),
+    current_user: dict = Depends(get_current_active_user),
+    membership: dict = Depends(get_project_membership),
+):
+    """Get latest WB finance report for dashboard/entrypoint."""
+    from app.db_wb_finances import get_latest_report
+
+    report = get_latest_report(project_id=project_id, marketplace_code="wildberries")
+    if not report:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No finance reports found")
+    return WBFinanceReportResponse(
+        report_id=report["report_id"],
+        period_from=report["period_from"],
+        period_to=report["period_to"],
+        currency=report["currency"],
+        total_amount=float(report["total_amount"]) if report.get("total_amount") is not None else None,
+        rows_count=report["rows_count"],
+        first_seen_at=report["first_seen_at"],
+        last_seen_at=report["last_seen_at"],
+    )
+
+
+@router.get(
     "/projects/{project_id}/marketplaces/wildberries/finances/reports",
     response_model=List[WBFinanceReportResponse],
     summary="List WB finance reports",
@@ -1132,6 +1443,40 @@ async def list_wb_finances_reports(
 
     reports = list_reports(project_id=project_id, marketplace_code="wildberries")
     
+    return [
+        WBFinanceReportResponse(
+            report_id=r["report_id"],
+            period_from=r["period_from"],
+            period_to=r["period_to"],
+            currency=r["currency"],
+            total_amount=float(r["total_amount"]) if r["total_amount"] is not None else None,
+            rows_count=r["rows_count"],
+            first_seen_at=r["first_seen_at"],
+            last_seen_at=r["last_seen_at"],
+        )
+        for r in reports
+    ]
+
+
+@router.get(
+    "/projects/{project_id}/marketplaces/wildberries/finances/reports/search",
+    response_model=List[WBFinanceReportResponse],
+    summary="Search WB finance reports (autocomplete)",
+    description="Search reports by report_id, period_from, period_to, last_seen_at.",
+)
+async def search_wb_finance_reports(
+    project_id: int = Path(..., description="Project ID"),
+    query: str = Query("", description="Search string"),
+    limit: int = Query(20, ge=1, le=50),
+    current_user: dict = Depends(get_current_active_user),
+    membership: dict = Depends(get_project_membership),
+):
+    """Search reports for autocomplete/typeahead."""
+    from app.db_wb_finances import search_reports
+
+    reports = search_reports(
+        project_id=project_id, query=query, limit=limit, marketplace_code="wildberries"
+    )
     return [
         WBFinanceReportResponse(
             report_id=r["report_id"],

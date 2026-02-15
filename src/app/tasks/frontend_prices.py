@@ -120,6 +120,15 @@ def sync_frontend_prices_brand() -> Dict[str, Any]:
             print("sync_frontend_prices_brand: brand_base_url not configured in app_settings (frontend_prices.brand_base_url)")
             return {"status": "error", "reason": "brand_base_url_not_configured"}
 
+        # Global brand_base_url is a template: must contain {brand_id}
+        if "{brand_id}" not in base_url:
+            print("sync_frontend_prices_brand: brand_base_url must contain placeholder {brand_id}")
+            return {
+                "status": "error",
+                "reason": "brand_base_url_must_contain_placeholder",
+                "error": "frontend_prices.brand_base_url must contain placeholder {brand_id}. Example: https://catalog.wb.ru/brands/v4/catalog?brand={brand_id}&page=1",
+            }
+
         try:
             sleep_ms = int(sleep_ms_str)
         except (ValueError, TypeError):
@@ -153,14 +162,17 @@ def sync_frontend_prices_brand() -> Dict[str, Any]:
             print("sync_frontend_prices_brand: no enabled WB projects with settings_json.brand_id; skipping")
             return {"status": "skipped", "reason": "no_brand_ids"}
 
+        from app.ingest_frontend_prices import resolve_base_url
+
         print(f"sync_frontend_prices_brand: starting for {len(brand_ids)} brand_id(s), sleep_ms={sleep_ms}")
 
         results: dict[str, Any] = {"per_brand": {}}
         for bid in brand_ids:
+            resolved_base_url = resolve_base_url(base_url, bid)
             r = asyncio.run(
                 ingest_frontend_brand_prices_task(
                     brand_id=bid,
-                    base_url=base_url,
+                    base_url=resolved_base_url,
                     max_pages=0,
                     sleep_ms=sleep_ms,
                 )

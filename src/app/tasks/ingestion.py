@@ -131,6 +131,7 @@ def ingest_frontend_prices_task(project_id: int, run_id: int | None = None) -> D
                   pm.settings_json->>'brand_id' AS brand_id,
                   pm.settings_json->'frontend_prices'->>'base_url_template' AS base_url_template,
                   pm.settings_json->'frontend_prices'->>'max_pages' AS fp_max_pages,
+                  pm.settings_json->'frontend_prices'->>'sleep_base_ms' AS fp_sleep_base_ms,
                   pm.settings_json->'frontend_prices'->>'sleep_ms' AS fp_sleep_ms,
                   pm.settings_json->'frontend_prices'->>'sleep_jitter_ms' AS fp_sleep_jitter_ms
                 FROM project_marketplaces pm
@@ -145,6 +146,7 @@ def ingest_frontend_prices_task(project_id: int, run_id: int | None = None) -> D
 
         brand_id_str = (wb_settings_row or {}).get("brand_id")
         base_url_template = (wb_settings_row or {}).get("base_url_template")
+        fp_sleep_base_ms_str = (wb_settings_row or {}).get("fp_sleep_base_ms")
         fp_sleep_ms_str = (wb_settings_row or {}).get("fp_sleep_ms")
         fp_max_pages_str = (wb_settings_row or {}).get("fp_max_pages")
         fp_sleep_jitter_ms_str = (wb_settings_row or {}).get("fp_sleep_jitter_ms")
@@ -193,7 +195,12 @@ def ingest_frontend_prices_task(project_id: int, run_id: int | None = None) -> D
         except (ValueError, TypeError):
             sleep_ms = 800
 
-    if fp_sleep_ms_str:
+    if fp_sleep_base_ms_str:
+        try:
+            sleep_ms = int(fp_sleep_base_ms_str)
+        except (ValueError, TypeError):
+            pass
+    elif fp_sleep_ms_str:
         try:
             sleep_ms = int(fp_sleep_ms_str)
         except (ValueError, TypeError):
@@ -236,6 +243,29 @@ def ingest_frontend_prices_task(project_id: int, run_id: int | None = None) -> D
         f"proxy_used={'yes' if proxy_url else 'no'} proxy_scheme={proxy_scheme or 'none'}"
     )
 
+    # base_url_template must be set and contain {brand_id}; ingest_frontend_brand_prices will resolve it
+    if not base_url_template or not str(base_url_template).strip():
+        # #region agent log
+        err_payload = {"hypothesisId": "fp_p2", "location": "ingestion.py:frontend_prices_task", "message": "base_url_template not configured", "data": {"project_id": project_id, "brand_id": brand_id, "reason": "base_url_template_not_configured"}, "timestamp": __import__("time").time() * 1000}
+        print(f"[DEBUG] {err_payload}")
+        try:
+            _log_path = __import__("os").environ.get("DEBUG_LOG_PATH", __import__("os").path.join(__import__("os").path.dirname(__file__), "..", "..", "..", ".cursor", "debug.log"))
+            _d = __import__("os").path.dirname(_log_path)
+            if _d:
+                __import__("os").makedirs(_d, exist_ok=True)
+            open(_log_path, "a", encoding="utf-8").write(__import__("json").dumps(err_payload, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
+        # #endregion
+        return {
+            "status": "error",
+            "domain": "frontend_prices",
+            "reason": "base_url_template_not_configured",
+            "project_id": project_id,
+            "brand_id": brand_id,
+            "error": "base_url_template not configured or missing {brand_id}; add {brand_id} to project marketplace frontend_prices.base_url_template",
+        }
+
     # Determine run_started_at for stable snapshot buckets (hourly) if run_id is provided.
     run_started_at = None
     if run_id is not None:
@@ -246,7 +276,7 @@ def ingest_frontend_prices_task(project_id: int, run_id: int | None = None) -> D
     result = asyncio.run(
         ingest_frontend_brand_prices(
             brand_id=brand_id,
-            base_url=base_url_template,
+            base_url=str(base_url_template).strip(),
             max_pages=max_pages,
             sleep_ms=sleep_ms,
             sleep_jitter_ms=sleep_jitter_ms,
@@ -259,6 +289,18 @@ def ingest_frontend_prices_task(project_id: int, run_id: int | None = None) -> D
     )
 
     if isinstance(result, dict) and "error" in result:
+        # #region agent log
+        err_payload = {"hypothesisId": "fp_p2", "location": "ingestion.py:frontend_prices_task", "message": "ingest returned error", "data": {"project_id": project_id, "brand_id": brand_id, "error": result.get("error")}, "timestamp": __import__("time").time() * 1000}
+        print(f"[DEBUG] {err_payload}")
+        try:
+            _log_path = __import__("os").environ.get("DEBUG_LOG_PATH", __import__("os").path.join(__import__("os").path.dirname(__file__), "..", "..", "..", ".cursor", "debug.log"))
+            _d = __import__("os").path.dirname(_log_path)
+            if _d:
+                __import__("os").makedirs(_d, exist_ok=True)
+            open(_log_path, "a", encoding="utf-8").write(__import__("json").dumps(err_payload, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
+        # #endregion
         return {
             "status": "error",
             "domain": "frontend_prices",

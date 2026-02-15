@@ -8,9 +8,9 @@ import time
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
-from fastapi import APIRouter, BackgroundTasks, Body
+from fastapi import APIRouter, BackgroundTasks, Body, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -48,6 +48,21 @@ def _dbg(*, hypothesisId: str, location: str, message: str, data: dict) -> None:
 # endregion
 
 
+BRAND_ID_PLACEHOLDER = "{brand_id}"
+
+
+def resolve_base_url(template: str, brand_id: int) -> str:
+    """Replace {brand_id} in template with numeric brand_id. Fail if placeholder missing."""
+    if not template or not template.strip():
+        raise ValueError("base_url template is empty")
+    if BRAND_ID_PLACEHOLDER not in template:
+        raise ValueError(
+            "base_url template must contain placeholder {brand_id}. "
+            "Example: https://catalog.wb.ru/brands/v4/catalog?brand={brand_id}&page=1"
+        )
+    return template.strip().replace(BRAND_ID_PLACEHOLDER, str(brand_id))
+
+
 class FrontendBrandPricesRequest(BaseModel):
     brand_id: int
     base_url: Optional[str] = None  # If not provided, will be read from app_settings
@@ -56,7 +71,7 @@ class FrontendBrandPricesRequest(BaseModel):
 
 
 def compute_retry_sleep_seconds(retry_count: int) -> int:
-    """Compute exponential backoff with jitter for rate-limited retries.
+    """Compute exponential backoff with jitter for rate-limited retries (legacy/single-brand).
 
     base = min(20 * (2 ** (retry_count - 1)), 120)
     jitter = random.uniform(-0.25, +0.25)
@@ -69,6 +84,14 @@ def compute_retry_sleep_seconds(retry_count: int) -> int:
     sleep = base * (1.0 + jitter)
     sleep = max(10.0, min(float(settings.FRONTEND_PRICES_MAX_RETRY_SLEEP_SECONDS), sleep))
     return int(round(sleep))
+
+
+def compute_retry_sleep_429(retry_count: int) -> int:
+    """Backoff for 429: 2, 4, 8, 16, 32 sec (cap 60). Used for pool/single-brand; max 5 retries."""
+    if retry_count <= 0:
+        retry_count = 1
+    base = min(2 * (2 ** (retry_count - 1)), 60)
+    return int(base)
 
 
 async def sleep_with_heartbeat(
@@ -275,6 +298,17 @@ def extract_page_from_url(url: str) -> int:
         return 1
 
 
+def ensure_limit_in_url(url: str, limit: int) -> str:
+    """Ensure URL has limit parameter: replace {limit}, or set/overwrite limit in query. Used for frontend_prices (not proxy)."""
+    if "{limit}" in url:
+        return url.replace("{limit}", str(limit))
+    parsed = urlparse(url)
+    query_params = parse_qs(parsed.query, keep_blank_values=True)
+    query_params["limit"] = [str(limit)]
+    new_query = urlencode(query_params, doseq=True)
+    return urlunparse(parsed._replace(query=new_query))
+
+
 def get_brand_base_url_from_settings() -> Optional[str]:
     """Get frontend prices brand base URL from app_settings."""
     sql = text("""
@@ -298,11 +332,16 @@ async def ingest_frontend_brand_prices(
     max_pages: int = 0,
     sleep_ms: int = 800,
     sleep_jitter_ms: int = 0,
+    limit: Optional[int] = None,
     run_id: int | None = None,
     project_id: int | None = None,
     run_started_at: datetime | None = None,
     proxy_url: str | None = None,
     proxy_scheme: str | None = None,
+    http_min_retries: Optional[int] = None,
+    http_timeout_jitter_sec: Optional[int] = None,
+    min_coverage_ratio: Optional[float] = None,
+    max_runtime_seconds: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Fetch and insert frontend catalog price snapshots from WB public API."""
     proxy_used = bool(proxy_url and str(proxy_url).strip())
@@ -333,14 +372,52 @@ async def ingest_frontend_brand_prices(
     if not base_url or not base_url.strip():
         base_url = get_brand_base_url_from_settings()
         if not base_url:
+            # #region agent log
+            err_payload = {"hypothesisId": "fp_p2", "location": "ingest_frontend_prices.py:brand_base_url", "message": "brand_base_url not configured", "data": {"project_id": project_id, "brand_id": brand_id, "reason": "brand_base_url_not_configured"}, "timestamp": int(time.time() * 1000)}
+            print(f"[DEBUG] {err_payload}")
+            try:
+                _log_path = os.environ.get("DEBUG_LOG_PATH", os.path.join(os.path.dirname(__file__), "..", "..", ".cursor", "debug.log"))
+                _d = os.path.dirname(_log_path)
+                if _d:
+                    os.makedirs(_d, exist_ok=True)
+                open(_log_path, "a", encoding="utf-8").write(json.dumps(err_payload, ensure_ascii=False) + "\n")
+            except Exception:
+                pass
+            # #endregion
             return {
                 "error": "brand_base_url not configured. Please set it via PUT /api/v1/settings/frontend-prices/brand-url or provide base_url in request.",
                 **proxy_meta,
             }
         print(f"ingest_frontend_brand_prices: using base_url from settings: {base_url[:100]}...")
-    
+
+    # Resolve template: replace {brand_id} with actual brand_id; fail if placeholder missing
+    try:
+        base_url = resolve_base_url(base_url, brand_id)
+    except ValueError as e:
+        # #region agent log
+        err_payload = {"hypothesisId": "fp_p2", "location": "ingest_frontend_prices.py:resolve_base_url", "message": "template missing {brand_id}", "data": {"project_id": project_id, "brand_id": brand_id, "error": str(e)}, "timestamp": int(time.time() * 1000)}
+        print(f"[DEBUG] {err_payload}")
+        try:
+            _log_path = os.environ.get("DEBUG_LOG_PATH", os.path.join(os.path.dirname(__file__), "..", "..", ".cursor", "debug.log"))
+            _d = os.path.dirname(_log_path)
+            if _d:
+                os.makedirs(_d, exist_ok=True)
+            open(_log_path, "a", encoding="utf-8").write(json.dumps(err_payload, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
+        # #endregion
+        return {
+            "error": str(e),
+            **proxy_meta,
+        }
+
+    # Ensure limit in URL (from frontend_prices settings; not proxy). If limit provided, set/replace in query.
+    if limit is not None:
+        base_url = ensure_limit_in_url(base_url, limit)
+
     start_page = extract_page_from_url(base_url)
-    
+    print(f"ingest_frontend_prices: resolved base_url (verify brand in URL): {base_url}")
+
     # Fallback for run_started_at: use \"now\" if not provided (e.g. manual HTTP run)
     if run_started_at is None:
         run_started_at = datetime.now(timezone.utc)
@@ -355,7 +432,12 @@ async def ingest_frontend_brand_prices(
         f"max_pages={max_pages}, sleep_ms={sleep_ms}, run_at={run_at_iso}, run_id={run_id}"
     )
     
-    client = CatalogClient(proxy_url=proxy_url, proxy_scheme=proxy_scheme_val)
+    client = CatalogClient(
+        proxy_url=proxy_url,
+        proxy_scheme=proxy_scheme_val,
+        http_min_retries=http_min_retries,
+        http_timeout_jitter_sec=http_timeout_jitter_sec,
+    )
     
     # Check if table exists
     check_table_sql = text("""
@@ -433,7 +515,30 @@ async def ingest_frontend_brand_prices(
                 schedule_id = int(run_row["schedule_id"])
         except Exception:
             schedule_id = None
-    
+
+    # Debug progress: last N events for UI (phase, msg, last response summary).
+    progress_events: List[Dict[str, Any]] = []
+    MAX_PROGRESS_EVENTS = 20
+
+    def _append_progress(phase: str, msg: str, last_meta: Optional[Dict] = None) -> None:
+        ev = {
+            "at": datetime.now(timezone.utc).isoformat(),
+            "phase": phase,
+            "msg": msg,
+        }
+        if isinstance(last_meta, dict):
+            if last_meta.get("status_code") is not None:
+                ev["status_code"] = last_meta.get("status_code")
+            if last_meta.get("error") is not None:
+                ev["error"] = str(last_meta.get("error"))[:200]
+            if last_meta.get("result") is not None:
+                ev["result"] = str(last_meta.get("result"))[:100]
+            if last_meta.get("attempt") is not None:
+                ev["attempt"] = last_meta.get("attempt")
+        progress_events.append(ev)
+        while len(progress_events) > MAX_PROGRESS_EVENTS:
+            progress_events.pop(0)
+
     while True:
         pages_fetched += 1
 
@@ -449,12 +554,34 @@ async def ingest_frontend_brand_prices(
             f"saved={total_inserted} distinct_nm_id={len(seen_nm_ids)} "
             f"failed_pages={failed_pages}"
         )
+        if run_id is not None:
+            try:
+                from app.services.ingest import runs as runs_service
+
+                _append_progress("fetch_page", f"Запрос страницы {page} к WB", None)
+                runs_service.set_run_progress(
+                    int(run_id),
+                    {
+                        "ok": None,
+                        "phase": "fetch_page",
+                        "phase_label": f"Запрос страницы {page} к WB" + (f" (всего {total_pages})" if total_pages else ""),
+                        "page": page,
+                        "total_pages": total_pages,
+                        "expected_total": expected_total,
+                        "saved": total_inserted,
+                        "distinct_nm_id": len(seen_nm_ids),
+                        "failed_pages": failed_pages[-10:],
+                        "last_events": progress_events[-MAX_PROGRESS_EVENTS:],
+                    },
+                )
+            except Exception:
+                pass
 
         # Fetch page with bounded page-level retries (WB can rate-limit/flake).
         # We keep it bounded and visible in stats_json so "running" is explainable.
         data = None
         last_meta: dict | None = None
-        page_attempts = 6
+        page_attempts = 10
         retry_count_429 = 0
         for page_attempt in range(1, page_attempts + 1):
             data = await client.fetch_brand_catalog_page(brand_id, page, base_url)
@@ -468,16 +595,29 @@ async def ingest_frontend_brand_prices(
             except Exception:
                 status_code = None
 
-            # Rate limit (429): apply exponential backoff with jitter (heartbeat-aware).
+            # Rate limit (429): backoff 2, 4, 8, 16, 32 sec (cap 60), max 5 retries then fail brand.
             if status_code == 429:
                 retry_count_429 += 1
-                sleep_s = compute_retry_sleep_seconds(retry_count_429)
+                if retry_count_429 > 5:
+                    return {
+                        "error": "rate_limited_max_retries",
+                        "detail": "HTTP 429 after 5 retries",
+                        "page": page,
+                        "retry_count": retry_count_429,
+                        **proxy_meta,
+                    }
+                sleep_s = compute_retry_sleep_429(retry_count_429)
                 runtime_s = time.monotonic() - started_monotonic
 
                 # Limits: stop gracefully (skipped rate_limited) instead of running forever.
+                max_runtime = (
+                    int(max_runtime_seconds)
+                    if max_runtime_seconds is not None and max_runtime_seconds > 0
+                    else settings.FRONTEND_PRICES_MAX_RUNTIME_SECONDS
+                )
                 if (
                     (total_retry_wait_seconds + sleep_s) > settings.FRONTEND_PRICES_MAX_TOTAL_RETRY_WAIT_SECONDS
-                    or runtime_s > settings.FRONTEND_PRICES_MAX_RUNTIME_SECONDS
+                    or runtime_s > max_runtime
                 ):
                     if run_id is not None:
                         try:
@@ -535,9 +675,11 @@ async def ingest_frontend_brand_prices(
                     f"page={page}{f'/{total_pages}' if total_pages else ''}"
                 )
 
+                _append_progress("rate_limit_sleep", f"429 — пауза {sleep_s} с перед повтором (страница {page})", last_meta)
                 progress_payload = {
                     "ok": None,
                     "phase": "rate_limit_sleep",
+                    "phase_label": f"Пауза после 429: ожидание {sleep_s} с (страница {page})",
                     "page": page,
                     "total_pages": total_pages,
                     "expected_total": expected_total,
@@ -545,6 +687,7 @@ async def ingest_frontend_brand_prices(
                     "distinct_nm_id": len(seen_nm_ids),
                     "failed_pages": failed_pages[-10:],
                     "last_request": last_meta,
+                    "last_events": progress_events[-MAX_PROGRESS_EVENTS:],
                     "frontend_prices": {
                         "page": page,
                         "total_pages": total_pages,
@@ -563,11 +706,25 @@ async def ingest_frontend_brand_prices(
                 )
                 continue
 
+            # 403/404 with empty body: 1 retry then fail this brand_id.
+            if status_code in (403, 404):
+                if page_attempt >= 2:
+                    return {
+                        "error": f"http_{status_code}_empty_body",
+                        "detail": f"HTTP {status_code} with empty response after 1 retry",
+                        "page": page,
+                        "status_code": status_code,
+                        **proxy_meta,
+                    }
+                # one retry: fall through to retry_wait then loop again
+
             # Update progress with wait step
             sleep_s = min(10 * page_attempt, 60)  # 10,20,30,... capped 60
+            _append_progress("retry_wait", f"Повтор через {sleep_s} с (попытка {page_attempt}/{page_attempts})", last_meta)
             progress_payload = {
                 "ok": None,
                 "phase": "retry_wait",
+                "phase_label": f"Повтор запроса через {sleep_s} с (ошибка/5xx, попытка {page_attempt})",
                 "page": page,
                 "page_attempt": page_attempt,
                 "page_attempts": page_attempts,
@@ -578,6 +735,7 @@ async def ingest_frontend_brand_prices(
                 "distinct_nm_id": len(seen_nm_ids),
                 "failed_pages": failed_pages[-10:],
                 "last_request": last_meta,
+                "last_events": progress_events[-MAX_PROGRESS_EVENTS:],
             }
             await sleep_with_heartbeat(
                 run_id=int(run_id) if run_id is not None else None,
@@ -606,9 +764,11 @@ async def ingest_frontend_brand_prices(
             }
         
         # Extract total pages and total count on first page if available
+        # Use limit as products_per_page when calculating from total/totalCount (WB returns total count, not pages)
         if pages_fetched == 1 and total_pages is None:
             first_page_data = data
-            total_pages = extract_total_pages(data)
+            products_per_page = limit if limit and limit > 0 else 100
+            total_pages = extract_total_pages(data, products_per_page=products_per_page)
             if total_pages:
                 print(f"ingest_frontend_prices: detected total_pages={total_pages} from first page")
             
@@ -627,26 +787,28 @@ async def ingest_frontend_brand_prices(
         products_count = len(products)
 
         # Update running progress in ingest_runs.stats_json for UI.
-        # Keep it compact and safe (no secrets).
         if run_id is not None:
             try:
                 from app.services.ingest import runs as runs_service
 
+                _append_progress("fetch_page", f"Страница {page} загружена, товаров: {products_count}", last_meta)
                 runs_service.set_run_progress(
                     int(run_id),
                     {
                         "ok": None,
                         "phase": "fetch_page",
+                        "phase_label": f"Загрузка страницы {page}" + (f"/{total_pages}" if total_pages else ""),
                         "page": page,
                         "total_pages": total_pages,
                         "expected_total": expected_total,
                         "saved": total_inserted,
                         "distinct_nm_id": len(seen_nm_ids),
-                        "failed_pages": failed_pages[-10:],  # keep last few only
+                        "failed_pages": failed_pages[-10:],
+                        "last_request": last_meta,
+                        "last_events": progress_events[-MAX_PROGRESS_EVENTS:],
                     },
                 )
             except Exception:
-                # Progress updates should never break ingestion
                 pass
         
         # Log page info with total/totalPages detection
@@ -1007,6 +1169,7 @@ async def ingest_frontend_brand_prices(
         # Sleep between pages
         sleep_s = _sleep_seconds_between_pages()
         if sleep_s > 0:
+            _append_progress("between_pages_sleep", f"Пауза между страницами {sleep_s:.1f} с", None)
             await sleep_with_heartbeat(
                 run_id=int(run_id) if run_id is not None else None,
                 total_seconds=float(sleep_s),
@@ -1014,12 +1177,14 @@ async def ingest_frontend_brand_prices(
                 progress={
                     "ok": None,
                     "phase": "between_pages_sleep",
+                    "phase_label": f"Пауза между страницами: {sleep_s:.0f} с",
                     "page": page,
                     "total_pages": total_pages,
                     "expected_total": expected_total,
                     "saved": total_inserted,
                     "distinct_nm_id": len(seen_nm_ids),
                     "failed_pages": failed_pages[-10:],
+                    "last_events": progress_events[-MAX_PROGRESS_EVENTS:],
                 },
             )
         
@@ -1041,15 +1206,22 @@ async def ingest_frontend_brand_prices(
     )
 
     # Completeness check: if WB says total=N but we saved much less, treat as failure.
+    # Threshold: project setting > env FRONTEND_PRICES_MIN_COVERAGE_RATIO > default 0.80. 0 = accept any.
     coverage = None
-    if expected_total and expected_total > 0:
+    min_coverage = (
+        float(min_coverage_ratio)
+        if min_coverage_ratio is not None
+        else getattr(settings, "FRONTEND_PRICES_MIN_COVERAGE_RATIO", 0.80)
+    )
+    if expected_total and expected_total > 0 and min_coverage > 0:
         coverage = float(len(seen_nm_ids)) / float(expected_total)
-        if coverage < 0.95:
+        if min_coverage > 0 and coverage < min_coverage:
             return {
                 "error": "incomplete_run_low_coverage",
                 "expected_total": expected_total,
                 "distinct_nm_id": len(seen_nm_ids),
                 "coverage": coverage,
+                "min_coverage_required": min_coverage,
                 "total_pages": total_pages,
                 "pages_processed": pages_fetched,
                 "items_saved": total_inserted,
@@ -1081,10 +1253,17 @@ async def start_ingest_frontend_brand_prices(
     background_tasks: BackgroundTasks = None
 ):
     """Start ingestion of frontend catalog prices from WB public API."""
-    # Run in background
+    base_url_to_pass: Optional[str] = request.base_url
+    if base_url_to_pass and base_url_to_pass.strip():
+        if BRAND_ID_PLACEHOLDER not in base_url_to_pass:
+            raise HTTPException(
+                status_code=400,
+                detail="base_url must contain placeholder {brand_id}. Example: https://catalog.wb.ru/brands/v4/catalog?brand={brand_id}&page=1",
+            )
+        base_url_to_pass = base_url_to_pass.strip()
     result = await ingest_frontend_brand_prices(
         brand_id=request.brand_id,
-        base_url=request.base_url,
+        base_url=base_url_to_pass,
         max_pages=request.max_pages,
         sleep_ms=request.sleep_ms
     )

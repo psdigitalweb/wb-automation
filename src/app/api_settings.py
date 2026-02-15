@@ -38,12 +38,20 @@ async def get_frontend_prices_brand_url() -> BrandUrlResponse:
         raise HTTPException(status_code=500, detail=f"Failed to get brand URL: {e}")
 
 
+BRAND_ID_PLACEHOLDER = "{brand_id}"
+
+
 @router.put("/frontend-prices/brand-url")
 async def update_frontend_prices_brand_url(request: BrandUrlRequest = Body(...)) -> dict:
-    """Update frontend prices brand base URL in settings."""
+    """Update frontend prices brand base URL in settings. URL must contain placeholder {brand_id}."""
     if not request.url or not request.url.strip():
         raise HTTPException(status_code=400, detail="URL cannot be empty")
-    
+    if BRAND_ID_PLACEHOLDER not in request.url:
+        raise HTTPException(
+            status_code=400,
+            detail="URL must contain placeholder {brand_id}. Example: https://catalog.wb.ru/brands/v4/catalog?brand={brand_id}&page=1",
+        )
+
     sql = text("""
         INSERT INTO app_settings (key, value, updated_at)
         VALUES ('frontend_prices.brand_base_url', jsonb_build_object('url', :url), now())

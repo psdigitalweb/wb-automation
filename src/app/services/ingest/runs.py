@@ -734,11 +734,12 @@ def get_runs(
     if status:
         where_clauses.append("status = :status")
         params["status"] = status
+    # Always show active runs (queued/running) so stuck tasks are visible and can be marked timeout
     if date_from:
-        where_clauses.append("started_at >= :date_from")
+        where_clauses.append("(started_at >= :date_from OR status IN ('queued', 'running'))")
         params["date_from"] = date_from
     if date_to:
-        where_clauses.append("started_at <= :date_to")
+        where_clauses.append("(started_at <= :date_to OR status IN ('queued', 'running'))")
         params["date_to"] = date_to
 
     where_sql = " AND ".join(where_clauses)

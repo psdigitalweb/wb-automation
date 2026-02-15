@@ -31,6 +31,7 @@ from sqlalchemy import text
 
 from app.db import engine
 from app.deps import get_current_active_user, get_project_membership
+from app.ingest_frontend_prices import resolve_base_url
 
 router = APIRouter(prefix="/api/v1", tags=["frontend-prices"])
 
@@ -64,6 +65,59 @@ def _run_at_iso(run_row: dict) -> str | None:
         return None
     dt = run_row.get("run_at") or run_row.get("created_at")
     return dt.isoformat() if dt is not None and hasattr(dt, "isoformat") else None
+
+
+@router.get("/projects/{project_id}/frontend-prices/resolved-url")
+async def get_frontend_prices_resolved_url(
+    project_id: int = Path(..., description="Project ID"),
+    current_user: dict = Depends(get_current_active_user),
+    membership: dict = Depends(get_project_membership),
+):
+    """Return the resolved base URL for frontend prices (template with {brand_id} replaced).
+    Use this to verify that the URL points to the correct brand before running ingest.
+    """
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("""
+                SELECT pm.settings_json->>'brand_id' AS brand_id,
+                       pm.settings_json->'frontend_prices'->>'base_url_template' AS base_url_template
+                FROM project_marketplaces pm
+                JOIN marketplaces m ON m.id = pm.marketplace_id
+                WHERE pm.project_id = :project_id AND m.code = 'wildberries'
+                LIMIT 1
+            """),
+            {"project_id": project_id},
+        ).mappings().first()
+        brand_id_str = (row or {}).get("brand_id")
+        base_url_template = (row or {}).get("base_url_template")
+        if not base_url_template or not str(base_url_template).strip():
+            base_url_template = conn.execute(
+                text("SELECT value->>'url' AS url FROM app_settings WHERE key = 'frontend_prices.brand_base_url'")
+            ).scalar_one_or_none()
+    if not brand_id_str:
+        raise HTTPException(
+            status_code=400,
+            detail="brand_id not configured for this project (Wildberries marketplace settings).",
+        )
+    try:
+        brand_id = int(brand_id_str)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid brand_id in project settings.")
+    if not base_url_template or not str(base_url_template).strip():
+        raise HTTPException(
+            status_code=400,
+            detail="base_url_template not configured (project or app_settings). Add frontend_prices.base_url_template with {brand_id}.",
+        )
+    try:
+        resolved_url = resolve_base_url(str(base_url_template).strip(), brand_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {
+        "project_id": project_id,
+        "brand_id": brand_id,
+        "base_url_template": str(base_url_template).strip(),
+        "resolved_url": resolved_url,
+    }
 
 
 @router.get("/projects/{project_id}/frontend-prices")
@@ -112,10 +166,10 @@ async def get_project_frontend_prices(
             pass
         # endregion
 
-        brand_id_str = conn.execute(
+        pm_row = conn.execute(
             text(
                 """
-                SELECT pm.settings_json->>'brand_id' AS brand_id
+                SELECT pm.settings_json AS settings_json
                 FROM project_marketplaces pm
                 JOIN marketplaces m ON m.id = pm.marketplace_id
                 WHERE pm.project_id = :project_id
@@ -124,10 +178,29 @@ async def get_project_frontend_prices(
                 """
             ),
             {"project_id": project_id},
-        ).scalar_one_or_none()
+        ).mappings().first()
+        settings = (pm_row or {}).get("settings_json") or {}
+        if isinstance(settings, str):
+            import json as _json_mod
+            try:
+                settings = _json_mod.loads(settings)
+            except Exception:
+                settings = {}
+        if not isinstance(settings, dict):
+            settings = {}
+        brand_ids_set: set[str] = set()
+        legacy_brand = settings.get("brand_id")
+        if legacy_brand is not None:
+            brand_ids_set.add(str(legacy_brand))
+        fp = settings.get("frontend_prices")
+        if isinstance(fp, dict) and isinstance(fp.get("brands"), list):
+            for b in fp["brands"]:
+                if isinstance(b, dict) and b.get("brand_id") is not None:
+                    brand_ids_set.add(str(b["brand_id"]))
+        brand_ids_list = sorted(brand_ids_set) if brand_ids_set else []
 
-        # If brand_id is not configured, return empty result but keep contract stable.
-        if not brand_id_str:
+        # If no brand_ids configured, return empty result but keep contract stable.
+        if not brand_ids_list:
             _dbg(
                 hypothesisId="H2",
                 location="api_frontend_prices.py:get_project_frontend_prices:brand_id_missing",
@@ -153,6 +226,7 @@ async def get_project_frontend_prices(
 
         # Last runs for dropdown + to pick default run.
         # We only list runs that actually have rows linked via ingest_run_id (so counts/\"last update\" are meaningful).
+        # Match: legacy single-brand (stats_json.brand_id) OR multi-brand (succeeded_brands[].brand_id).
         runs_sql = text(
             """
             SELECT
@@ -171,15 +245,19 @@ async def get_project_frontend_prices(
               AND r.marketplace_code = 'wildberries'
               AND r.job_code = 'frontend_prices'
               AND (
-                r.stats_json->>'brand_id' = :brand_id
-                OR r.params_json->>'brand_id' = :brand_id
+                r.stats_json->>'brand_id' = ANY(:brand_ids)
+                OR r.params_json->>'brand_id' = ANY(:brand_ids)
+                OR EXISTS (
+                  SELECT 1 FROM jsonb_array_elements(COALESCE(r.stats_json->'succeeded_brands', '[]'::jsonb)) AS elem
+                  WHERE elem->>'brand_id' = ANY(:brand_ids)
+                )
               )
             ORDER BY r.created_at DESC
             LIMIT 50
             """
         )
         runs_raw = conn.execute(
-            runs_sql, {"project_id": project_id, "brand_id": str(brand_id_str)}
+            runs_sql, {"project_id": project_id, "brand_ids": brand_ids_list}
         ).mappings().all()
         runs = [dict(r) for r in runs_raw]
 
@@ -286,7 +364,6 @@ async def get_project_frontend_prices(
             message="runs selected",
             data={
                 "project_id": project_id,
-                "brand_id": str(brand_id_str),
                 "requested_run_id": run_id,
                 "last_run_id": last_run_id,
                 "runs_len": len(runs),
@@ -443,7 +520,7 @@ async def get_project_frontend_prices(
 
         return {
             "meta": {
-                "brand_id": brand_id_str,
+                "brand_id": brand_ids_list[0] if brand_ids_list else None,
                 "last_run_id": last_run_id,
                 "last_run_at": last_run_at,
                 "count_last_run": count_last_run,
