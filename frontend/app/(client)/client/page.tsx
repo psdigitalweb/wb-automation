@@ -1,6 +1,8 @@
 import Link from 'next/link'
 
 const reports = [
+  { title: 'Unit PnL', desc: 'Прибыли и убытки по артикулам', href: '/unit-pnl' },
+  { title: 'Расхождения цен', desc: 'Цены ниже РРП', href: '/price-discrepancies' },
   { title: 'PnL', desc: 'Прибыли и убытки', href: '/client/reports/pnl' },
   { title: 'Продажи', desc: 'Данные о продажах', href: '/client/reports/sales' },
   { title: 'Остатки', desc: 'Текущие остатки товаров', href: '/client/reports/stock' },

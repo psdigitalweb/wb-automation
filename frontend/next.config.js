@@ -2,6 +2,12 @@
 const nextConfig = {
   output: 'standalone',
   reactStrictMode: true,
+  async redirects() {
+    return [
+      { source: '/unit-pnl', destination: '/app/project/1/wildberries/finances/unit-pnl', permanent: false },
+      { source: '/price-discrepancies', destination: '/app/project/1/wildberries/price-discrepancies?only_below_rrp=true', permanent: false },
+    ]
+  },
   async rewrites() {
     // Dev/prod-safe proxy:
     // - Browser calls http://localhost:3000/api/...

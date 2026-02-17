@@ -8,10 +8,12 @@ function getHost(req: NextRequest): string {
 }
 
 function isAllowedOnReportsHost(pathname: string): boolean {
+  if (pathname === '/unit-pnl' || pathname === '/price-discrepancies') return true
   if (pathname === '/client' || pathname.startsWith('/client/')) return true
+  if (pathname.startsWith('/app/project/1/')) return true
   if (pathname.startsWith('/_next/')) return true
   if (pathname === '/favicon.ico' || pathname === '/robots.txt') return true
-  if (pathname.startsWith('/api/client/')) return true
+  if (pathname.startsWith('/api/')) return true
   return false
 }
 
@@ -19,8 +21,13 @@ export function middleware(req: NextRequest) {
   const host = getHost(req)
   const pathname = req.nextUrl.pathname
 
+  // Host-guard only for reports.zakka.ru; redirects handled by next.config.js
   if (host !== REPORTS_HOST) {
     return NextResponse.next()
+  }
+
+  if (pathname === '/') {
+    return NextResponse.redirect(new URL('/unit-pnl', req.url))
   }
 
   if (isAllowedOnReportsHost(pathname)) {
