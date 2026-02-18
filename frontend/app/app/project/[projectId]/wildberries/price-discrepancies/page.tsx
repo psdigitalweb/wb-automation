@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { apiGetData, apiPost } from '@/lib/apiClient'
 import { usePageTitle } from '@/hooks/usePageTitle'
 import CategoryMultiSelectPopover from '@/components/CategoryMultiSelectPopover'
+import PortalBackButton from '@/components/PortalBackButton'
 
 interface PriceDiscrepancyItem {
   article: string | null
@@ -674,6 +675,13 @@ export default function WbPriceDiscrepanciesPage() {
   const [buildingRrp, setBuildingRrp] = useState(false)
   const [rrpBuildMessage, setRrpBuildMessage] = useState<string | null>(null)
   const [reloadToken, setReloadToken] = useState(0)
+  const [isReportsHost, setIsReportsHost] = useState(false)
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.location.hostname === 'reports.zakka.ru') {
+      setIsReportsHost(true)
+    }
+  }, [])
 
   const filters = useMemo(
     () => parseFiltersFromSearchParams(searchParams),
@@ -842,10 +850,17 @@ export default function WbPriceDiscrepanciesPage() {
 
   return (
     <div className="container">
+      {isReportsHost && (
+        <div style={{ marginBottom: 12 }}>
+          <PortalBackButton fallbackHref="/client" />
+        </div>
+      )}
       <h1>Расхождения цен (РРЦ vs витрина WB)</h1>
-      <Link href={`/app/project/${projectId}/dashboard`}>
-        <button type="button">← Назад к дашборду</button>
-      </Link>
+      {!isReportsHost && (
+        <Link href={`/app/project/${projectId}/dashboard`}>
+          <button type="button">← Назад к дашборду</button>
+        </Link>
+      )}
 
       {meta && (
         <div className="card" style={{ marginTop: 16 }}>

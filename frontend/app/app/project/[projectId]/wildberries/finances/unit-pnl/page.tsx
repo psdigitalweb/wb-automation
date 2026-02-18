@@ -16,6 +16,7 @@ import {
   type ApiError,
 } from '@/lib/apiClient'
 import { HeaderSummary } from './HeaderSummary'
+import PortalBackButton from '@/components/PortalBackButton'
 
 function PhotoWithHover({ src, alt }: { src: string; alt: string }) {
   const [hover, setHover] = useState(false)
@@ -173,7 +174,7 @@ function ReportAutocomplete({
   const displayValue = selectedReport ? formatReportLabel(selectedReport) : (reportId && !isNaN(reportId) ? String(reportId) : '')
 
   return (
-    <div ref={containerRef} className="relative min-w-0">
+    <div ref={containerRef} style={{ position: 'relative', minWidth: 0 }}>
       <label className="unitpnl-label block text-sm font-medium mb-1">Отчёт</label>
       <input
         type="text"
@@ -195,7 +196,25 @@ function ReportAutocomplete({
         className="unitpnl-control h-10 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm leading-5 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400"
       />
       {reportDropdownOpen && reportSuggestions.length > 0 && (
-        <ul className="absolute left-0 right-0 top-full z-50 m-0 max-h-60 list-none overflow-y-auto rounded border border-gray-200 bg-white p-0 shadow-lg">
+        <ul
+          className="unitpnl-report-dropdown"
+          style={{
+            position: 'absolute',
+            left: 0,
+            right: 0,
+            top: 'calc(100% + 4px)',
+            zIndex: 50,
+            margin: 0,
+            padding: 0,
+            listStyle: 'none',
+            maxHeight: 256,
+            overflowY: 'auto',
+            borderRadius: 6,
+            border: '1px solid #e5e7eb',
+            background: '#fff',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+          }}
+        >
           {reportSuggestions.map((r) => (
             <li
               key={r.report_id}
@@ -209,7 +228,13 @@ function ReportAutocomplete({
                 onSearchQueryChange('')
                 onDropdownOpenChange(false)
               }}
-              className="cursor-pointer border-b border-gray-100 px-3 py-2.5 text-sm last:border-b-0 hover:bg-gray-50"
+              className="unitpnl-report-dropdown-item"
+              style={{
+                cursor: 'pointer',
+                padding: '10px 12px',
+                fontSize: 14,
+                borderBottom: '1px solid #f3f4f6',
+              }}
             >
               {formatReportLabel(r)}
             </li>
@@ -276,6 +301,8 @@ export default function WBUnitPnlPage() {
   const [detailsLoading, setDetailsLoading] = useState<number | null>(null)
 
   const [filterHeader, setFilterHeader] = useState(searchParams.get('filter_header') === '1')
+  const [reportsHref, setReportsHref] = useState(`/app/project/${projectId}/wildberries/finances/reports`)
+  const [isReportsHost, setIsReportsHost] = useState(false)
 
   // Params for fetch: derived from URL so we only fetch when URL has valid scope
   const fetchParamsFromUrl = useMemo(() => {
@@ -440,6 +467,13 @@ export default function WBUnitPnlPage() {
   }, [projectId])
 
   useEffect(() => {
+    if (typeof window !== 'undefined' && window.location.hostname === 'reports.zakka.ru') {
+      setReportsHref('/reports')
+      setIsReportsHost(true)
+    }
+  }, [])
+
+  useEffect(() => {
     if (reportIdFromUrl && !selectedReport && mode === 'report') {
       getWBFinanceReportsSearch(projectId, { query: reportIdFromUrl, limit: 5 })
         .then((list) => {
@@ -506,14 +540,16 @@ export default function WBUnitPnlPage() {
 
   return (
     <div className="container">
+      {isReportsHost && (
+        <div style={{ marginBottom: 12 }}>
+          <PortalBackButton fallbackHref="/client" />
+        </div>
+      )}
       <div style={{ marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <h1>Прибыльность по товарам (WB Unit PnL)</h1>
         <div style={{ display: 'flex', gap: 10 }}>
-          <Link href={`/app/project/${projectId}/wildberries/finances/reports`}>
+          <Link href={reportsHref}>
             <button type="button">К списку отчётов</button>
-          </Link>
-          <Link href={`/app/project/${projectId}/marketplaces`}>
-            <button type="button">Настройки</button>
           </Link>
         </div>
       </div>
@@ -550,7 +586,7 @@ export default function WBUnitPnlPage() {
                 />
               </div>
             ) : (
-              <div className="unitpnl-col grid grid-cols-1 gap-4 sm:grid-cols-2 min-w-0">
+              <div className="unitpnl-col unitpnl-period-dates min-w-0">
                 <div className="flex flex-col min-w-0">
                   <label className="unitpnl-label block text-sm font-medium mb-1">Дата с</label>
                   <input
@@ -926,7 +962,27 @@ export default function WBUnitPnlPage() {
           align-items: center;
           min-height: 40px;
         }
+        .unitpnl-report-dropdown {
+          list-style: none !important;
+          margin: 0 !important;
+          padding: 0 !important;
+        }
+        .unitpnl-report-dropdown-item:hover {
+          background-color: #f9fafb;
+        }
+        .unitpnl-report-dropdown-item:last-child {
+          border-bottom: none !important;
+        }
+        .unitpnl-period-dates {
+          display: grid;
+          grid-template-columns: 1fr;
+          gap: 16px;
+          min-width: 0;
+        }
         @media (min-width: 768px) {
+          .unitpnl-period-dates {
+            grid-template-columns: 1fr 1fr;
+          }
           .unitpnl-grid--scope {
             grid-template-columns: minmax(220px, 280px) minmax(360px, 1fr) 170px;
           }

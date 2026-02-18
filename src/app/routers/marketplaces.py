@@ -59,6 +59,7 @@ from app.deps import (
     get_current_active_user,
     get_project_membership,
     require_project_admin,
+    allow_client_portal_read,
 )
 from app.settings import ALLOW_UNAUTH_LOCAL
 from app.db_marketplace_tariffs import get_latest_snapshot
@@ -1242,8 +1243,7 @@ async def get_wb_unit_pnl(
     q: Optional[str] = Query(None, description="Search by nm_id, vendor_code, title"),
     category: Optional[int] = Query(None, description="WB subject_id (product category) filter"),
     filter_header: bool = Query(False, description="When True, header_totals and lines_total use q+category filter"),
-    current_user: dict = Depends(get_current_active_user),
-    membership: dict = Depends(get_project_membership),
+    _auth: dict = Depends(allow_client_portal_read),
 ):
     """Unit PnL: table aggregated by nm_id. Either report_id or (rr_dt_from, rr_dt_to) required."""
     from datetime import date as _date
@@ -1302,8 +1302,7 @@ async def get_wb_unit_pnl_details_endpoint(
     report_id: Optional[int] = Query(None, description="WB report ID (report mode)"),
     rr_dt_from: Optional[str] = Query(None, description="Period start YYYY-MM-DD (period mode)"),
     rr_dt_to: Optional[str] = Query(None, description="Period end YYYY-MM-DD (period mode)"),
-    current_user: dict = Depends(get_current_active_user),
-    membership: dict = Depends(get_project_membership),
+    _auth: dict = Depends(allow_client_portal_read),
 ):
     """Unit PnL details for one nm_id. Either report_id or (rr_dt_from, rr_dt_to) required."""
     from datetime import date as _date
@@ -1362,8 +1361,7 @@ async def get_wb_unit_pnl_details_endpoint(
 )
 async def list_wb_product_subjects(
     project_id: int = Path(..., description="Project ID"),
-    current_user: dict = Depends(get_current_active_user),
-    membership: dict = Depends(get_project_membership),
+    _auth: dict = Depends(allow_client_portal_read),
 ):
     from app.db import engine
     from sqlalchemy import text
@@ -1406,8 +1404,7 @@ async def list_wb_product_subjects(
 )
 async def get_latest_wb_finance_report(
     project_id: int = Path(..., description="Project ID"),
-    current_user: dict = Depends(get_current_active_user),
-    membership: dict = Depends(get_project_membership),
+    _auth: dict = Depends(allow_client_portal_read),
 ):
     """Get latest WB finance report for dashboard/entrypoint."""
     from app.db_wb_finances import get_latest_report
@@ -1435,8 +1432,7 @@ async def get_latest_wb_finance_report(
 )
 async def list_wb_finances_reports(
     project_id: int = Path(..., description="Project ID"),
-    current_user: dict = Depends(get_current_active_user),
-    membership: dict = Depends(get_project_membership),  # Any member can view
+    _auth: dict = Depends(allow_client_portal_read),
 ):
     """List all finance reports for a project."""
     from app.db_wb_finances import list_reports
@@ -1468,8 +1464,7 @@ async def search_wb_finance_reports(
     project_id: int = Path(..., description="Project ID"),
     query: str = Query("", description="Search string"),
     limit: int = Query(20, ge=1, le=50),
-    current_user: dict = Depends(get_current_active_user),
-    membership: dict = Depends(get_project_membership),
+    _auth: dict = Depends(allow_client_portal_read),
 ):
     """Search reports for autocomplete/typeahead."""
     from app.db_wb_finances import search_reports

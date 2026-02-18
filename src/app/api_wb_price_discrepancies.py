@@ -27,7 +27,7 @@ from fastapi import APIRouter, Depends, Path, Query, Response
 from sqlalchemy import text
 
 from app.db import engine
-from app.deps import get_current_active_user, get_project_membership
+from app.deps import allow_client_portal_read, get_current_active_user, get_project_membership
 
 logger = logging.getLogger(__name__)
 
@@ -551,8 +551,7 @@ async def get_wb_price_discrepancies(
     ),
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=200),
-    current_user: dict = Depends(get_current_active_user),
-    membership: dict = Depends(get_project_membership),
+    _auth: dict = Depends(allow_client_portal_read),
 ):
     """Return price discrepancies between RRP and WB showcase price for a project.
 

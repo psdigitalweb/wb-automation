@@ -7,43 +7,53 @@ function getHost(req: NextRequest): string {
   return raw.replace(/:\d+$/, '')
 }
 
-function isAllowedOnReportsHost(pathname: string): boolean {
-  if (pathname === '/unit-pnl' || pathname === '/price-discrepancies') return true
-  if (pathname === '/client' || pathname.startsWith('/client/')) return true
-  if (pathname.startsWith('/app/project/1/')) return true
-  if (pathname.startsWith('/_next/')) return true
-  if (pathname === '/favicon.ico' || pathname === '/robots.txt') return true
-  if (pathname.startsWith('/api/')) return true
-  return false
-}
-
 export function middleware(req: NextRequest) {
   const host = getHost(req)
   const pathname = req.nextUrl.pathname
+  const search = req.nextUrl.search
 
-  // Host-guard only for reports.zakka.ru; redirects handled by next.config.js
-  if (host !== REPORTS_HOST) {
+  // --- reports.zakka.ru ---
+  if (host === REPORTS_HOST) {
+    if (pathname === '/') {
+      return NextResponse.redirect(new URL('/unit-pnl', req.url))
+    }
+    if (pathname === '/unit-pnl') {
+      const url = req.nextUrl.clone()
+      url.pathname = '/app/project/1/wildberries/finances/unit-pnl'
+      return NextResponse.rewrite(url)
+    }
+    if (pathname === '/reports') {
+      const url = req.nextUrl.clone()
+      url.pathname = '/app/project/1/wildberries/finances/reports'
+      return NextResponse.rewrite(url)
+    }
+    if (pathname === '/price-discrepancies') {
+      const url = req.nextUrl.clone()
+      url.pathname = '/app/project/1/wildberries/price-discrepancies'
+      url.searchParams.set('only_below_rrp', 'true')
+      return NextResponse.rewrite(url)
+    }
+    if (pathname.startsWith('/app/project/1/wildberries/finances/unit-pnl')) {
+      return NextResponse.redirect(new URL('/unit-pnl' + search, req.url))
+    }
+    if (pathname.startsWith('/app/project/1/wildberries/finances/reports')) {
+      return NextResponse.redirect(new URL('/reports' + search, req.url))
+    }
+    if (pathname.startsWith('/app/project/1/wildberries/price-discrepancies')) {
+      return NextResponse.redirect(new URL('/price-discrepancies' + search, req.url))
+    }
     return NextResponse.next()
   }
 
-  if (pathname === '/') {
-    return NextResponse.redirect(new URL('/unit-pnl', req.url))
+  // --- other hosts (ecomcore.ru etc.) ---
+  if (pathname === '/unit-pnl') {
+    return NextResponse.redirect(new URL('/app/project/1/wildberries/finances/unit-pnl' + search, req.url))
+  }
+  if (pathname === '/price-discrepancies') {
+    return NextResponse.redirect(new URL('/app/project/1/wildberries/price-discrepancies?only_below_rrp=true', req.url))
   }
 
-  if (isAllowedOnReportsHost(pathname)) {
-    return NextResponse.next()
-  }
-
-  const accept = req.headers.get('accept') ?? ''
-  const wantsHtml = accept.includes('text/html')
-
-  if (wantsHtml) {
-    const url = req.nextUrl.clone()
-    url.pathname = '/client/404'
-    return NextResponse.rewrite(url)
-  }
-
-  return NextResponse.json({ detail: 'Not Found' }, { status: 404 })
+  return NextResponse.next()
 }
 
 export const config = {
