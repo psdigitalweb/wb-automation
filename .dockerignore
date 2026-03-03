@@ -11,3 +11,7 @@ venv/
 dist/
 build/
 node_modules/
+nginx/acme-challenge/
+nginx/letsencrypt-ecomcore/
+nginx/letsencrypt-reports/
+nginx/letsencrypt-reports-zakka/
