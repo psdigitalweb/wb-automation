@@ -406,10 +406,10 @@ export default function ProjectDashboard() {
             {wbEnabled && (
               <div style={{ marginBottom: 32 }}>
                 <h3 style={{ marginTop: 0, marginBottom: 12, color: '#374151', fontWeight: 500 }}>Инструменты</h3>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gridAutoRows: '1fr', gap: 16, alignItems: 'stretch', minHeight: 375 }}>
                   <Link
                     href={`/app/project/${projectId}/wildberries/price-discrepancies?only_below_rrp=true`}
-                    style={{ textDecoration: 'none', color: 'inherit' }}
+                    style={{ textDecoration: 'none', color: 'inherit', display: 'block', minHeight: 0 }}
                   >
                     <div
                       className="card"
@@ -423,6 +423,8 @@ export default function ProjectDashboard() {
                         display: 'flex',
                         flexDirection: 'column',
                         gap: 8,
+                        height: '100%',
+                        minHeight: 0,
                       }}
                       onMouseEnter={(e) => {
                         e.currentTarget.style.borderColor = '#d1d5db'
@@ -474,7 +476,7 @@ export default function ProjectDashboard() {
 
                   <Link
                     href={`/app/project/${projectId}/wildberries/stock-without-photos`}
-                    style={{ textDecoration: 'none', color: 'inherit' }}
+                    style={{ textDecoration: 'none', color: 'inherit', display: 'block', minHeight: 0 }}
                   >
                     <div
                       className="card"
@@ -488,6 +490,8 @@ export default function ProjectDashboard() {
                         display: 'flex',
                         flexDirection: 'column',
                         gap: 8,
+                        height: '100%',
+                        minHeight: 0,
                       }}
                       onMouseEnter={(e) => {
                         e.currentTarget.style.borderColor = '#d1d5db'
@@ -541,6 +545,8 @@ export default function ProjectDashboard() {
                       display: 'flex',
                       flexDirection: 'column',
                       gap: 8,
+                      height: '100%',
+                      minHeight: 0,
                     }}
                   >
                     <div>
@@ -638,6 +644,128 @@ export default function ProjectDashboard() {
                       </Link>
                     </div>
                   </div>
+
+                <Link
+                  href={`/app/project/${projectId}/wildberries/funnel-signals`}
+                  style={{ textDecoration: 'none', color: 'inherit', display: 'block', minHeight: 0 }}
+                >
+                    <div
+                      className="card"
+                      style={{
+                        padding: 16,
+                        border: '1px solid #e5e7eb',
+                        borderRadius: 8,
+                        background: '#fff',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 8,
+                        height: '100%',
+                        minHeight: 0,
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.borderColor = '#d1d5db'
+                        e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.05)'
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.borderColor = '#e5e7eb'
+                        e.currentTarget.style.boxShadow = 'none'
+                      }}
+                    >
+                      <div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+                          <div style={{ fontSize: 20, flexShrink: 0 }}>📊</div>
+                          <div style={{ fontSize: 18, fontWeight: 600, color: '#111827' }}>
+                            Воронка: Сигналы
+                          </div>
+                        </div>
+                        <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6, marginLeft: 30 }}>
+                          Сигналы по воронке: низкий трафик, add-to-cart, конверсия, масштабировать
+                        </div>
+                        <div style={{ fontSize: 13, color: '#374151', marginBottom: 8, marginLeft: 30 }}>
+                          Рекомендации по улучшению воронки конверсии
+                        </div>
+                      </div>
+                      <div
+                        style={{
+                          marginTop: 'auto',
+                          fontSize: 13,
+                          color: '#2563eb',
+                          fontWeight: 500,
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.textDecoration = 'underline'
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.textDecoration = 'none'
+                        }}
+                      >
+                        Посмотреть сигналы →
+                      </div>
+                    </div>
+                  </Link>
+
+                  <Link
+                    href={`/app/project/${projectId}/wildberries/reviews`}
+                    style={{ textDecoration: 'none', color: 'inherit', display: 'block', minHeight: 0 }}
+                  >
+                    <div
+                      className="card"
+                      style={{
+                        padding: 16,
+                        border: '1px solid #e5e7eb',
+                        borderRadius: 8,
+                        background: '#fff',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 8,
+                        height: '100%',
+                        minHeight: 0,
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.borderColor = '#d1d5db'
+                        e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.05)'
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.borderColor = '#e5e7eb'
+                        e.currentTarget.style.boxShadow = 'none'
+                      }}
+                    >
+                      <div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+                          <div style={{ fontSize: 20, flexShrink: 0 }}>⭐</div>
+                          <div style={{ fontSize: 18, fontWeight: 600, color: '#111827' }}>
+                            Отзывы WB
+                          </div>
+                        </div>
+                        <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6, marginLeft: 30 }}>
+                          Рейтинг и динамика отзывов по товарам
+                        </div>
+                        <div style={{ fontSize: 13, color: '#374151', marginBottom: 8, marginLeft: 30 }}>
+                          Мониторинг качества товаров по отзывам покупателей
+                        </div>
+                      </div>
+                      <div
+                        style={{
+                          marginTop: 'auto',
+                          fontSize: 13,
+                          color: '#2563eb',
+                          fontWeight: 500,
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.textDecoration = 'underline'
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.textDecoration = 'none'
+                        }}
+                      >
+                        Посмотреть отзывы →
+                      </div>
+                    </div>
+                  </Link>
                 </div>
               </div>
             )}

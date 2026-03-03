@@ -75,6 +75,12 @@ export default function Breadcrumbs() {
           if (rest.includes('unit-pnl')) {
             base.push({ href: '', label: 'Юнит-экономика' })
           }
+        } else if (rest.startsWith('wildberries/content-analytics')) {
+          base.push({ href: '', label: 'Аналитика карточек' })
+        } else if (rest.startsWith('wildberries/reviews')) {
+          base.push({ href: '', label: 'Отзывы WB' })
+        } else if (rest.startsWith('wildberries/funnel-signals')) {
+          base.push({ href: '', label: 'Воронка: сигналы' })
         } else {
           const firstSeg = rest.split('/')[0]
           const label = extraLabelByPath[firstSeg]

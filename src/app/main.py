@@ -30,6 +30,7 @@ from app.routers.ingest_run import router as ingest_run_router
 from app.routers.ingest import router as ingest_router
 from app.routers.projects import router as projects_router
 from app.routers.marketplaces import router as marketplaces_router
+from app.routers.wildberries_analytics import router as wildberries_analytics_router
 from app.routers.internal_data import router as internal_data_router
 # Project-scoped proxy settings (frontend_prices)
 from app.routers.project_proxy_settings import router as project_proxy_settings_router
@@ -94,6 +95,9 @@ app.include_router(projects_router)
 
 # Marketplaces router (requires authentication and membership)
 app.include_router(marketplaces_router)
+
+# WB content analytics & reviews (project-scoped, requires membership)
+app.include_router(wildberries_analytics_router)
 
 # Internal Data router (project-scoped)
 app.include_router(internal_data_router)

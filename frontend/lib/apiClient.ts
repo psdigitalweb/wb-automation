@@ -338,9 +338,17 @@ export async function getWBIngestStatus(projectId: string): Promise<WBIngestStat
  * Manually trigger a WB ingest job
  */
 export async function runWBIngest(
-  projectId: string, 
+  projectId: string,
   jobCode: string,
-  params?: { date_from?: string; date_to?: string }
+  params?: {
+    date_from?: string
+    date_to?: string
+    mode?: 'daily' | 'backfill'
+    cursor?: { date: string; nm_offset: number }
+    max_seconds?: number
+    max_batches?: number
+    use_fast_path?: boolean
+  }
 ): Promise<IngestRunResponse> {
   const body = params ? { params_json: params } : undefined
   const res = await apiPost<IngestRunResponse>(
@@ -744,5 +752,171 @@ export async function getWBProductSubjects(projectId: string): Promise<WBProduct
     period_from: string
     period_to: string
   }>(`/api/v1/projects/${projectId}/marketplaces/wildberries/finances/sku-pnl/build`, body)
+  return res.data
+}
+
+// Content analytics (funnel) summary
+export interface ContentAnalyticsSummaryItem {
+  nm_id: number
+  opens: number
+  add_to_cart: number
+  cart_rate: number | null
+  orders: number
+  conversion: number | null
+  revenue: number
+}
+
+export interface ContentAnalyticsSummaryResponse {
+  items: ContentAnalyticsSummaryItem[]
+}
+
+export interface WBProductLookupItem {
+  nm_id: number
+  vendor_code: string | null
+  title: string | null
+  wb_category: string | null
+}
+
+export interface WBProductLookupResponse {
+  items: WBProductLookupItem[]
+}
+
+export async function getWBProductLookup(
+  projectId: string,
+  params: { q: string; limit?: number }
+): Promise<WBProductLookupResponse> {
+  const qs = new URLSearchParams()
+  qs.set('q', params.q)
+  if (params.limit != null) qs.set('limit', String(params.limit))
+  const res = await apiGet<WBProductLookupResponse>(
+    `/api/v1/projects/${projectId}/wildberries/products/lookup?${qs.toString()}`
+  )
+  return res.data
+}
+
+export async function getContentAnalyticsSummary(
+  projectId: string,
+  params: { period_from: string; period_to: string; nm_id?: number }
+): Promise<ContentAnalyticsSummaryResponse> {
+  const qs = new URLSearchParams()
+  qs.set('period_from', params.period_from)
+  qs.set('period_to', params.period_to)
+  if (params.nm_id != null && !Number.isNaN(params.nm_id)) qs.set('nm_id', String(params.nm_id))
+  const res = await apiGet<ContentAnalyticsSummaryResponse>(
+    `/api/v1/projects/${projectId}/wildberries/content-analytics/summary?${qs.toString()}`
+  )
+  return res.data
+}
+
+// Reviews summary
+export interface ReviewsSummaryItem {
+  nm_id: number
+  title: string | null
+  wb_category: string | null
+  image_url: string | null
+  vendor_code: string | null
+  avg_rating: number | null
+  reviews_count_total: number
+  new_reviews: number | null
+}
+
+export interface ReviewsSummaryResponse {
+  items: ReviewsSummaryItem[]
+}
+
+export async function getReviewsSummary(
+  projectId: string,
+  params: {
+    period_from?: string
+    period_to?: string
+    nm_id?: number
+    vendor_code?: string
+    wb_category?: string
+    rating_lte?: number
+  }
+): Promise<ReviewsSummaryResponse> {
+  const qs = new URLSearchParams()
+  if (params.period_from != null && params.period_from !== '') qs.set('period_from', params.period_from)
+  if (params.period_to != null && params.period_to !== '') qs.set('period_to', params.period_to)
+  if (params.nm_id != null && !Number.isNaN(params.nm_id)) qs.set('nm_id', String(params.nm_id))
+  if (params.vendor_code != null && params.vendor_code.trim() !== '') qs.set('vendor_code', params.vendor_code.trim())
+  if (params.wb_category != null && params.wb_category !== '') qs.set('wb_category', params.wb_category)
+  if (params.rating_lte != null && !Number.isNaN(params.rating_lte)) qs.set('rating_lte', String(params.rating_lte))
+  const res = await apiGet<ReviewsSummaryResponse>(
+    `/api/v1/projects/${projectId}/wildberries/reviews/summary?${qs.toString()}`
+  )
+  return res.data
+}
+
+// Funnel signals
+export interface FunnelSignalsItem {
+  nm_id: number
+  title: string | null
+  wb_category: string | null
+  image_url: string | null
+  vendor_code: string | null
+  opens: number
+  carts: number
+  orders: number
+  revenue: number
+  cart_rate: number | null
+  order_rate: number | null
+  cart_to_order: number | null
+  avg_check: number | null
+  signal_code: string
+  signal: string
+  signal_label: string
+  severity: 'low' | 'med' | 'high' | null
+  potential_rub: number
+  bucket: 'low' | 'mid' | 'high' | null
+  signal_details: string | null
+}
+
+export interface FunnelSignalsResponse {
+  items: FunnelSignalsItem[]
+  page: number
+  page_size: number
+  total: number
+  pages: number
+}
+
+export async function getFunnelSignals(
+  projectId: string,
+  params: {
+    period_from: string
+    period_to: string
+    min_opens?: number
+    only_cart_gt0?: boolean
+    wb_category?: string
+    signal_code?: string
+    page?: number
+    page_size?: number
+    sort?: string
+    order?: 'asc' | 'desc'
+  }
+): Promise<FunnelSignalsResponse> {
+  const qs = new URLSearchParams()
+  qs.set('period_from', params.period_from)
+  qs.set('period_to', params.period_to)
+  if (params.min_opens != null && !Number.isNaN(params.min_opens)) {
+    qs.set('min_opens', String(params.min_opens))
+  }
+  if (params.only_cart_gt0 === true) qs.set('only_cart_gt0', 'true')
+  if (params.wb_category != null && params.wb_category !== '') qs.set('wb_category', params.wb_category)
+  if (params.signal_code != null && params.signal_code !== '') qs.set('signal_code', params.signal_code)
+  if (params.page != null && params.page >= 1) qs.set('page', String(params.page))
+  if (params.page_size != null && params.page_size >= 1) qs.set('page_size', String(params.page_size))
+  if (params.sort != null && params.sort !== '') qs.set('sort', params.sort)
+  if (params.order != null && params.order !== '') qs.set('order', params.order)
+  const res = await apiGet<FunnelSignalsResponse>(
+    `/api/v1/projects/${projectId}/wildberries/analytics/funnel-signals?${qs.toString()}`
+  )
+  return res.data
+}
+
+export async function getFunnelSignalsCategories(projectId: string): Promise<string[]> {
+  const res = await apiGet<string[]>(
+    `/api/v1/projects/${projectId}/wildberries/analytics/funnel-signals/categories`
+  )
   return res.data
 }

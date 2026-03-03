@@ -64,3 +64,9 @@ def _get_env_float(name: str, default: float) -> float:
 # Min share of expected_total we must have saved to consider run success (0.0–1.0). Default 0.8 = 80%.
 FRONTEND_PRICES_MIN_COVERAGE_RATIO = _get_env_float("FRONTEND_PRICES_MIN_COVERAGE_RATIO", 0.80)# Local dev: allow unauthenticated access to actual-v2-preview (default False, do not enable in prod)
 ALLOW_UNAUTH_LOCAL = os.getenv("ALLOW_UNAUTH_LOCAL", "false").lower() in ("true", "1", "yes")
+
+# WB Analytics API
+WB_ANALYTICS_BASE_URL = os.getenv("WB_ANALYTICS_BASE_URL", "https://seller-analytics-api.wildberries.ru")
+WB_ANALYTICS_REQUEST_INTERVAL_SEC = _get_env_int("WB_ANALYTICS_REQUEST_INTERVAL_SEC", 20)
+WB_ANALYTICS_MAX_RETRIES = _get_env_int("WB_ANALYTICS_MAX_RETRIES", 3)
+WB_ANALYTICS_TIMEOUT_SEC = _get_env_int("WB_ANALYTICS_TIMEOUT_SEC", 60)

@@ -4,6 +4,7 @@ import json
 import logging
 import traceback
 import threading
+from datetime import date as date_type
 
 from app.celery_app import celery_app
 from billiard.exceptions import SoftTimeLimitExceeded
@@ -15,11 +16,112 @@ from app.services.ingest.runs import (
     finish_run_failed,
     touch_run,
     mark_run_skipped,
+    create_run_queued,
+    set_run_celery_task_id,
 )
 from app.services.ingest.registry import execute_ingest_job, IngestJobNotFound
 from app.utils.asyncio_runner import run_async_safe
+from app.db_wb_backfill_state import (
+    JOB_CODE_WB_CARD_STATS_DAILY,
+    MAX_AUTO_CONTINUES_PER_DAY,
+    get_backfill_state,
+    try_increment_auto_continue_count,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _maybe_schedule_wb_card_stats_daily_continuation(
+    run_id: int,
+    run: dict,
+    project_id: int,
+    marketplace_code: str,
+    stats: dict,
+) -> None:
+    """If run ended with progress_saved for a single-day range and state is paused, schedule next run."""
+    params = run.get("params_json")
+    if isinstance(params, str):
+        try:
+            params = json.loads(params) if params else {}
+        except Exception:
+            params = {}
+    if not isinstance(params, dict):
+        return
+    date_from_val = params.get("date_from")
+    date_to_val = params.get("date_to")
+    if date_from_val is None or date_to_val is None:
+        return
+    try:
+        date_from = (
+            date_from_val
+            if isinstance(date_from_val, date_type)
+            else date_type.fromisoformat(str(date_from_val)[:10])
+        )
+        date_to = (
+            date_to_val
+            if isinstance(date_to_val, date_type)
+            else date_type.fromisoformat(str(date_to_val)[:10])
+        )
+    except (ValueError, TypeError):
+        return
+    if date_from != date_to:
+        return
+
+    range_state = get_backfill_state(
+        project_id, JOB_CODE_WB_CARD_STATS_DAILY, date_from, date_to
+    )
+    if not range_state:
+        return
+    status = range_state.get("status")
+    if status == "completed":
+        logger.info(
+            "wb_card_stats_daily auto-continue: skipped because completed date=%s",
+            date_from.isoformat(),
+        )
+        return
+    if status == "running":
+        logger.info(
+            "wb_card_stats_daily auto-continue: skipped because already_running_for_range date=%s",
+            date_from.isoformat(),
+        )
+        return
+    if status == "failed":
+        return
+    if status != "paused":
+        return
+
+    new_count = try_increment_auto_continue_count(
+        project_id, JOB_CODE_WB_CARD_STATS_DAILY, date_from, date_to, MAX_AUTO_CONTINUES_PER_DAY
+    )
+    if new_count is None:
+        logger.warning(
+            "wb_card_stats_daily auto-continue: stopped by max_auto_continues (limit=%s) date=%s",
+            MAX_AUTO_CONTINUES_PER_DAY,
+            date_from.isoformat(),
+        )
+        return
+
+    logger.info(
+        "wb_card_stats_daily auto-continue: scheduling next run for date=%s count=%s",
+        date_from.isoformat(),
+        new_count,
+    )
+    params_json = {
+        "mode": "backfill",
+        "date_from": date_from.isoformat(),
+        "date_to": date_to.isoformat(),
+    }
+    new_run = create_run_queued(
+        project_id=project_id,
+        marketplace_code=marketplace_code,
+        job_code=JOB_CODE_WB_CARD_STATS_DAILY,
+        schedule_id=run.get("schedule_id"),
+        triggered_by="auto_continue",
+        params_json=params_json,
+    )
+    new_run_id = new_run["id"]
+    res = execute_ingest.delay(new_run_id)
+    set_run_celery_task_id(new_run_id, res.id)
 
 
 @celery_app.task(
@@ -98,10 +200,16 @@ def execute_ingest(run_id: int) -> dict:
             )
             tb = json.dumps(stats, ensure_ascii=False)[:50000]
             logger.warning(f"execute_ingest: job returned ok=False, failing run_id={run_id}, reason={reason}")
-            # Preserve debug progress (phase_label, last_request, last_events) from set_run_progress
+            # Preserve debug progress and backfill checkpoint from set_run_progress
             current = get_run(run_id)
             if current and isinstance(current.get("stats_json"), dict):
-                for k in ("phase_label", "last_request", "last_events", "sleeping", "sleep_remaining_seconds"):
+                preserve_keys = (
+                    "phase_label", "last_request", "last_events", "sleeping", "sleep_remaining_seconds",
+                    "cursor", "saved_date_from", "saved_date_to", "processed_batches", "processed_days",
+                    "rows_upserted", "rows_upserted_batch", "failed_batches_count", "quarantined_nm_ids",
+                    "loaded_cursor", "loaded_cursor_source",
+                )
+                for k in preserve_keys:
                     if k in current["stats_json"]:
                         stats = {**stats, k: current["stats_json"][k]}
             finish_run_failed(
@@ -110,6 +218,14 @@ def execute_ingest(run_id: int) -> dict:
                 error_trace=tb,
                 stats_json=stats,
             )
+            if reason == "progress_saved" and job_code == "wb_card_stats_daily":
+                _maybe_schedule_wb_card_stats_daily_continuation(
+                    run_id=run_id,
+                    run=run,
+                    project_id=project_id,
+                    marketplace_code=marketplace_code,
+                    stats=stats,
+                )
             return {
                 "status": "failed",
                 "run_id": run_id,

@@ -63,6 +63,11 @@ export default function ProjectSettingsPage({ params }: { params: { projectId: s
   const lastStatusesHashRef = useRef<string>('')
   const [proxySettings, setProxySettings] = useState<ProjectProxySettings | null>(null)
   const [frontendPricesBrandCount, setFrontendPricesBrandCount] = useState<number>(1)
+  const [backfillCustomOpen, setBackfillCustomOpen] = useState(false)
+  const [backfillDateFrom, setBackfillDateFrom] = useState('')
+  const [backfillDateTo, setBackfillDateTo] = useState('')
+  const [backfillCustomLoading, setBackfillCustomLoading] = useState(false)
+  const [wbCardStatsUseFastPath, setWbCardStatsUseFastPath] = useState(false)
 
   useEffect(() => {
     const load = async () => {
@@ -241,24 +246,40 @@ export default function ProjectSettingsPage({ params }: { params: { projectId: s
     await runIngestWithParams(jobCode)
   }
 
-  const runIngestWithParams = async (jobCode: string, params?: { date_from?: string; date_to?: string }) => {
+  const runIngestWithParams = async (
+    jobCode: string,
+    params?: {
+      date_from?: string
+      date_to?: string
+      mode?: 'daily' | 'backfill'
+      max_seconds?: number
+      max_batches?: number
+      cursor?: { date: string; nm_offset: number }
+      use_fast_path?: boolean
+    }
+  ) => {
     if (!wbEnabled) {
       setToast('WB marketplace is not enabled. Enable it in Marketplaces section.')
       setTimeout(() => setToast(null), 5000)
       return
     }
 
+    const finalParams =
+      jobCode === 'wb_card_stats_daily'
+        ? { ...params, use_fast_path: params?.use_fast_path ?? wbCardStatsUseFastPath }
+        : params
+
     try {
       // Optimistic update
       setRunningJobs(prev => new Set(prev).add(jobCode))
-      setWbIngestStatuses(prev => prev.map(s => 
-        s.job_code === jobCode 
+      setWbIngestStatuses(prev => prev.map(s =>
+        s.job_code === jobCode
           ? { ...s, is_running: true, last_status: 'queued' }
           : s
       ))
 
       setToast(`Запуск ${jobCode}...`)
-      await runWBIngest(projectId, jobCode, params)
+      await runWBIngest(projectId, jobCode, finalParams)
       
       // Start polling to track progress
       if (!pollingIntervalRef.current) {
@@ -552,23 +573,123 @@ export default function ProjectSettingsPage({ params }: { params: { projectId: s
                                 Финансовые отчёты →
                               </Link>
                             ) : (
-                              <button
-                                onClick={() => handleRunIngest(status.job_code)}
-                                disabled={!wbEnabled || status.is_running}
-                                style={{
-                                  padding: '6px 12px',
-                                  backgroundColor: status.is_running ? '#ccc' : '#2563eb',
-                                  color: 'white',
-                                  border: 'none',
-                                  borderRadius: '4px',
-                                  cursor: status.is_running ? 'not-allowed' : 'pointer',
-                                  fontSize: '0.9rem',
-                                }}
-                              >
-                                {status.is_running ? 'Выполняется…' : 'Загрузить сейчас'}
-                              </button>
+                              <>
+                                <button
+                                  onClick={() => handleRunIngest(status.job_code)}
+                                  disabled={!wbEnabled || status.is_running}
+                                  style={{
+                                    padding: '6px 12px',
+                                    backgroundColor: status.is_running ? '#ccc' : '#2563eb',
+                                    color: 'white',
+                                    border: 'none',
+                                    borderRadius: '4px',
+                                    cursor: status.is_running ? 'not-allowed' : 'pointer',
+                                    fontSize: '0.9rem',
+                                  }}
+                                >
+                                  {status.is_running ? 'Выполняется…' : 'Загрузить сейчас'}
+                                </button>
+                                {status.job_code === 'wb_card_stats_daily' && (
+                                  <>
+                                    <label
+                                      style={{
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: 6,
+                                        fontSize: '0.85rem',
+                                        marginRight: 8,
+                                      }}
+                                      title="Быстрый сбор через batched WB endpoint (/sales-funnel/products)"
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        checked={wbCardStatsUseFastPath}
+                                        onChange={e => setWbCardStatsUseFastPath(e.target.checked)}
+                                        style={{ margin: 0 }}
+                                      />
+                                      <span>Fast path</span>
+                                    </label>
+                                    <span style={{ fontSize: '0.75rem', color: '#6b7280', marginRight: 8 }}>
+                                      Batched endpoint
+                                    </span>
+                                    <button
+                                      onClick={async () => {
+                                        if (!wbEnabled || status.is_running) return
+                                        try {
+                                          setRunningJobs(prev => new Set(prev).add('wb_card_stats_daily'))
+                                          setWbIngestStatuses(prev =>
+                                            prev.map(s =>
+                                              s.job_code === 'wb_card_stats_daily'
+                                                ? { ...s, is_running: true, last_status: 'queued' as const }
+                                                : s
+                                            )
+                                          )
+                                          await runWBIngest(projectId, 'wb_card_stats_daily', {
+                                            mode: 'backfill',
+                                            max_seconds: 900,
+                                            max_batches: 200,
+                                            use_fast_path: wbCardStatsUseFastPath,
+                                          })
+                                          setToast('Backfill started')
+                                          setTimeout(() => setToast(null), 3000)
+                                          if (!pollingIntervalRef.current) startPolling()
+                                          setTimeout(() => loadWBIngestStatuses(), 1000)
+                                        } catch (err: unknown) {
+                                          setRunningJobs(prev => {
+                                            const next = new Set(prev)
+                                            next.delete('wb_card_stats_daily')
+                                            return next
+                                          })
+                                          setWbIngestStatuses(prev =>
+                                            prev.map(s =>
+                                              s.job_code === 'wb_card_stats_daily' ? { ...s, is_running: false } : s
+                                            )
+                                          )
+                                          setToast(`Ошибка: ${(err as { detail?: string }).detail || (err as Error).message}`)
+                                          setTimeout(() => setToast(null), 5000)
+                                        }
+                                      }}
+                                      disabled={!wbEnabled || status.is_running}
+                                      style={{
+                                        padding: '6px 12px',
+                                        backgroundColor: status.is_running ? '#ccc' : '#f59e0b',
+                                        color: 'white',
+                                        border: 'none',
+                                        borderRadius: '4px',
+                                        cursor: status.is_running ? 'not-allowed' : 'pointer',
+                                        fontSize: '0.9rem',
+                                      }}
+                                    >
+                                      Backfill 30 days
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const today = new Date()
+                                        setBackfillDateTo(today.toISOString().slice(0, 10))
+                                        const from = new Date(today)
+                                        from.setDate(from.getDate() - 29)
+                                        setBackfillDateFrom(from.toISOString().slice(0, 10))
+                                        setBackfillCustomOpen(true)
+                                      }}
+                                      disabled={!wbEnabled || status.is_running}
+                                      style={{
+                                        padding: '6px 12px',
+                                        backgroundColor: status.is_running ? '#ccc' : '#6b7280',
+                                        color: 'white',
+                                        border: 'none',
+                                        borderRadius: '4px',
+                                        cursor: status.is_running ? 'not-allowed' : 'pointer',
+                                        fontSize: '0.9rem',
+                                      }}
+                                    >
+                                      Backfill custom…
+                                    </button>
+                                  </>
+                                )}
+                              </>
                             )}
-                            {status.job_code !== 'wb_finances' && status.last_run_at ? (
+                            {status.job_code !== 'wb_finances' && (status.last_run_at || status.job_code === 'wb_card_stats_daily') ? (
                               <Link
                                 href={`/app/project/${projectId}/ingestion?job_code=${status.job_code}`}
                                 style={{
@@ -751,6 +872,106 @@ export default function ProjectSettingsPage({ params }: { params: { projectId: s
               </Link>
             </div>
           </div>
+
+          {backfillCustomOpen && (
+            <div
+              style={{
+                position: 'fixed',
+                inset: 0,
+                background: 'rgba(0,0,0,0.4)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                zIndex: 50,
+              }}
+              onClick={() => !backfillCustomLoading && setBackfillCustomOpen(false)}
+            >
+              <div
+                className="card"
+                style={{ padding: 24, minWidth: 320, maxWidth: 400 }}
+                onClick={e => e.stopPropagation()}
+              >
+                <h3 style={{ marginTop: 0, marginBottom: 16 }}>Backfill wb_card_stats_daily</h3>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 16 }}>
+                  <label style={{ fontSize: 14, fontWeight: 500 }}>
+                    date_from (YYYY-MM-DD)
+                    <input
+                      type="date"
+                      value={backfillDateFrom}
+                      onChange={e => setBackfillDateFrom(e.target.value)}
+                      style={{ display: 'block', marginTop: 4, padding: '6px 10px', width: '100%' }}
+                    />
+                  </label>
+                  <label style={{ fontSize: 14, fontWeight: 500 }}>
+                    date_to (YYYY-MM-DD)
+                    <input
+                      type="date"
+                      value={backfillDateTo}
+                      onChange={e => setBackfillDateTo(e.target.value)}
+                      style={{ display: 'block', marginTop: 4, padding: '6px 10px', width: '100%' }}
+                    />
+                  </label>
+                </div>
+                <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                  <button
+                    type="button"
+                    onClick={() => !backfillCustomLoading && setBackfillCustomOpen(false)}
+                    disabled={backfillCustomLoading}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={backfillCustomLoading || !backfillDateFrom || !backfillDateTo}
+                    onClick={async () => {
+                      if (!backfillDateFrom || !backfillDateTo) return
+                      setBackfillCustomLoading(true)
+                      try {
+                        setRunningJobs(prev => new Set(prev).add('wb_card_stats_daily'))
+                        setWbIngestStatuses(prev =>
+                          prev.map(s =>
+                            s.job_code === 'wb_card_stats_daily'
+                              ? { ...s, is_running: true, last_status: 'queued' as const }
+                              : s
+                          )
+                        )
+                        await runWBIngest(projectId, 'wb_card_stats_daily', {
+                          mode: 'backfill',
+                          date_from: backfillDateFrom,
+                          date_to: backfillDateTo,
+                          max_seconds: 900,
+                          max_batches: 200,
+                          use_fast_path: wbCardStatsUseFastPath,
+                        })
+                        setToast('Backfill started')
+                        setTimeout(() => setToast(null), 3000)
+                        setBackfillCustomOpen(false)
+                        if (!pollingIntervalRef.current) startPolling()
+                        setTimeout(() => loadWBIngestStatuses(), 1000)
+                      } catch (err: unknown) {
+                        setRunningJobs(prev => {
+                          const next = new Set(prev)
+                          next.delete('wb_card_stats_daily')
+                          return next
+                        })
+                        setWbIngestStatuses(prev =>
+                          prev.map(s =>
+                            s.job_code === 'wb_card_stats_daily' ? { ...s, is_running: false } : s
+                          )
+                        )
+                        setToast(`Ошибка: ${(err as { detail?: string }).detail || (err as Error).message}`)
+                        setTimeout(() => setToast(null), 5000)
+                      } finally {
+                        setBackfillCustomLoading(false)
+                      }
+                    }}
+                  >
+                    {backfillCustomLoading ? 'Запуск…' : 'Start'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </>
       )}
     </div>

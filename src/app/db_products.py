@@ -261,6 +261,71 @@ def get_chrt_ids(limit: Optional[int] = None) -> List[int]:
     return chrt_ids
 
 
+def search_project_products_lookup(
+    project_id: int,
+    query: str,
+    limit: int = 10,
+) -> List[Dict[str, Any]]:
+    """Lookup project products by nm_id or vendor_code for UI autocomplete."""
+    q = (query or "").strip()
+    if not q:
+        return []
+
+    try:
+        q_num = int(q)
+    except (ValueError, TypeError):
+        q_num = None
+
+    sql = text("""
+        SELECT
+            p.nm_id,
+            p.vendor_code,
+            p.title,
+            p.subject_name AS wb_category
+        FROM products p
+        WHERE p.project_id = :project_id
+          AND (
+            p.vendor_code ILIKE :q_like
+            OR p.nm_id::text ILIKE :q_like
+          )
+        ORDER BY
+            CASE
+                WHEN p.vendor_code ILIKE :q_exact THEN 0
+                WHEN :q_num IS NOT NULL AND p.nm_id = :q_num THEN 0
+                WHEN p.vendor_code ILIKE :q_prefix THEN 1
+                WHEN p.nm_id::text LIKE :q_prefix THEN 1
+                ELSE 2
+            END,
+            p.vendor_code NULLS LAST,
+            p.nm_id
+        LIMIT :limit
+    """)
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            sql,
+            {
+                "project_id": project_id,
+                "q_num": q_num,
+                "q_like": f"%{q}%",
+                "q_exact": q,
+                "q_prefix": f"{q}%",
+                "limit": max(1, min(int(limit), 20)),
+            },
+        ).mappings().all()
+
+    return [
+        {
+            "nm_id": int(row["nm_id"]),
+            "vendor_code": row.get("vendor_code"),
+            "title": row.get("title"),
+            "wb_category": row.get("wb_category"),
+        }
+        for row in rows
+        if row.get("nm_id") is not None
+    ]
+
+
 if __name__ == "__main__":
     ensure_schema()
     print("products schema ready")

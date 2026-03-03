@@ -28,6 +28,7 @@ class IngestRunResponse(BaseModel):
   error_message: Optional[str]
   error_trace: Optional[str]
   stats_json: Optional[Dict[str, Any]]
+  params_json: Optional[Dict[str, Any]] = None
   heartbeat_at: Optional[datetime] = None
   celery_task_id: Optional[str] = None
   meta_json: Optional[Dict[str, Any]] = None

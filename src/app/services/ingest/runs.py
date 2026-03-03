@@ -874,3 +874,76 @@ def has_active_run(
         ).scalar()
     return result > 0 if result else False
 
+
+def get_last_wb_card_stats_daily_checkpoint(
+    project_id: int,
+    date_from_iso: str,
+    date_to_iso: str,
+) -> Optional[Dict[str, Any]]:
+    """Find the most recent failed run for wb_card_stats_daily with a saved cursor and same date range.
+
+    Used for server-side resume: when a new backfill run is started without cursor but with the same
+    date_from/date_to, we load the checkpoint from the last run that ended with progress_saved or
+    wb_analytics_network_error and had a cursor in stats_json.
+
+    Returns:
+        None or dict with keys: run_id (int), cursor (dict with date, nm_offset), saved_date_from, saved_date_to.
+    """
+    sql = text(
+        """
+        SELECT id, stats_json, params_json
+        FROM ingest_runs
+        WHERE project_id = :project_id
+          AND marketplace_code = 'wildberries'
+          AND job_code = 'wb_card_stats_daily'
+          AND status = 'failed'
+          AND stats_json IS NOT NULL
+          AND stats_json->>'reason' IN ('progress_saved', 'wb_analytics_network_error')
+          AND stats_json->'cursor' IS NOT NULL
+        ORDER BY finished_at DESC NULLS LAST, created_at DESC
+        LIMIT 20
+        """
+    )
+    with engine.connect() as conn:
+        rows = conn.execute(
+            sql,
+            {"project_id": project_id},
+        ).mappings().all()
+
+    for row in rows:
+        stats = row["stats_json"]
+        params = row.get("params_json")
+        if isinstance(params, str):
+            try:
+                import json as json_module
+                params = json_module.loads(params)
+            except Exception:
+                params = {}
+        if not isinstance(stats, dict):
+            continue
+        cursor = stats.get("cursor")
+        if not isinstance(cursor, dict) or cursor.get("date") is None:
+            continue
+        # Match date range: from stats (saved_date_from/saved_date_to) or params (date_from/date_to)
+        saved_from = (stats.get("saved_date_from") or (params or {}).get("date_from"))
+        saved_to = (stats.get("saved_date_to") or (params or {}).get("date_to"))
+        if saved_from is not None and hasattr(saved_from, "isoformat"):
+            saved_from = saved_from.isoformat()[:10]
+        if saved_to is not None and hasattr(saved_to, "isoformat"):
+            saved_to = saved_to.isoformat()[:10]
+        if isinstance(saved_from, str):
+            saved_from = saved_from[:10]
+        if isinstance(saved_to, str):
+            saved_to = saved_to[:10]
+        want_from = str(date_from_iso)[:10] if date_from_iso else None
+        want_to = str(date_to_iso)[:10] if date_to_iso else None
+        if saved_from != want_from or saved_to != want_to:
+            continue
+        return {
+            "run_id": row["id"],
+            "cursor": cursor,
+            "saved_date_from": saved_from,
+            "saved_date_to": saved_to,
+        }
+    return None
+

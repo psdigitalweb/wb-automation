@@ -3,7 +3,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
-import { apiGet, apiPost, apiPut, apiDelete, getProjectProxySettings } from '../../../../../lib/apiClient'
+import { apiGet, apiPost, apiPut, apiDelete, getProjectProxySettings, runWBIngest } from '../../../../../lib/apiClient'
 import type { ApiError } from '../../../../../lib/apiClient'
 import { usePageTitle } from '../../../../../hooks/usePageTitle'
 import s from './ingestion.module.css'
@@ -38,6 +38,7 @@ type IngestRun = {
   error_message: string | null
   error_trace: string | null
   stats_json: any | null
+  params_json?: Record<string, unknown> | null
   heartbeat_at?: string | null
   celery_task_id?: string | null
   meta_json?: any | null
@@ -87,6 +88,7 @@ export default function ProjectIngestionPage() {
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
   const [markTimeoutRunId, setMarkTimeoutRunId] = useState<number | null>(null)
   const [markingTimeout, setMarkingTimeout] = useState(false)
+  const [wbCardStatsContinueLoading, setWbCardStatsContinueLoading] = useState(false)
 
   // Create schedule form
   const [formJob, setFormJob] = useState<string>('')
@@ -397,7 +399,8 @@ export default function ProjectIngestionPage() {
     return `${min} мин ${rest} сек`
   }
 
-  const renderStatusBadge = (status: RunStatus) => {
+  const renderStatusBadge = (status: RunStatus, run?: IngestRun) => {
+    const isPartial = status === 'failed' && run?.stats_json?.reason === 'progress_saved'
     let bg = '#e5e7eb'
     let color = '#111827'
     if (status === 'queued') {
@@ -419,6 +422,10 @@ export default function ProjectIngestionPage() {
       bg = '#f3f4f6'
       color = '#4b5563'
     }
+    if (isPartial) {
+      bg = '#fffbeb'
+      color = '#92400e'
+    }
     return (
       <span
         style={{
@@ -431,7 +438,7 @@ export default function ProjectIngestionPage() {
           fontWeight: 500,
         }}
       >
-        {status}
+        {isPartial ? 'Partial' : status}
       </span>
     )
   }
@@ -1523,6 +1530,67 @@ export default function ProjectIngestionPage() {
             </div>
           </div>
 
+          {filtersJob === 'wb_card_stats_daily' && runs.length > 0 && (() => {
+            const lastRun = runs[0]
+            const isPartial = lastRun.status === 'failed' &&
+              lastRun.stats_json?.reason === 'progress_saved' &&
+              lastRun.stats_json?.cursor
+            if (!isPartial) return null
+            return (
+              <div
+                className="card"
+                style={{
+                  marginBottom: 24,
+                  background: '#fffbeb',
+                  borderColor: '#fde68a',
+                }}
+              >
+                <h2 style={{ marginTop: 0 }}>Статистика карточек WB (воронка)</h2>
+                <p style={{ margin: '0 0 12px 0', color: '#92400e' }}>
+                  Partial — progress saved. You can continue the backfill from the last checkpoint.
+                </p>
+                <button
+                  type="button"
+                  disabled={wbCardStatsContinueLoading}
+                  onClick={async () => {
+                    const stats = lastRun.stats_json
+                    const paramsJson = lastRun.params_json
+                    const params = {
+                      mode: 'backfill' as const,
+                      date_from: stats?.saved_date_from ?? paramsJson?.date_from,
+                      date_to: stats?.saved_date_to ?? paramsJson?.date_to,
+                      max_seconds: paramsJson?.max_seconds ?? 900,
+                      max_batches: paramsJson?.max_batches ?? 200,
+                      cursor: stats?.cursor,
+                    }
+                    if (!params.cursor) return
+                    setWbCardStatsContinueLoading(true)
+                    try {
+                      await runWBIngest(projectId, 'wb_card_stats_daily', params)
+                      showSuccess('Backfill продолжен')
+                      await loadRuns()
+                    } catch (e: unknown) {
+                      handleApiError(e as ApiError, 'Не удалось продолжить backfill')
+                    } finally {
+                      setWbCardStatsContinueLoading(false)
+                    }
+                  }}
+                  style={{
+                    padding: '8px 16px',
+                    borderRadius: 8,
+                    border: '1px solid #d97706',
+                    background: '#f59e0b',
+                    color: '#fff',
+                    fontWeight: 600,
+                    cursor: wbCardStatsContinueLoading ? 'wait' : 'pointer',
+                  }}
+                >
+                  {wbCardStatsContinueLoading ? 'Запуск…' : 'Continue'}
+                </button>
+              </div>
+            )
+          })()}
+
           <div className="card">
             <h2>История запусков</h2>
             {loadingRuns ? (
@@ -1566,7 +1634,7 @@ export default function ProjectIngestionPage() {
                           {formatRelativeMinutes(getLastActivity(r))}
                         </td>
                         <td>{formatDuration(r.duration_ms)}</td>
-                        <td>{renderStatusBadge(r.status)}</td>
+                        <td>{renderStatusBadge(r.status, r)}</td>
                         <td>{r.marketplace_code}</td>
                         <td>
                           {r.job_code}
@@ -1651,7 +1719,7 @@ export default function ProjectIngestionPage() {
                 Run #{runDetails.id} — {runDetails.marketplace_code}/{runDetails.job_code}
               </h3>
               <p>
-                <strong>Status:</strong> {renderStatusBadge(runDetails.status)}
+                <strong>Status:</strong> {renderStatusBadge(runDetails.status, runDetails)}
               </p>
               <p>
                 <strong>Triggered by:</strong> {runDetails.triggered_by}

@@ -11,7 +11,6 @@ from app.ingest_prices import ingest_prices as _ingest_prices
 from app.ingest_stocks import ingest_warehouses as _ingest_warehouses
 from app.ingest_products import ingest as _ingest_products
 from app.ingest_supplier_stocks import ingest_supplier_stocks as _ingest_supplier_stocks
-from app.tasks.ingestion import ingest_rrp_xml_task
 
 
 RunCallable = Callable[..., Awaitable[Dict[str, Any]]]
@@ -523,6 +522,8 @@ async def _wrap_frontend_prices(project_id: int, run_id: int) -> Dict[str, Any]:
 
 
 async def _wrap_rrp_xml(project_id: int, run_id: int) -> Dict[str, Any]:
+    # Lazy import to avoid circular import: registry -> tasks.ingestion -> celery_app -> tasks.ingest_execute -> registry
+    from app.tasks.ingestion import ingest_rrp_xml_task
     result = ingest_rrp_xml_task.run(project_id, run_id=run_id)
     if isinstance(result, dict):
         return result
@@ -712,11 +713,32 @@ _JOB_DEFINITIONS: Dict[str, JobDefinition] = {
         "supports_schedule": True,
         "supports_manual": True,
     },
+    "wb_communications": {
+        "job_code": "wb_communications",
+        "title": "Загрузка отзывов и вопросов WB",
+        "source_code": "wildberries",
+        "supports_schedule": True,
+        "supports_manual": True,
+    },
     "wb_finances": {
         "job_code": "wb_finances",
         "title": "Загрузка финансовых отчётов WB",
         "source_code": "wildberries",
         "supports_schedule": False,  # Не поддерживает расписание (требует параметры)
+        "supports_manual": True,
+    },
+    "wb_card_stats_daily": {
+        "job_code": "wb_card_stats_daily",
+        "title": "Статистика карточек WB (воронка)",
+        "source_code": "wildberries",
+        "supports_schedule": True,
+        "supports_manual": True,
+    },
+    "wb_search_queries_daily": {
+        "job_code": "wb_search_queries_daily",
+        "title": "Поисковые запросы WB",
+        "source_code": "wildberries",
+        "supports_schedule": True,
         "supports_manual": True,
     },
     # Internal jobs
@@ -734,6 +756,13 @@ _JOB_DEFINITIONS: Dict[str, JobDefinition] = {
         "supports_schedule": True,
         "supports_manual": True,
     },
+    "build_wb_communications_aggregates": {
+        "job_code": "build_wb_communications_aggregates",
+        "title": "Построение daily агрегатов (feedbacks/questions)",
+        "source_code": "internal",
+        "supports_schedule": False,
+        "supports_manual": True,
+    },
     "build_tax_statement": {
         "job_code": "build_tax_statement",
         "title": "Расчёт налогового отчёта",
@@ -744,6 +773,222 @@ _JOB_DEFINITIONS: Dict[str, JobDefinition] = {
 }
 
 
+async def _wrap_wb_card_stats_daily(project_id: int, run_id: int) -> Dict[str, Any]:
+    """Wrapper for wb_card_stats_daily ingest. Reads params_json from run and passes to ingest.
+    For backfill: source of truth for resume is wb_backfill_range_state. If range is completed,
+    short-circuit without calling ingest. If paused/failed, pass cursor from range state.
+    """
+    from datetime import date as _date
+    from app.services.ingest.runs import get_run, get_last_wb_card_stats_daily_checkpoint
+    from app.ingest_wb_analytics import ingest_wb_card_stats_daily
+    from app.db_wb_backfill_state import get_backfill_state, JOB_CODE_WB_CARD_STATS_DAILY
+
+    run = get_run(run_id)
+    params = dict((run or {}).get("params_json") or {})
+
+    if (params.get("mode") or "daily").lower() == "backfill":
+        date_from = params.get("date_from")
+        date_to = params.get("date_to")
+        if date_from is not None and date_to is not None:
+            try:
+                df = _date.fromisoformat(str(date_from)[:10]) if not isinstance(date_from, _date) else date_from
+                dto = _date.fromisoformat(str(date_to)[:10]) if not isinstance(date_to, _date) else date_to
+            except (ValueError, TypeError):
+                df = dto = None
+            if df is not None and dto is not None:
+                range_state = get_backfill_state(
+                    project_id, JOB_CODE_WB_CARD_STATS_DAILY, df, dto
+                )
+                range_status = (range_state or {}).get("status")
+                logger.info(
+                    "wb_card_stats_daily backfill: range_state found status=%s date_from=%s date_to=%s",
+                    range_status or "none",
+                    df.isoformat(),
+                    dto.isoformat(),
+                )
+
+                # completed: short-circuit, no ingest, no WB
+                if range_state and range_status == "completed":
+                    logger.info(
+                        "wb_card_stats_daily backfill: resume decision=already_completed, short-circuit",
+                    )
+                    nm_count = range_state.get("cursor_nm_offset")
+                    if nm_count is None or nm_count == 0:
+                        from app.db_wb_analytics import get_wb_nm_ids_for_project
+                        nm_count = len(get_wb_nm_ids_for_project(project_id))
+                    result = {
+                        "ok": True,
+                        "scope": "project",
+                        "project_id": project_id,
+                        "domain": "wb_card_stats_daily",
+                        "rows_upserted": 0,
+                        "nm_ids_total": nm_count,
+                        "reason": "already_completed",
+                        "date_from": df.isoformat(),
+                        "date_to": dto.isoformat(),
+                        "cursor_end": {"date": dto.isoformat(), "nm_offset": nm_count},
+                        "range_status": "completed",
+                        "finished_at": datetime.utcnow().isoformat(),
+                    }
+                    return result
+
+                # running: short-circuit, no ingest, no WB, no ingest_runs fallback
+                if range_state and range_status == "running":
+                    logger.info(
+                        "wb_card_stats_daily backfill: resume decision=already_running_for_range, "
+                        "second run blocked, no WB calls",
+                    )
+                    cursor_date = range_state.get("cursor_date")
+                    cursor_nm_offset = range_state.get("cursor_nm_offset")
+                    cursor_payload = None
+                    if cursor_date is not None and cursor_nm_offset is not None:
+                        cursor_payload = {
+                            "date": cursor_date.isoformat() if hasattr(cursor_date, "isoformat") else str(cursor_date)[:10],
+                            "nm_offset": int(cursor_nm_offset),
+                        }
+                    result = {
+                        "ok": True,
+                        "scope": "project",
+                        "project_id": project_id,
+                        "domain": "wb_card_stats_daily",
+                        "rows_upserted": 0,
+                        "reason": "already_running_for_range",
+                        "date_from": df.isoformat(),
+                        "date_to": dto.isoformat(),
+                        "loaded_cursor_source": "wb_backfill_range_state",
+                        "range_status": "running",
+                        "finished_at": datetime.utcnow().isoformat(),
+                    }
+                    if cursor_payload is not None:
+                        result["cursor"] = cursor_payload
+                    return result
+
+                # paused / failed: resume only from wb_backfill_range_state
+                if range_state and range_status in ("paused", "failed"):
+                    has_cursor = isinstance(params.get("cursor"), dict) and params["cursor"].get("date") is not None
+                    if not has_cursor:
+                        cursor_date = range_state.get("cursor_date")
+                        cursor_nm_offset = range_state.get("cursor_nm_offset")
+                        if cursor_date is not None and cursor_nm_offset is not None:
+                            params["cursor"] = {
+                                "date": cursor_date.isoformat() if hasattr(cursor_date, "isoformat") else str(cursor_date)[:10],
+                                "nm_offset": int(cursor_nm_offset),
+                            }
+                            params["_loaded_cursor_source"] = "wb_backfill_range_state"
+                    logger.info(
+                        "wb_card_stats_daily backfill: resume decision=range_state status=%s",
+                        range_status,
+                    )
+
+                # no range state: migration fallback from ingest_runs allowed
+                elif not range_state:
+                    has_cursor = isinstance(params.get("cursor"), dict) and params["cursor"].get("date") is not None
+                    if not has_cursor:
+                        date_from_iso = df.isoformat()
+                        date_to_iso = dto.isoformat()
+                        checkpoint = get_last_wb_card_stats_daily_checkpoint(
+                            project_id, date_from_iso, date_to_iso
+                        )
+                        if checkpoint:
+                            params["cursor"] = checkpoint["cursor"]
+                            params["_loaded_cursor_source"] = f"ingest_runs:{checkpoint['run_id']}"
+                            logger.info(
+                                "wb_card_stats_daily backfill: resume decision=ingest_runs run_id=%s",
+                                checkpoint["run_id"],
+                            )
+                        else:
+                            logger.info(
+                                "wb_card_stats_daily backfill: resume decision=start (no state, no checkpoint)",
+                            )
+                    else:
+                        logger.info(
+                            "wb_card_stats_daily backfill: resume decision=request (cursor in params)",
+                        )
+
+    result = await ingest_wb_card_stats_daily(
+        project_id=project_id,
+        run_id=run_id,
+        params=params,
+    )
+    if isinstance(result, dict) and "finished_at" not in result:
+        result["finished_at"] = datetime.utcnow().isoformat()
+    return result
+
+
+async def _wrap_wb_search_queries_daily(project_id: int, run_id: int) -> Dict[str, Any]:
+    """Wrapper for wb_search_queries_daily ingest."""
+    from app.services.ingest.runs import get_run
+    from app.ingest_wb_analytics import ingest_wb_search_queries_daily
+    from datetime import date as _date
+
+    run = get_run(run_id)
+    params = (run or {}).get("params_json") or {}
+    date_from = None
+    date_to = None
+    top_nm_limit = params.get("top_nm_limit")
+    if top_nm_limit is not None:
+        try:
+            top_nm_limit = int(top_nm_limit)
+        except (ValueError, TypeError):
+            top_nm_limit = None
+    if params.get("date_from"):
+        try:
+            date_from = _date.fromisoformat(str(params["date_from"])[:10])
+        except (ValueError, TypeError):
+            pass
+    if params.get("date_to"):
+        try:
+            date_to = _date.fromisoformat(str(params["date_to"])[:10])
+        except (ValueError, TypeError):
+            pass
+
+    result = await ingest_wb_search_queries_daily(
+        project_id=project_id,
+        run_id=run_id,
+        date_from=date_from,
+        date_to=date_to,
+        top_nm_limit=top_nm_limit,
+    )
+    if isinstance(result, dict) and "finished_at" not in result:
+        result["finished_at"] = datetime.utcnow().isoformat()
+    return result
+
+
+async def _wrap_wb_communications(project_id: int, run_id: int) -> Dict[str, Any]:
+    """Wrapper for WB communications (feedbacks/questions) ingest. Supports mode=reviews_backfill via params_json."""
+    from app.services.ingest.runs import get_run
+    from app.ingest_wb_communications import ingest_wb_communications
+
+    run = get_run(run_id)
+    params = (run or {}).get("params_json") or {}
+    result = await ingest_wb_communications(project_id=project_id, run_id=run_id, params=params)
+    if isinstance(result, dict) and result.get("ok") is False:
+        return result
+    return {
+        "ok": True,
+        "scope": "project",
+        "project_id": project_id,
+        "domain": "wb_communications",
+        "finished_at": datetime.utcnow().isoformat(),
+        **(result if isinstance(result, dict) else {}),
+    }
+
+
+async def _wrap_build_wb_communications_aggregates(project_id: int, run_id: int) -> Dict[str, Any]:
+    """Wrapper for build_wb_communications_daily_aggregates job."""
+    from app.ingest_wb_communications import build_wb_communications_daily_aggregates
+
+    result = build_wb_communications_daily_aggregates(project_id=project_id, run_id=run_id)
+    return {
+        "ok": True,
+        "scope": "project",
+        "project_id": project_id,
+        "domain": "build_wb_communications_aggregates",
+        "finished_at": datetime.utcnow().isoformat(),
+        **(result if isinstance(result, dict) else {}),
+    }
+
+
 _REGISTRY: Dict[Tuple[str, str], RunCallable] = {
     # marketplace_code (source_code), job_code -> callable(project_id) -> stats_json
     ("wildberries", "products"): _wrap_ingest_products,
@@ -752,9 +997,13 @@ _REGISTRY: Dict[Tuple[str, str], RunCallable] = {
     ("wildberries", "supplier_stocks"): _wrap_ingest_supplier_stocks,
     ("wildberries", "prices"): _wrap_ingest_prices,
     ("wildberries", "frontend_prices"): _wrap_frontend_prices,
+    ("wildberries", "wb_communications"): _wrap_wb_communications,
     ("wildberries", "wb_finances"): _wrap_wb_finances,
+    ("wildberries", "wb_card_stats_daily"): _wrap_wb_card_stats_daily,
+    ("wildberries", "wb_search_queries_daily"): _wrap_wb_search_queries_daily,
     ("internal", "rrp_xml"): _wrap_rrp_xml,
     ("internal", "build_rrp_snapshots"): _wrap_build_rrp_snapshots,
+    ("internal", "build_wb_communications_aggregates"): _wrap_build_wb_communications_aggregates,
     ("internal", "build_tax_statement"): _wrap_build_tax_statement,
 }
 
@@ -789,5 +1038,10 @@ def list_job_definitions() -> List[JobDefinition]:
 
 
 def get_job_definition(job_code: str) -> Optional[JobDefinition]:
-    return _JOB_DEFINITIONS.get(job_code)
+    if ('wildberries', job_code) in _REGISTRY:
+        return _JOB_DEFINITIONS.get(job_code)
+    for (m, j) in _REGISTRY:
+        if j == job_code:
+            return _JOB_DEFINITIONS.get(job_code)
+    return None
 

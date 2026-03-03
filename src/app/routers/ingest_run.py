@@ -20,6 +20,10 @@ IngestDomain = Literal[
     "frontend_prices",
     "rrp_xml",
     "build_rrp_snapshots",
+    "wb_communications",
+    "build_wb_communications_aggregates",
+    "wb_card_stats_daily",
+    "wb_search_queries_daily",
 ]
 
 
