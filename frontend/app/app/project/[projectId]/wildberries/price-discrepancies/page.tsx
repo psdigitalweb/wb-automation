@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState, useRef } from 'react'
-import { useParams, useRouter, useSearchParams } from 'next/navigation'
+import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { apiGetData, apiPost } from '@/lib/apiClient'
 import { usePageTitle } from '@/hooks/usePageTitle'
@@ -659,6 +659,7 @@ function Pagination({ meta, onPageChange }: PaginationProps) {
 
 export default function WbPriceDiscrepanciesPage() {
   const params = useParams()
+  const pathname = usePathname()
   const router = useRouter()
   const searchParams = useSearchParams()
   const projectId = params.projectId as string
@@ -694,7 +695,7 @@ export default function WbPriceDiscrepanciesPage() {
     const next: FiltersState = {
       ...filters,
       ...patch,
-      page: resetPage ? 1 : filters.page,
+      page: resetPage ? 1 : (patch.page ?? filters.page),
     }
 
     if (next.q) current.set('q', next.q)
@@ -712,8 +713,10 @@ export default function WbPriceDiscrepanciesPage() {
     current.set('page_size', String(next.pageSize))
 
     const qs = current.toString()
-    const basePath = `/app/project/${projectId}/wildberries/price-discrepancies`
-    router.push(qs ? `${basePath}?${qs}` : basePath)
+    const basePath = pathname ?? `/app/project/${projectId}/wildberries/price-discrepancies`
+    const target = qs ? `${basePath}?${qs}` : basePath
+
+    router.push(target)
   }
 
   useEffect(() => {
@@ -1070,7 +1073,9 @@ export default function WbPriceDiscrepanciesPage() {
       {meta && (
         <Pagination
           meta={meta}
-          onPageChange={(page) => updateQuery({ page }, false)}
+          onPageChange={(page) => {
+            updateQuery({ page }, false)
+          }}
         />
       )}
     </div>

@@ -30,7 +30,9 @@ export function middleware(req: NextRequest) {
     if (pathname === '/price-discrepancies') {
       const url = req.nextUrl.clone()
       url.pathname = '/app/project/1/wildberries/price-discrepancies'
-      url.searchParams.set('only_below_rrp', 'true')
+      if (!url.searchParams.has('only_below_rrp')) {
+        url.searchParams.set('only_below_rrp', 'true')
+      }
       return NextResponse.rewrite(url)
     }
     if (pathname.startsWith('/app/project/1/wildberries/finances/unit-pnl')) {
