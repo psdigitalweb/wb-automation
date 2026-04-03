@@ -70,20 +70,24 @@ function buildFullUrl(url: string): string {
   if (url.startsWith('http')) return url
   if (apiBase) return `${apiBase}${url}`
 
-  // Default: same-origin /api/... via Next.js rewrites.
-  // However, for very slow endpoints Next.js dev proxy may reset the upstream socket (ECONNRESET),
-  // resulting in a browser-visible 500 even when backend is healthy.
-  // Bypass rewrites for those endpoints and talk to backend directly.
-  if (typeof window !== 'undefined') {
-    const isSlowEndpoint =
-      url.includes('/wildberries/search-report/keywords') ||
-      url.includes('/wildberries/search-report/search-texts')
-    if (isSlowEndpoint) {
-      const protocol = window.location.protocol || 'http:'
+    // Default: same-origin /api/... via Next.js rewrites.
+    // In local dev, Next.js proxy may reset long-running upstream requests,
+    // so a direct call to backend:8000 is helpful there. On prod we must keep
+    // same-origin /api to avoid mixed-origin/network failures in the browser.
+    if (typeof window !== 'undefined') {
+      const isSlowEndpoint =
+        url.includes('/wildberries/search-report/keywords') ||
+        url.includes('/wildberries/search-report/search-texts')
       const hostname = window.location.hostname || 'localhost'
-      return `${protocol}//${hostname}:8000${url}`
+      const isLocalDevHost =
+        hostname === 'localhost' ||
+        hostname === '127.0.0.1' ||
+        hostname === '0.0.0.0'
+      if (isSlowEndpoint && isLocalDevHost) {
+        const protocol = window.location.protocol || 'http:'
+        return `${protocol}//${hostname}:8000${url}`
+      }
     }
-  }
 
   return url
 }
