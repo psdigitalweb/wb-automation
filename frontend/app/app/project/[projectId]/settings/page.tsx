@@ -415,6 +415,9 @@ export default function ProjectSettingsPage({ params }: { params: { projectId: s
               <Link href={`/app/project/${projectId}/members`}>
                 <button>Пользователи</button>
               </Link>
+              <Link href={`/app/project/${projectId}/settings/data-availability`}>
+                <button>Наличие данных</button>
+              </Link>
             </div>
           </div>
 
@@ -589,6 +592,20 @@ export default function ProjectSettingsPage({ params }: { params: { projectId: s
                                 >
                                   {status.is_running ? 'Выполняется…' : 'Загрузить сейчас'}
                                 </button>
+                                {(status.job_code === 'wb_search_report_tabular' ||
+                                  status.job_code === 'wb_stock_total_daily') && (
+                                  <Link
+                                    href={`/app/project/${projectId}/wildberries/search-report`}
+                                    style={{
+                                      fontSize: '0.9rem',
+                                      color: '#2563eb',
+                                      textDecoration: 'none',
+                                      fontWeight: 600,
+                                    }}
+                                  >
+                                    Открыть →
+                                  </Link>
+                                )}
                                 {status.job_code === 'wb_card_stats_daily' && (
                                   <>
                                     <label
@@ -777,6 +794,26 @@ export default function ProjectSettingsPage({ params }: { params: { projectId: s
             <div>
               <Link href={`/app/project/${projectId}/internal-data/settings`}>
                 <button>Открыть настройки</button>
+              </Link>
+            </div>
+          </div>
+
+          <div className="card" style={{ padding: '20px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+              <h2 style={{ marginTop: 0, marginBottom: '8px' }}>Наличие данных</h2>
+              <Link
+                href={`/app/project/${projectId}/settings/data-availability`}
+                style={{ fontSize: '0.9rem', color: '#2563eb', textDecoration: 'none' }}
+              >
+                Открыть →
+              </Link>
+            </div>
+            <p style={{ color: '#666', marginBottom: '20px', fontSize: '0.95rem' }}>
+              Быстрый отчёт по факту: за какие периоды загружены остатки, цены, витрина, финансы, воронка и поисковые запросы (окно 90 дней).
+            </p>
+            <div>
+              <Link href={`/app/project/${projectId}/settings/data-availability`}>
+                <button>Открыть</button>
               </Link>
             </div>
           </div>
@@ -977,6 +1014,3 @@ export default function ProjectSettingsPage({ params }: { params: { projectId: s
     </div>
   )
 }
-
-
-

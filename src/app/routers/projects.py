@@ -3,7 +3,7 @@
 import logging
 import traceback
 from typing import List
-from fastapi import APIRouter, HTTPException, status, Depends, Path
+from fastapi import APIRouter, HTTPException, status, Depends, Path, Query
 
 from app.db_projects import (
     create_project,
@@ -34,6 +34,8 @@ from app.deps import (
     require_project_owner,
     require_project_admin,
 )
+from app.schemas.data_availability import DataAvailabilityResponse
+from app.services.data_availability import compute_project_data_availability
 
 router = APIRouter(prefix="/api/v1/projects", tags=["projects"])
 
@@ -337,5 +339,24 @@ async def remove_project_member_endpoint(
         )
     return None
 
+
+@router.get("/{project_id}/data-availability", response_model=DataAvailabilityResponse)
+async def get_project_data_availability_endpoint(
+    project_id: int = Path(..., description="Project ID"),
+    days: int = Query(90, ge=1, le=365, description="Window size in days"),
+    current_user: dict = Depends(get_current_active_user),
+    membership: dict = Depends(get_project_membership),  # any member can view
+):
+    """Return facts of data presence (segments and gaps) for last N days."""
+    try:
+        return compute_project_data_availability(project_id, days=days)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        logger.error(f"get_project_data_availability_endpoint failed: {e!s}\n{traceback.format_exc()}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to compute data availability",
+        )
 
 
