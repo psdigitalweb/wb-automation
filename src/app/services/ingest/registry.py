@@ -142,6 +142,40 @@ async def _wrap_ingest_supplier_stocks(project_id: int, run_id: int) -> Dict[str
     }
 
 
+async def _wrap_wb_stock_total_daily(project_id: int, run_id: int) -> Dict[str, Any]:
+    """Wrapper for wb_stock_total_daily builder (from stock_snapshots)."""
+    from app.services.ingest.runs import get_run
+    from app.ingest_wb_stock_total_daily import build_wb_stock_total_daily
+    from datetime import date as _date
+
+    run = get_run(run_id)
+    params = (run or {}).get("params_json") or {}
+    if isinstance(params, str):
+        try:
+            import json as _json
+            params = _json.loads(params) if params else {}
+        except Exception:
+            params = {}
+    if not isinstance(params, dict):
+        params = {}
+
+    for k in ("date_from", "date_to", "snapshot_date"):
+        if params.get(k) is not None and not isinstance(params.get(k), _date):
+            try:
+                params[k] = _date.fromisoformat(str(params[k])[:10])
+            except (ValueError, TypeError):
+                pass
+
+    result = await build_wb_stock_total_daily(
+        project_id=project_id,
+        run_id=run_id,
+        params=params,
+    )
+    if isinstance(result, dict) and "finished_at" not in result:
+        result["finished_at"] = datetime.utcnow().isoformat()
+    return result
+
+
 async def _wrap_frontend_prices(project_id: int, run_id: int) -> Dict[str, Any]:
     """Call frontend_prices ingestion directly (async) to avoid nested asyncio.run() calls.
     
@@ -699,6 +733,13 @@ _JOB_DEFINITIONS: Dict[str, JobDefinition] = {
         "supports_schedule": True,
         "supports_manual": True,
     },
+    "wb_stock_total_daily": {
+        "job_code": "wb_stock_total_daily",
+        "title": "Снимок суммарного остатка (daily)",
+        "source_code": "wildberries",
+        "supports_schedule": True,
+        "supports_manual": True,
+    },
     "prices": {
         "job_code": "prices",
         "title": "Загрузка цен WB",
@@ -737,6 +778,13 @@ _JOB_DEFINITIONS: Dict[str, JobDefinition] = {
     "wb_search_queries_daily": {
         "job_code": "wb_search_queries_daily",
         "title": "Поисковые запросы WB",
+        "source_code": "wildberries",
+        "supports_schedule": True,
+        "supports_manual": True,
+    },
+    "wb_search_report_tabular": {
+        "job_code": "wb_search_report_tabular",
+        "title": "Отчёт по поиску WB (таблица)",
         "source_code": "wildberries",
         "supports_schedule": True,
         "supports_manual": True,
@@ -954,6 +1002,40 @@ async def _wrap_wb_search_queries_daily(project_id: int, run_id: int) -> Dict[st
     return result
 
 
+async def _wrap_wb_search_report_tabular(project_id: int, run_id: int) -> Dict[str, Any]:
+    """Wrapper for wb_search_report_tabular ingest."""
+    from app.services.ingest.runs import get_run
+    from app.ingest_wb_search_report_tabular import ingest_wb_search_report_tabular
+    from datetime import date as _date
+
+    run = get_run(run_id)
+    params = (run or {}).get("params_json") or {}
+    if isinstance(params, str):
+        try:
+            import json as _json
+            params = _json.loads(params) if params else {}
+        except Exception:
+            params = {}
+    if not isinstance(params, dict):
+        params = {}
+
+    for k in ("date_from", "date_to", "period_from", "period_to"):
+        if params.get(k) is not None and not isinstance(params.get(k), _date):
+            try:
+                params[k] = _date.fromisoformat(str(params[k])[:10])
+            except (ValueError, TypeError):
+                pass
+
+    result = await ingest_wb_search_report_tabular(
+        project_id=project_id,
+        run_id=run_id,
+        params=params,
+    )
+    if isinstance(result, dict) and "finished_at" not in result:
+        result["finished_at"] = datetime.utcnow().isoformat()
+    return result
+
+
 async def _wrap_wb_communications(project_id: int, run_id: int) -> Dict[str, Any]:
     """Wrapper for WB communications (feedbacks/questions) ingest. Supports mode=reviews_backfill via params_json."""
     from app.services.ingest.runs import get_run
@@ -995,12 +1077,14 @@ _REGISTRY: Dict[Tuple[str, str], RunCallable] = {
     ("wildberries", "warehouses"): _wrap_ingest_warehouses,
     ("wildberries", "stocks"): _wrap_ingest_stocks,
     ("wildberries", "supplier_stocks"): _wrap_ingest_supplier_stocks,
+    ("wildberries", "wb_stock_total_daily"): _wrap_wb_stock_total_daily,
     ("wildberries", "prices"): _wrap_ingest_prices,
     ("wildberries", "frontend_prices"): _wrap_frontend_prices,
     ("wildberries", "wb_communications"): _wrap_wb_communications,
     ("wildberries", "wb_finances"): _wrap_wb_finances,
     ("wildberries", "wb_card_stats_daily"): _wrap_wb_card_stats_daily,
     ("wildberries", "wb_search_queries_daily"): _wrap_wb_search_queries_daily,
+    ("wildberries", "wb_search_report_tabular"): _wrap_wb_search_report_tabular,
     ("internal", "rrp_xml"): _wrap_rrp_xml,
     ("internal", "build_rrp_snapshots"): _wrap_build_rrp_snapshots,
     ("internal", "build_wb_communications_aggregates"): _wrap_build_wb_communications_aggregates,
@@ -1044,4 +1128,3 @@ def get_job_definition(job_code: str) -> Optional[JobDefinition]:
         if j == job_code:
             return _JOB_DEFINITIONS.get(job_code)
     return None
-

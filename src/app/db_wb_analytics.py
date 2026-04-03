@@ -259,6 +259,56 @@ def get_content_analytics_summary(
     ]
 
 
+def get_content_analytics_summary_by_nm_ids(
+    project_id: int,
+    period_from: date,
+    period_to: date,
+    nm_ids: List[int],
+) -> Dict[int, Dict[str, Any]]:
+    """Aggregate wb_card_stats_daily by nm_id for selected nm_ids only.
+
+    Returns mapping nm_id -> {opens, add_to_cart, conversion_to_order, orders_sum}.
+    """
+    ids = [int(x) for x in nm_ids if x is not None]
+    if not ids:
+        return {}
+
+    sql = text("""
+        SELECT
+            nm_id,
+            COALESCE(SUM(open_count), 0)::bigint AS opens,
+            COALESCE(SUM(cart_count), 0)::bigint AS add_to_cart,
+            CASE WHEN SUM(cart_count) > 0
+                THEN SUM(order_count)::numeric / NULLIF(SUM(cart_count), 0)
+                ELSE NULL END AS conversion_to_order,
+            COALESCE(SUM(order_sum), 0)::numeric AS orders_sum
+        FROM wb_card_stats_daily
+        WHERE project_id = :project_id
+          AND stat_date >= :period_from AND stat_date <= :period_to
+          AND nm_id = ANY(:nm_ids)
+        GROUP BY nm_id
+    """)
+    params: Dict[str, Any] = {
+        "project_id": project_id,
+        "period_from": period_from,
+        "period_to": period_to,
+        "nm_ids": ids,
+    }
+    with engine.connect() as conn:
+        rows = conn.execute(sql, params).fetchall()
+
+    out: Dict[int, Dict[str, Any]] = {}
+    for r in rows:
+        nm_id_val = int(r[0])
+        out[nm_id_val] = {
+            "opens": int(r[1] or 0),
+            "add_to_cart": int(r[2] or 0),
+            "conversion_to_order": float(r[3]) if r[3] is not None else None,
+            "orders_sum": float(r[4]) if r[4] is not None else 0.0,
+        }
+    return out
+
+
 def get_funnel_signals_raw(
     project_id: int,
     period_from: date,

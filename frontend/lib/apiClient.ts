@@ -65,6 +65,154 @@ async function refreshAccessToken(): Promise<string | null> {
   }
 }
 
+function buildFullUrl(url: string): string {
+  const apiBase = getApiBase()
+  if (url.startsWith('http')) return url
+  if (apiBase) return `${apiBase}${url}`
+
+  // Default: same-origin /api/... via Next.js rewrites.
+  // However, for very slow endpoints Next.js dev proxy may reset the upstream socket (ECONNRESET),
+  // resulting in a browser-visible 500 even when backend is healthy.
+  // Bypass rewrites for those endpoints and talk to backend directly.
+  if (typeof window !== 'undefined') {
+    const isSlowEndpoint =
+      url.includes('/wildberries/search-report/keywords') ||
+      url.includes('/wildberries/search-report/search-texts')
+    if (isSlowEndpoint) {
+      const protocol = window.location.protocol || 'http:'
+      const hostname = window.location.hostname || 'localhost'
+      return `${protocol}//${hostname}:8000${url}`
+    }
+  }
+
+  return url
+}
+
+function buildFetchOptions(
+  url: string,
+  options: RequestInit = {},
+  accessToken?: string | null
+): RequestInit {
+  const headers = new Headers(options.headers)
+  const hasBody = options.body !== undefined && options.body !== null
+  const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData
+
+  if (hasBody && !isFormData && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json')
+  }
+
+  if (accessToken) {
+    headers.set('Authorization', `Bearer ${accessToken}`)
+  }
+
+  const fetchOptions: RequestInit = {
+    ...options,
+    headers,
+  }
+
+  const isDataEndpoint = url.match(/\/v1\/(projects\/\d+\/)?(stocks|prices|dashboard)/)
+  if ((options.method === 'GET' || !options.method) && isDataEndpoint) {
+    fetchOptions.cache = 'no-store' as RequestCache
+  }
+
+  return fetchOptions
+}
+
+function buildNetworkError(fullUrl: string, fetchError: any): ApiError {
+  return {
+    detail: fetchError?.message || 'Failed to fetch',
+    status: 0,
+    url: fullUrl,
+    bodyPreview: fetchError?.message || 'Network error',
+    isJson: false,
+    parsed: null,
+    debug: {
+      url: fullUrl,
+      status: 0,
+      bodyPreview: fetchError?.message || 'Network error',
+      isJson: false,
+      parsed: null,
+    },
+  }
+}
+
+function buildAuthError(fullUrl: string): ApiError {
+  const debugObj: ApiDebug = {
+    url: fullUrl,
+    status: 401,
+    bodyPreview: 'Authentication failed',
+    isJson: true,
+    parsed: { detail: 'Authentication failed' },
+  }
+
+  return {
+    detail: 'Authentication failed',
+    status: 401,
+    url: fullUrl,
+    bodyPreview: 'Authentication failed',
+    isJson: true,
+    parsed: { detail: 'Authentication failed' },
+    debug: debugObj,
+  }
+}
+
+async function fetchWithAuth(
+  url: string,
+  options: RequestInit = {}
+): Promise<{ res: Response; fullUrl: string }> {
+  const fullUrl = buildFullUrl(url)
+  const accessToken = getAccessToken()
+  let fetchOptions = buildFetchOptions(url, options, accessToken)
+
+  let res: Response
+  try {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/66ddcc6b-d2d0-4156-a371-04fea067f11b',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'apiClient.ts:fetchWithAuth:before_fetch',message:'API request',data:{fullUrl,url},timestamp:Date.now(),runId:'api',hypothesisId:'H1'})}).catch(()=>{});
+    // #endregion
+    res = await fetch(fullUrl, fetchOptions)
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/66ddcc6b-d2d0-4156-a371-04fea067f11b',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'apiClient.ts:fetchWithAuth:after_fetch',message:'API response',data:{status:res.status,ok:res.ok,fullUrl},timestamp:Date.now(),runId:'api',hypothesisId:'H4'})}).catch(()=>{});
+    // #endregion
+  } catch (fetchError: any) {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/66ddcc6b-d2d0-4156-a371-04fea067f11b',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'apiClient.ts:fetchWithAuth:fetch_error',message:'Fetch failed',data:{message:fetchError?.message,fullUrl},timestamp:Date.now(),runId:'api',hypothesisId:'H1'})}).catch(()=>{});
+    // #endregion
+    throw buildNetworkError(fullUrl, fetchError)
+  }
+
+  if (res.status === 401 && accessToken) {
+    const newToken = await refreshAccessToken()
+    if (newToken) {
+      fetchOptions = buildFetchOptions(url, options, newToken)
+      res = await fetch(fullUrl, fetchOptions)
+    } else {
+      clearAuth()
+      if (typeof window !== 'undefined') {
+        window.location.href = '/'
+      }
+      throw buildAuthError(fullUrl)
+    }
+  }
+
+  return { res, fullUrl }
+}
+
+function getFilenameFromContentDisposition(contentDisposition: string | null): string | null {
+  if (!contentDisposition) return null
+
+  const utf8Match = contentDisposition.match(/filename\*\s*=\s*UTF-8''([^;]+)/i)
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1].trim())
+    } catch {
+      return utf8Match[1].trim()
+    }
+  }
+
+  const plainMatch = contentDisposition.match(/filename\s*=\s*"?([^\";]+)"?/i)
+  return plainMatch?.[1]?.trim() || null
+}
+
 /**
  * Make API request with automatic token refresh
  * 
@@ -75,95 +223,7 @@ export async function apiRequest<T = any>(
   url: string,
   options: RequestInit = {}
 ): Promise<ApiResult<T>> {
-  const apiBase = getApiBase()
-  const fullUrl = url.startsWith('http') ? url : `${apiBase}${url}`
-
-  // Get access token
-  let accessToken = getAccessToken()
-
-  // Prepare headers
-  const headers: HeadersInit = {
-    'Content-Type': 'application/json',
-    ...options.headers,
-  }
-
-  // Add authorization header if token exists
-  if (accessToken) {
-    headers['Authorization'] = `Bearer ${accessToken}`
-  }
-
-  // Disable Next.js caching for data endpoints (GET requests to /v1/projects/*/stocks, /v1/projects/*/prices, etc.)
-  // This ensures fresh data per project and prevents showing data from wrong project
-  const isDataEndpoint = url.match(/\/v1\/(projects\/\d+\/)?(stocks|prices|dashboard)/)
-  const fetchOptions: RequestInit = {
-    ...options,
-    headers,
-  }
-  
-  // For GET requests to data endpoints, disable caching
-  if (options.method === 'GET' || !options.method) {
-    if (isDataEndpoint) {
-      fetchOptions.cache = 'no-store' as RequestCache
-    }
-  }
-
-  // Make request
-  let res: Response
-  try {
-    res = await fetch(fullUrl, fetchOptions)
-  } catch (fetchError: any) {
-    // Handle network errors (CORS, connection refused, etc.)
-    throw {
-      detail: fetchError?.message || 'Failed to fetch',
-      status: 0,
-      url: fullUrl,
-      bodyPreview: fetchError?.message || 'Network error',
-      isJson: false,
-      parsed: null,
-      debug: {
-        url: fullUrl,
-        status: 0,
-        bodyPreview: fetchError?.message || 'Network error',
-        isJson: false,
-        parsed: null,
-      },
-    } as ApiError
-  }
-
-  // If 401, try to refresh token and retry
-  if (res.status === 401 && accessToken) {
-    const newToken = await refreshAccessToken()
-    if (newToken) {
-      // Retry with new token (preserve cache settings)
-      fetchOptions.headers = {
-        ...fetchOptions.headers,
-        'Authorization': `Bearer ${newToken}`
-      }
-      res = await fetch(fullUrl, fetchOptions)
-    } else {
-      // Refresh failed, clear auth and throw error
-      clearAuth()
-      if (typeof window !== 'undefined') {
-        window.location.href = '/'
-      }
-      const debugObj: ApiDebug = {
-        url: fullUrl,
-        status: 401,
-        bodyPreview: 'Authentication failed',
-        isJson: true,
-        parsed: { detail: 'Authentication failed' },
-      }
-      throw {
-        detail: 'Authentication failed',
-        status: 401,
-        url: fullUrl,
-        bodyPreview: 'Authentication failed',
-        isJson: true,
-        parsed: { detail: 'Authentication failed' },
-        debug: debugObj,
-      } as ApiError
-    }
-  }
+  const { res, fullUrl } = await fetchWithAuth(url, options)
 
   const rawText = await res.text()
   const bodyPreview = rawText.slice(0, 500)
@@ -235,6 +295,56 @@ export async function apiRequest<T = any>(
   } as ApiError
 }
 
+export async function apiDownload(
+  url: string,
+  options: RequestInit = {}
+): Promise<ApiDownloadResult> {
+  const { res, fullUrl } = await fetchWithAuth(url, options)
+
+  if (!res.ok) {
+    const rawText = await res.text()
+    const bodyPreview = rawText.slice(0, 500)
+    const contentType = (res.headers.get('content-type') || '').toLowerCase()
+    const isJson =
+      contentType.includes('application/json') ||
+      rawText.trim().startsWith('{') ||
+      rawText.trim().startsWith('[')
+
+    let parsed: any | null = null
+    if (rawText && isJson) {
+      try {
+        parsed = JSON.parse(rawText)
+      } catch {
+        parsed = null
+      }
+    }
+
+    const debugObj: ApiDebug = {
+      url: fullUrl,
+      status: res.status,
+      bodyPreview,
+      isJson,
+      parsed,
+    }
+
+    throw {
+      detail: parsed?.detail || parsed?.message || `HTTP ${res.status}: ${res.statusText}`,
+      status: res.status,
+      url: fullUrl,
+      bodyPreview,
+      isJson,
+      parsed,
+      debug: debugObj,
+    } as ApiError
+  }
+
+  return {
+    blob: await res.blob(),
+    filename: getFilenameFromContentDisposition(res.headers.get('content-disposition')),
+    contentType: res.headers.get('content-type'),
+  }
+}
+
 /**
  * GET request
  */
@@ -277,136 +387,6 @@ export async function apiPatch<T = any>(url: string, body?: any): Promise<ApiRes
  */
 export async function apiDelete<T = any>(url: string): Promise<ApiResult<T>> {
   return apiRequest<T>(url, { method: 'DELETE' })
-}
-
-function getFilenameFromContentDisposition(contentDisposition: string | null): string | null {
-  if (!contentDisposition) return null
-
-  const utf8Match = contentDisposition.match(/filename\*\s*=\s*UTF-8''([^;]+)/i)
-  if (utf8Match?.[1]) {
-    try {
-      return decodeURIComponent(utf8Match[1].trim())
-    } catch {
-      return utf8Match[1].trim()
-    }
-  }
-
-  const plainMatch = contentDisposition.match(/filename\s*=\s*"?([^\";]+)"?/i)
-  return plainMatch?.[1]?.trim() || null
-}
-
-export async function apiDownload(
-  url: string,
-  options: RequestInit = {}
-): Promise<ApiDownloadResult> {
-  const apiBase = getApiBase()
-  const fullUrl = url.startsWith('http') ? url : `${apiBase}${url}`
-
-  let accessToken = getAccessToken()
-
-  const buildHeaders = () => {
-    const headers = new Headers(options.headers)
-    if (accessToken) {
-      headers.set('Authorization', `Bearer ${accessToken}`)
-    }
-    return headers
-  }
-
-  let res: Response
-  try {
-    res = await fetch(fullUrl, {
-      ...options,
-      headers: buildHeaders(),
-    })
-  } catch (fetchError: any) {
-    throw {
-      detail: fetchError?.message || 'Failed to fetch',
-      status: 0,
-      url: fullUrl,
-      bodyPreview: fetchError?.message || 'Network error',
-      isJson: false,
-      parsed: null,
-      debug: {
-        url: fullUrl,
-        status: 0,
-        bodyPreview: fetchError?.message || 'Network error',
-        isJson: false,
-        parsed: null,
-      },
-    } as ApiError
-  }
-
-  if (res.status === 401 && accessToken) {
-    const newToken = await refreshAccessToken()
-    if (newToken) {
-      accessToken = newToken
-      res = await fetch(fullUrl, {
-        ...options,
-        headers: buildHeaders(),
-      })
-    } else {
-      clearAuth()
-      if (typeof window !== 'undefined') {
-        window.location.href = '/'
-      }
-      throw {
-        detail: 'Authentication failed',
-        status: 401,
-        url: fullUrl,
-        bodyPreview: 'Authentication failed',
-        isJson: true,
-        parsed: { detail: 'Authentication failed' },
-        debug: {
-          url: fullUrl,
-          status: 401,
-          bodyPreview: 'Authentication failed',
-          isJson: true,
-          parsed: { detail: 'Authentication failed' },
-        },
-      } as ApiError
-    }
-  }
-
-  if (!res.ok) {
-    const rawText = await res.text()
-    const bodyPreview = rawText.slice(0, 500)
-    const contentType = (res.headers.get('content-type') || '').toLowerCase()
-    const isJson =
-      contentType.includes('application/json') ||
-      rawText.trim().startsWith('{') ||
-      rawText.trim().startsWith('[')
-
-    let parsed: any | null = null
-    if (rawText && isJson) {
-      try {
-        parsed = JSON.parse(rawText)
-      } catch {
-        parsed = null
-      }
-    }
-
-    throw {
-      detail: parsed?.detail || parsed?.message || `HTTP ${res.status}: ${res.statusText}`,
-      status: res.status,
-      url: fullUrl,
-      bodyPreview,
-      isJson,
-      parsed,
-      debug: {
-        url: fullUrl,
-        status: res.status,
-        bodyPreview,
-        isJson,
-        parsed,
-      },
-    } as ApiError
-  }
-
-  return {
-    blob: await res.blob(),
-    filename: getFilenameFromContentDisposition(res.headers.get('content-disposition')),
-    contentType: res.headers.get('content-type'),
-  }
 }
 
 // Convenience adapters: return only `.data` so most UI code doesn't depend on `{data, debug}`
@@ -476,20 +456,196 @@ export async function getWBIngestStatus(projectId: string): Promise<WBIngestStat
 export async function runWBIngest(
   projectId: string,
   jobCode: string,
-  params?: {
-    date_from?: string
-    date_to?: string
-    mode?: 'daily' | 'backfill'
-    cursor?: { date: string; nm_offset: number }
-    max_seconds?: number
-    max_batches?: number
-    use_fast_path?: boolean
-  }
+  params?: Record<string, any>
 ): Promise<IngestRunResponse> {
   const body = params ? { params_json: params } : undefined
   const res = await apiPost<IngestRunResponse>(
     `/api/v1/projects/${projectId}/ingestions/wb/${jobCode}/run`,
     body
+  )
+  return res.data
+}
+
+// --- WB Search Report (tabular) ---
+export type WBSearchReportSnapshot = {
+  id: number
+  project_id: number
+  period_from: string
+  period_to: string
+  include_search_texts: boolean
+  include_substituted_skus: boolean
+  position_cluster: string
+  order_by: any
+  stats: any
+  ingest_run_id: number | null
+  created_at: string
+  updated_at: string
+}
+
+export type WBSearchReportSnapshotListResponse = {
+  items: WBSearchReportSnapshot[]
+}
+
+export type WBSearchReportSnapshotResponse = {
+  snapshot: WBSearchReportSnapshot
+  raw_main_page: any | null
+  request_params: any
+}
+
+export type WBSearchReportProduct = {
+  nm_id: number
+  vendor_code: string | null
+  name: string | null
+  photos: string[]
+  vendor_code_norm?: string | null
+  brand_name: string | null
+  subject_id: number | null
+  subject_name: string | null
+  tag_id: number | null
+  tag_name: string | null
+  opens?: number | null
+  add_to_cart?: number | null
+  conversion_to_order?: number | null
+  orders_sum?: number | null
+  fbo_stock_qty?: number | null
+  enterprise_stock_qty?: number | null
+  metrics: any
+  raw: any
+  updated_at: string | null
+}
+
+export type WBSearchReportProductsResponse = {
+  items: WBSearchReportProduct[]
+  page: number
+  page_size: number
+  total: number
+  pages: number
+}
+
+export type WBSearchReportSearchTextsResponse = {
+  items: any[]
+}
+
+export type WBSearchReportSubjectItem = {
+  subject_id: number
+  subject_name: string | null
+  products_cnt: number
+}
+
+export type WBSearchReportSubjectsResponse = {
+  items: WBSearchReportSubjectItem[]
+}
+
+export type WBSearchReportKeywordsMultiResponse = {
+  orders: any[]
+  openCard: any[]
+  addToCart: any[]
+  cached: Record<string, boolean>
+  errors: Record<string, any>
+}
+
+export async function getWBSearchReportSnapshots(projectId: string, limit = 50) {
+  const res = await apiGet<WBSearchReportSnapshotListResponse>(
+    `/api/v1/projects/${projectId}/wildberries/search-report/snapshots?limit=${limit}`
+  )
+  return res.data
+}
+
+export async function getWBSearchReportSnapshot(projectId: string, snapshotId: number) {
+  const res = await apiGet<WBSearchReportSnapshotResponse>(
+    `/api/v1/projects/${projectId}/wildberries/search-report/snapshots/${snapshotId}`
+  )
+  return res.data
+}
+
+export async function getWBSearchReportProducts(
+  projectId: string,
+  params: {
+    snapshot_id: number
+    q?: string
+    brand_name?: string
+    subject_id?: number
+    date_from?: string
+    date_to?: string
+    sort?: string
+    order?: 'asc' | 'desc' | string
+    page?: number
+    page_size?: number
+  }
+) {
+  const qs = new URLSearchParams()
+  qs.set('snapshot_id', String(params.snapshot_id))
+  if (params.q) qs.set('q', params.q)
+  if (params.brand_name) qs.set('brand_name', params.brand_name)
+  if (params.subject_id != null) qs.set('subject_id', String(params.subject_id))
+  if (params.date_from) qs.set('date_from', params.date_from)
+  if (params.date_to) qs.set('date_to', params.date_to)
+  if (params.sort) qs.set('sort', params.sort)
+  if (params.order) qs.set('order', params.order)
+  if (params.page) qs.set('page', String(params.page))
+  if (params.page_size) qs.set('page_size', String(params.page_size))
+  const res = await apiGet<WBSearchReportProductsResponse>(
+    `/api/v1/projects/${projectId}/wildberries/search-report/products?${qs.toString()}`
+  )
+  return res.data
+}
+
+export async function getWBSearchReportSubjects(
+  projectId: string,
+  params: {
+    snapshot_id: number
+    q?: string
+    brand_name?: string
+  }
+) {
+  const qs = new URLSearchParams()
+  qs.set('snapshot_id', String(params.snapshot_id))
+  if (params.q) qs.set('q', params.q)
+  if (params.brand_name) qs.set('brand_name', params.brand_name)
+  const res = await apiGet<WBSearchReportSubjectsResponse>(
+    `/api/v1/projects/${projectId}/wildberries/search-report/subjects?${qs.toString()}`
+  )
+  return res.data
+}
+
+export async function getWBSearchReportSearchTexts(
+  projectId: string,
+  params: {
+    snapshot_id: number
+    nm_id: number
+    limit?: number
+  }
+) {
+  const qs = new URLSearchParams()
+  qs.set('snapshot_id', String(params.snapshot_id))
+  qs.set('nm_id', String(params.nm_id))
+  if (params.limit) qs.set('limit', String(params.limit))
+  const res = await apiGet<WBSearchReportSearchTextsResponse>(
+    `/api/v1/projects/${projectId}/wildberries/search-report/search-texts?${qs.toString()}`
+  )
+  return res.data
+}
+
+export async function getWBSearchReportKeywordsMulti(
+  projectId: string,
+  params: {
+    snapshot_id: number
+    nm_id: number
+    date_from?: string
+    date_to?: string
+    limit?: number
+    cache_ttl_hours?: number
+  }
+) {
+  const qs = new URLSearchParams()
+  qs.set('snapshot_id', String(params.snapshot_id))
+  qs.set('nm_id', String(params.nm_id))
+  if (params.date_from) qs.set('date_from', params.date_from)
+  if (params.date_to) qs.set('date_to', params.date_to)
+  if (params.limit) qs.set('limit', String(params.limit))
+  if (params.cache_ttl_hours != null) qs.set('cache_ttl_hours', String(params.cache_ttl_hours))
+  const res = await apiGet<WBSearchReportKeywordsMultiResponse>(
+    `/api/v1/projects/${projectId}/wildberries/search-report/keywords?${qs.toString()}`
   )
   return res.data
 }
@@ -1098,7 +1254,119 @@ export async function getFunnelSignalsCategoriesStats(
   return res.data
 }
 
-// Hypotheses MVP
+// --- Hypothesis Lab v5.1 MVP ---
+export interface HypothesisLabRunSummary {
+  id: number
+  experiment_id: number
+  status: string
+  effective_start_ts: string | null
+  baseline_start_date: string | null
+  baseline_end_date: string | null
+  test_start_date: string | null
+  test_end_date: string | null
+  control_mode: string
+  analysis_population: string
+  computed_at: string | null
+  created_at: string
+  experiment_name: string
+  project_id: number
+  marketplace: string
+}
+
+export interface HypothesisLabRunDetail extends HypothesisLabRunSummary {
+  washout_start_date?: string | null
+  washout_end_date?: string | null
+  pretrend_window_days?: number | null
+  pretrend_status?: string | null
+  scope_nm_ids: number[]
+  actions: Record<string, unknown>[]
+  control_items: Record<string, unknown>[]
+  context_events: Record<string, unknown>[]
+  latest_result: Record<string, unknown> | null
+  metric_aggregates: Record<string, unknown> | null
+  health_reasons?: Record<string, unknown> | null
+  warnings_text_array?: string[] | null
+  limitations_flags_jsonb?: Record<string, unknown> | null
+}
+
+export interface HypothesisLabResultItem {
+  run_id: number
+  result_version: number
+  computed_at: string
+  primary_metric_key: string | null
+  decision: string | null
+  did_effect_pct: number | null
+  did_ci_lower: number | null
+  did_ci_upper: number | null
+  health_grade: string | null
+  health_reasons_jsonb: Record<string, unknown> | null
+  limitations_flags_jsonb: Record<string, unknown> | null
+  warnings_text_array: string[] | null
+  experiment_id: number
+  experiment_name: string
+}
+
+export async function getHypothesisLabRuns(
+  projectId: string,
+  params?: { marketplace?: string; status?: string }
+): Promise<HypothesisLabRunSummary[]> {
+  const qs = new URLSearchParams()
+  if (params?.marketplace) qs.set('marketplace', params.marketplace)
+  if (params?.status) qs.set('status', params.status)
+  const suffix = qs.toString() ? `?${qs.toString()}` : ''
+  const res = await apiGet<HypothesisLabRunSummary[]>(
+    `/api/v1/projects/${projectId}/hypothesis-lab/runs${suffix}`
+  )
+  return res.data
+}
+
+export async function getHypothesisLabRunDetail(
+  projectId: string,
+  runId: number
+): Promise<HypothesisLabRunDetail> {
+  const res = await apiGet<HypothesisLabRunDetail>(
+    `/api/v1/projects/${projectId}/hypothesis-lab/runs/${runId}`
+  )
+  return res.data
+}
+
+export async function getHypothesisLabResults(
+  projectId: string,
+  params?: { marketplace?: string; limit?: number }
+): Promise<HypothesisLabResultItem[]> {
+  const qs = new URLSearchParams()
+  if (params?.marketplace) qs.set('marketplace', params.marketplace)
+  if (params?.limit != null) qs.set('limit', String(params.limit))
+  const suffix = qs.toString() ? `?${qs.toString()}` : ''
+  const res = await apiGet<HypothesisLabResultItem[]>(
+    `/api/v1/projects/${projectId}/hypothesis-lab/results${suffix}`
+  )
+  return res.data
+}
+
+export async function postHypothesisLabStartRun(
+  projectId: string,
+  experimentId: number
+): Promise<Record<string, unknown>> {
+  const res = await apiPost<Record<string, unknown>>(
+    `/api/v1/projects/${projectId}/hypothesis-lab/experiments/${experimentId}/runs/start`
+  )
+  return res.data
+}
+
+export async function postHypothesisLabRecompute(
+  projectId: string,
+  runId: number,
+  body: { reason?: string }
+): Promise<Record<string, unknown>> {
+  const res = await apiPost<Record<string, unknown>>(
+    `/api/v1/projects/${projectId}/hypothesis-lab/runs/${runId}/recompute`,
+    body
+  )
+  return res.data
+}
+
+// --- Hypothesis Lab MVP (experiments: 1 test SKU, lifecycle draft→running→completed) ---
 export interface HypothesisLatestVersion {
   id: number
   version: number
@@ -1118,11 +1386,42 @@ export interface HypothesisMvpItem {
   latest_version?: HypothesisLatestVersion | null
 }
 
-export async function getHypothesesMvp(params?: {
-  query?: string
-  limit?: number
-  status?: string
-}): Promise<HypothesisMvpItem[]> {
+export interface HypothesisExperimentListItem {
+  id: number
+  project_id: number
+  hypothesis_id: number
+  nm_id: number
+  change_type: string
+  change_note: string
+  metric: string
+  control_mode: string
+  controls_count: number | null
+  status: string
+  period_start: string | null
+  period_end: string | null
+  created_at: string | null
+  updated_at: string | null
+  hypothesis_title: string | null
+  product_title: string | null
+}
+
+export interface HypothesisExperimentDetail extends HypothesisExperimentListItem {
+  runs: { id: number; experiment_id: number; started_at: string | null; change_confirmed_at: string | null; ended_at: string | null; status: string }[]
+  latest_result: {
+    id: number
+    run_id: number
+    control_mode: string
+    did_effect: number | null
+    p_value: number | null
+    ci_low: number | null
+    ci_high: number | null
+    pretrend_pass: boolean | null
+    before_after_delta: number | null
+    computed_at: string | null
+  } | null
+}
+
+export async function getHypothesesMvp(params?: { query?: string; limit?: number; status?: string }): Promise<HypothesisMvpItem[]> {
   const qs = new URLSearchParams()
   if (params?.query) qs.set('query', params.query)
   if (params?.limit != null) qs.set('limit', String(params.limit))
@@ -1145,62 +1444,14 @@ export async function createHypothesis(body: {
   return res.data
 }
 
-export interface HypothesisExperimentListItem {
-  id: number
-  project_id: number
-  hypothesis_id: number
-  nm_id: number
-  change_type: string
-  change_note: string
-  metric: string
-  control_mode: string
-  controls_count: number | null
-  status: string
-  period_start: string | null
-  period_end: string | null
-  created_at: string | null
-  updated_at: string | null
-  hypothesis_title: string | null
-  product_title: string | null
-}
-
-export interface HypothesisExperimentRun {
-  id: number
-  experiment_id: number
-  started_at: string | null
-  change_confirmed_at: string | null
-  ended_at: string | null
-  status: string
-}
-
-export interface HypothesisExperimentResult {
-  id: number
-  run_id: number
-  control_mode: string
-  did_effect: number | null
-  p_value: number | null
-  ci_low: number | null
-  ci_high: number | null
-  pretrend_pass: boolean | null
-  before_after_delta: number | null
-  computed_at: string | null
-}
-
-export interface HypothesisExperimentDetail extends HypothesisExperimentListItem {
-  runs: HypothesisExperimentRun[]
-  latest_result: HypothesisExperimentResult | null
+export async function getHypothesisMvpDetail(hypothesisId: number): Promise<HypothesisMvpItem> {
+  const res = await apiGet<HypothesisMvpItem>(`/api/v1/hypotheses/${hypothesisId}`)
+  return res.data
 }
 
 export async function getHypothesisExperiments(
   projectId: string,
-  params?: {
-    status?: string
-    metric?: string
-    hypothesis_id?: number
-    nm_id?: number
-    query?: string
-    limit?: number
-  }
+  params?: { status?: string; metric?: string; hypothesis_id?: number; nm_id?: number; query?: string; limit?: number }
 ): Promise<HypothesisExperimentListItem[]> {
   const qs = new URLSearchParams()
   if (params?.status) qs.set('status', params.status)
@@ -1210,65 +1461,34 @@ export async function getHypothesisExperiments(
   if (params?.query) qs.set('query', params.query)
   if (params?.limit != null) qs.set('limit', String(params.limit))
   const suffix = qs.toString() ? `?${qs.toString()}` : ''
-  const res = await apiGet<HypothesisExperimentListItem[]>(
-    `/api/v1/projects/${projectId}/hypothesis/experiments${suffix}`
-  )
+  const res = await apiGet<HypothesisExperimentListItem[]>(`/api/v1/projects/${projectId}/hypothesis/experiments${suffix}`)
   return res.data
 }
 
 export async function createHypothesisExperiment(
   projectId: string,
-  body: {
-    hypothesis_id: number
-    nm_id: number
-    change_type: string
-    change_note: string
-    metric: string
-  }
+  body: { hypothesis_id: number; nm_id: number; change_type: string; change_note: string; metric: string }
 ): Promise<HypothesisExperimentListItem> {
-  const res = await apiPost<HypothesisExperimentListItem>(
-    `/api/v1/projects/${projectId}/hypothesis/experiments`,
-    body
-  )
+  const res = await apiPost<HypothesisExperimentListItem>(`/api/v1/projects/${projectId}/hypothesis/experiments`, body)
   return res.data
 }
 
-export async function getHypothesisExperimentDetail(
-  projectId: string,
-  experimentId: number
-): Promise<HypothesisExperimentDetail> {
-  const res = await apiGet<HypothesisExperimentDetail>(
-    `/api/v1/projects/${projectId}/hypothesis/experiments/${experimentId}`
-  )
+export async function getHypothesisExperimentDetail(projectId: string, experimentId: number): Promise<HypothesisExperimentDetail> {
+  const res = await apiGet<HypothesisExperimentDetail>(`/api/v1/projects/${projectId}/hypothesis/experiments/${experimentId}`)
   return res.data
 }
 
-export async function startHypothesisExperiment(
-  projectId: string,
-  experimentId: number
-): Promise<HypothesisExperimentListItem> {
-  const res = await apiPost<HypothesisExperimentListItem>(
-    `/api/v1/projects/${projectId}/hypothesis/experiments/${experimentId}/start`
-  )
+export async function startHypothesisExperiment(projectId: string, experimentId: number): Promise<HypothesisExperimentListItem> {
+  const res = await apiPost<HypothesisExperimentListItem>(`/api/v1/projects/${projectId}/hypothesis/experiments/${experimentId}/start`)
   return res.data
 }
 
-export async function confirmHypothesisRun(
-  projectId: string,
-  runId: number
-): Promise<{ run_id: number; change_confirmed_at: string }> {
-  const res = await apiPost<{ run_id: number; change_confirmed_at: string }>(
-    `/api/v1/projects/${projectId}/hypothesis/runs/${runId}/confirm`
-  )
+export async function confirmHypothesisRun(projectId: string, runId: number): Promise<{ run_id: number }> {
+  const res = await apiPost<{ run_id: number }>(`/api/v1/projects/${projectId}/hypothesis/runs/${runId}/confirm`)
   return res.data
 }
 
-export async function stopHypothesisExperiment(
-  projectId: string,
-  experimentId: number
-): Promise<HypothesisExperimentListItem> {
-  const res = await apiPost<HypothesisExperimentListItem>(
-    `/api/v1/projects/${projectId}/hypothesis/experiments/${experimentId}/stop`
-  )
+export async function stopHypothesisExperiment(projectId: string, experimentId: number): Promise<HypothesisExperimentListItem> {
+  const res = await apiPost<HypothesisExperimentListItem>(`/api/v1/projects/${projectId}/hypothesis/experiments/${experimentId}/stop`)
   return res.data
 }

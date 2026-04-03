@@ -372,7 +372,8 @@ class WBAnalyticsClient:
         date_from: str,
         date_to: str,
         limit: int = 1000,
-        top_order_by: Optional[Dict[str, str]] = None,
+        top_order_by: Optional[Any] = None,
+        order_by: Optional[Dict[str, str]] = None,
     ) -> List[Dict[str, Any]]:
         """POST /api/v2/search-report/product/search-texts.
 
@@ -381,13 +382,54 @@ class WBAnalyticsClient:
         if (self.token or "").upper() == "MOCK":
             return []
 
+        # As of 2026-04, WB requires: currentPeriod, nmIds, topOrderBy (enum), orderBy (object), limit.
+        top_field = None
+        if isinstance(top_order_by, str):
+            top_field = top_order_by
+        elif isinstance(top_order_by, dict):
+            top_field = top_order_by.get("field") or top_order_by.get("topOrderBy")
+        if not top_field:
+            top_field = "orders"
+
+        # WB appears to be sensitive to mismatch between topOrderBy and orderBy.
+        # Keep orderBy aligned with topOrderBy by default.
+        if not order_by:
+            order_by = {"field": str(top_field), "mode": "desc"}
+
+        # Clamp: standard tariff max 30, advanced max 100.
+        if limit > 100:
+            limit = 100
+        if limit < 1:
+            limit = 1
+
+        # Past period: same length immediately preceding current (common pattern across WB search-report APIs).
+        try:
+            from datetime import date as _date, timedelta as _td
+
+            df = _date.fromisoformat(str(date_from)[:10])
+            dt = _date.fromisoformat(str(date_to)[:10])
+            if df > dt:
+                df, dt = dt, df
+            days = (dt - df).days + 1
+            past_to = df - _td(days=1)
+            past_from = past_to - _td(days=days - 1)
+            past_period = {"start": past_from.isoformat(), "end": past_to.isoformat()}
+            current_period = {"start": df.isoformat(), "end": dt.isoformat()}
+        except Exception:
+            past_period = None
+            current_period = {"start": date_from, "end": date_to}
+
         body: Dict[str, Any] = {
-            "nmId": nm_id,
-            "currentPeriod": {"start": date_from, "end": date_to},
-            "limit": limit,
+            "currentPeriod": current_period,
+            "nmIds": [int(nm_id)],
+            "topOrderBy": str(top_field),
+            "includeSubstitutedSKUs": True,
+            "includeSearchTexts": True,
+            "orderBy": order_by,
+            "limit": int(limit),
         }
-        if top_order_by:
-            body["topOrderBy"] = top_order_by
+        if past_period is not None:
+            body["pastPeriod"] = past_period
         async with httpx.AsyncClient() as client:
             r = await self._request(
                 client,
@@ -396,11 +438,31 @@ class WBAnalyticsClient:
                 json_body=body,
             )
         if r.status_code != 200:
-            return []
+            detail = ""
+            try:
+                j = r.json()
+                if isinstance(j, dict):
+                    detail = str(j.get("message") or j.get("error") or j.get("detail") or j)
+                else:
+                    detail = str(j)
+            except Exception:
+                detail = r.text or ""
+            raise WBAnalyticsBadRequestError(
+                r.status_code,
+                detail[:2000],
+                request_summary={"path": "/api/v2/search-report/product/search-texts", "body": body},
+            )
         try:
             data = r.json()
             if isinstance(data, dict) and "data" in data:
-                items = data.get("data") or data.get("searchTexts")
+                payload = data.get("data")
+                if isinstance(payload, dict):
+                    items = payload.get("items") or payload.get("searchTexts")
+                    return items if isinstance(items, list) else []
+                # unexpected shape (but keep backward compat)
+                if isinstance(payload, list):
+                    return payload
+                items = data.get("searchTexts")
                 return items if isinstance(items, list) else []
             return data if isinstance(data, list) else []
         except Exception:
@@ -442,3 +504,222 @@ class WBAnalyticsClient:
             return data if isinstance(data, list) else []
         except Exception:
             return []
+
+    async def search_report_main_page(
+        self,
+        *,
+        current_period: Dict[str, str],
+        past_period: Optional[Dict[str, str]],
+        order_by: Dict[str, str],
+        position_cluster: str = "all",
+        include_substituted_skus: bool = True,
+        include_search_texts: bool = True,
+        limit: int = 1000,
+        offset: int = 0,
+        subject_ids: Optional[List[int]] = None,
+        brand_names: Optional[List[str]] = None,
+        tag_ids: Optional[List[int]] = None,
+        nm_ids: Optional[List[int]] = None,
+    ) -> Dict[str, Any]:
+        """POST /api/v2/search-report/report (Main Page).
+
+        Forms dataset for the main report page: summary + charts + group table.
+        """
+        if (self.token or "").upper() == "MOCK":
+            return {}
+        if not include_substituted_skus and not include_search_texts:
+            raise ValueError("includeSubstitutedSKUs and includeSearchTexts cannot both be false")
+
+        body: Dict[str, Any] = {
+            "currentPeriod": current_period,
+            "orderBy": order_by,
+            "positionCluster": position_cluster,
+            "includeSubstitutedSKUs": bool(include_substituted_skus),
+            "includeSearchTexts": bool(include_search_texts),
+            "limit": int(limit),
+            "offset": int(offset),
+        }
+        if past_period:
+            body["pastPeriod"] = past_period
+        if subject_ids is not None:
+            body["subjectIds"] = subject_ids
+        if brand_names is not None:
+            body["brandNames"] = brand_names
+        if tag_ids is not None:
+            body["tagIds"] = tag_ids
+        if nm_ids is not None:
+            body["nmIds"] = nm_ids
+
+        async with httpx.AsyncClient() as client:
+            r = await self._request(
+                client,
+                "POST",
+                "/api/v2/search-report/report",
+                json_body=body,
+            )
+        if r.status_code != 200:
+            detail = ""
+            try:
+                j = r.json()
+                if isinstance(j, dict):
+                    detail = str(j.get("message") or j.get("error") or j.get("detail") or j)
+                else:
+                    detail = str(j)
+            except Exception:
+                detail = r.text or ""
+            raise WBAnalyticsBadRequestError(
+                r.status_code,
+                detail[:2000],
+                request_summary={"path": "/api/v2/search-report/report", "body": body},
+            )
+        try:
+            data = r.json()
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    async def search_report_table_groups(
+        self,
+        *,
+        current_period: Dict[str, str],
+        past_period: Optional[Dict[str, str]],
+        order_by: Dict[str, str],
+        position_cluster: str = "all",
+        include_substituted_skus: bool = True,
+        include_search_texts: bool = True,
+        limit: int = 1000,
+        offset: int = 0,
+        subject_ids: Optional[List[int]] = None,
+        brand_names: Optional[List[str]] = None,
+        tag_ids: Optional[List[int]] = None,
+        nm_ids: Optional[List[int]] = None,
+    ) -> Dict[str, Any]:
+        """POST /api/v2/search-report/table/groups.
+
+        Pagination by groups in the report (requires at least one of subjectIds/brandNames/tagIds).
+        """
+        if (self.token or "").upper() == "MOCK":
+            return {}
+        if not include_substituted_skus and not include_search_texts:
+            raise ValueError("includeSubstitutedSKUs and includeSearchTexts cannot both be false")
+
+        body: Dict[str, Any] = {
+            "currentPeriod": current_period,
+            "orderBy": order_by,
+            "positionCluster": position_cluster,
+            "includeSubstitutedSKUs": bool(include_substituted_skus),
+            "includeSearchTexts": bool(include_search_texts),
+            "limit": int(limit),
+            "offset": int(offset),
+        }
+        if past_period:
+            body["pastPeriod"] = past_period
+        if subject_ids is not None:
+            body["subjectIds"] = subject_ids
+        if brand_names is not None:
+            body["brandNames"] = brand_names
+        if tag_ids is not None:
+            body["tagIds"] = tag_ids
+        if nm_ids is not None:
+            body["nmIds"] = nm_ids
+
+        async with httpx.AsyncClient() as client:
+            r = await self._request(
+                client,
+                "POST",
+                "/api/v2/search-report/table/groups",
+                json_body=body,
+            )
+        if r.status_code != 200:
+            detail = ""
+            try:
+                j = r.json()
+                if isinstance(j, dict):
+                    detail = str(j.get("message") or j.get("error") or j.get("detail") or j)
+                else:
+                    detail = str(j)
+            except Exception:
+                detail = r.text or ""
+            raise WBAnalyticsBadRequestError(
+                r.status_code,
+                detail[:2000],
+                request_summary={"path": "/api/v2/search-report/table/groups", "body": body},
+            )
+        try:
+            data = r.json()
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    async def search_report_table_details(
+        self,
+        *,
+        current_period: Dict[str, str],
+        past_period: Optional[Dict[str, str]],
+        order_by: Dict[str, str],
+        position_cluster: str = "all",
+        include_substituted_skus: bool = True,
+        include_search_texts: bool = True,
+        limit: int = 1000,
+        offset: int = 0,
+        subject_id: Optional[int] = None,
+        brand_name: Optional[str] = None,
+        tag_id: Optional[int] = None,
+        nm_ids: Optional[List[int]] = None,
+    ) -> Dict[str, Any]:
+        """POST /api/v2/search-report/table/details.
+
+        Pagination by products (with optional group filters or nmIds<=50).
+        """
+        if (self.token or "").upper() == "MOCK":
+            return {}
+        if not include_substituted_skus and not include_search_texts:
+            raise ValueError("includeSubstitutedSKUs and includeSearchTexts cannot both be false")
+
+        body: Dict[str, Any] = {
+            "currentPeriod": current_period,
+            "orderBy": order_by,
+            "positionCluster": position_cluster,
+            "includeSubstitutedSKUs": bool(include_substituted_skus),
+            "includeSearchTexts": bool(include_search_texts),
+            "limit": int(limit),
+            "offset": int(offset),
+        }
+        if past_period:
+            body["pastPeriod"] = past_period
+        if subject_id is not None:
+            body["subjectId"] = int(subject_id)
+        if brand_name is not None:
+            body["brandName"] = str(brand_name)
+        if tag_id is not None:
+            body["tagId"] = int(tag_id)
+        if nm_ids is not None:
+            body["nmIds"] = nm_ids
+
+        async with httpx.AsyncClient() as client:
+            r = await self._request(
+                client,
+                "POST",
+                "/api/v2/search-report/table/details",
+                json_body=body,
+            )
+        if r.status_code != 200:
+            detail = ""
+            try:
+                j = r.json()
+                if isinstance(j, dict):
+                    detail = str(j.get("message") or j.get("error") or j.get("detail") or j)
+                else:
+                    detail = str(j)
+            except Exception:
+                detail = r.text or ""
+            raise WBAnalyticsBadRequestError(
+                r.status_code,
+                detail[:2000],
+                request_summary={"path": "/api/v2/search-report/table/details", "body": body},
+            )
+        try:
+            data = r.json()
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
