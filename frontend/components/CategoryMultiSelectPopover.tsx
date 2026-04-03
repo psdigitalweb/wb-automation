@@ -11,12 +11,14 @@ interface CategoryMultiSelectPopoverProps {
   categories: CategoryOption[]
   selectedIds: number[]
   onChange: (ids: number[]) => void
+  fullWidth?: boolean
 }
 
 export default function CategoryMultiSelectPopover({
   categories,
   selectedIds,
   onChange,
+  fullWidth = false,
 }: CategoryMultiSelectPopoverProps) {
   const [open, setOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
@@ -79,12 +81,14 @@ export default function CategoryMultiSelectPopover({
     selectedCount === 0 ? 'Категории: Все' : `Категории: ${selectedCount} выбрано`
 
   return (
-    <div style={{ position: 'relative', display: 'inline-block' }}>
+    <div style={{ position: 'relative', display: fullWidth ? 'block' : 'inline-block', width: fullWidth ? '100%' : 'auto' }}>
       <button
         ref={buttonRef}
         type="button"
         onClick={() => setOpen(!open)}
         style={{
+          width: fullWidth ? '100%' : 'auto',
+          minHeight: 40,
           padding: '6px 12px',
           border: '1px solid #d1d5db',
           borderRadius: 6,
@@ -94,6 +98,7 @@ export default function CategoryMultiSelectPopover({
           cursor: 'pointer',
           fontWeight: selectedCount > 0 ? 500 : 400,
           transition: 'all 0.2s',
+          textAlign: 'left',
         }}
         onMouseEnter={(e) => {
           e.currentTarget.style.borderColor = '#9ca3af'
@@ -120,7 +125,8 @@ export default function CategoryMultiSelectPopover({
             border: '1px solid #d1d5db',
             borderRadius: 8,
             boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
-            minWidth: 280,
+            width: fullWidth ? '100%' : 'auto',
+            minWidth: fullWidth ? '100%' : 280,
             maxWidth: 400,
             overflow: 'hidden',
           }}
