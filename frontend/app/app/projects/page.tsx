@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { apiGetData, apiPostData } from '../../../lib/apiClient'
 
 interface Project {
@@ -51,7 +52,7 @@ export default function ProjectsPage() {
       setLoading(false)
     } catch (error: any) {
       // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/66ddcc6b-d2d0-4156-a371-04fea067f11b',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'projects/page.tsx:loadProjects:catch',message:'loadProjects error',data:{detail:(error as any)?.detail,status:(error as any)?.status,url:(error as any)?.url,parsed:(error as any)?.parsed,bodyPreview:(error as any)?.debug?.bodyPreview},timestamp:Date.now(),runId:'run1',hypothesisId:'H2'})}).catch(()=>{})
+      fetch('http://127.0.0.1:7242/ingest/66ddcc6b-d2d0-4156-a371-04fea067f11b',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'projects/page.tsx:loadProjects:catch',message:'loadProjects error',data:{detail:(error as any)?.detail,status:(error as any)?.status,url:(error as any)?.url,parsed:(error as any)?.parsed,bodyPreview:(error as any)?.debug?.bodyPreview,fullDetail:(error as any)?.detail,traceback:(error as any)?.parsed?.traceback,exc_type:(error as any)?.parsed?.exc_type},timestamp:Date.now(),runId:'run1',hypothesisId:'H2'})}).catch(()=>{})
       // #endregion
       console.error('Failed to load projects:', error)
       setLoading(false)
@@ -153,14 +154,141 @@ export default function ProjectsPage() {
         </div>
       )}
 
-      {/* Projects List */}
-      <div className="card">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-          <h2 style={{ marginBottom: '0' }}>Мои проекты</h2>
-          {!isCreateFormOpen && (
-            <button onClick={() => setIsCreateFormOpen(true)}>+ Новый проект</button>
-          )}
+      <details
+        style={{
+          marginBottom: '28px',
+          borderRadius: '16px',
+          border: '1px solid #e5e7eb',
+          background: '#ffffff',
+          boxShadow: '0 8px 24px rgba(15, 23, 42, 0.04)',
+          overflow: 'hidden',
+        }}
+      >
+        <summary
+          style={{
+            listStyle: 'none',
+            cursor: 'pointer',
+            padding: '16px 20px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '16px',
+            userSelect: 'none',
+          }}
+        >
+          <span
+            style={{
+              fontSize: '12px',
+              fontWeight: 700,
+              letterSpacing: '0.08em',
+              textTransform: 'uppercase',
+              color: '#6b7280',
+            }}
+          >
+            Инструменты платформы
+          </span>
+          <span
+            style={{
+              fontSize: '13px',
+              fontWeight: 600,
+              color: '#2563eb',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            Показать
+          </span>
+        </summary>
+        <div style={{ padding: '0 20px 20px' }}>
+          <Link
+            href="/app/hypotheses"
+            title="Лаборатория гипотез"
+            style={{
+              display: 'block',
+              textDecoration: 'none',
+              color: 'inherit',
+            }}
+          >
+            <div
+              className="card"
+              style={{
+                marginBottom: 0,
+                padding: '18px 20px',
+                border: '1px solid #e5e7eb',
+                borderRadius: '16px',
+                boxShadow: '0 10px 30px rgba(15, 23, 42, 0.06)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '16px',
+                transition: 'border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.borderColor = '#bfdbfe'
+                e.currentTarget.style.boxShadow = '0 14px 34px rgba(37, 99, 235, 0.12)'
+                e.currentTarget.style.transform = 'translateY(-1px)'
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = '#e5e7eb'
+                e.currentTarget.style.boxShadow = '0 10px 30px rgba(15, 23, 42, 0.06)'
+                e.currentTarget.style.transform = 'translateY(0)'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '16px', minWidth: 0 }}>
+                <div
+                  style={{
+                    width: '4px',
+                    alignSelf: 'stretch',
+                    minHeight: '44px',
+                    borderRadius: '999px',
+                    background: 'linear-gradient(180deg, #2563eb 0%, #0ea5e9 100%)',
+                    flexShrink: 0,
+                  }}
+                />
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: '20px', fontWeight: 600, color: '#111827' }}>
+                    Лаборатория гипотез
+                  </div>
+                  <div
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      marginTop: '8px',
+                      padding: '5px 10px',
+                      borderRadius: '999px',
+                      backgroundColor: '#eff6ff',
+                      color: '#1d4ed8',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                    }}
+                  >
+                    Общий модуль
+                  </div>
+                </div>
+              </div>
+              <div
+                style={{
+                  flexShrink: 0,
+                  fontSize: '14px',
+                  fontWeight: 600,
+                  color: '#2563eb',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                Открыть →
+              </div>
+            </div>
+          </Link>
         </div>
+      </details>
+
+      <h1 style={{ marginBottom: '20px' }}>Мои проекты</h1>
+
+      <div className="card">
+        {!isCreateFormOpen && (
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '20px' }}>
+            <button onClick={() => setIsCreateFormOpen(true)}>+ Новый проект</button>
+          </div>
+        )}
 
         {loading ? (
           <p>Загрузка...</p>
@@ -207,4 +335,3 @@ export default function ProjectsPage() {
     </div>
   )
 }
-
