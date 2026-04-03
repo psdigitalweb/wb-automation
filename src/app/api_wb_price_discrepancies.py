@@ -1421,8 +1421,7 @@ async def diagnose_price_discrepancies(
 @router.get("/{project_id}/wildberries/categories")
 async def get_wb_categories(
     project_id: int = Path(..., description="Project ID"),
-    current_user: dict = Depends(get_current_active_user),
-    membership: dict = Depends(get_project_membership),
+    _auth: dict = Depends(allow_client_portal_read),
 ):
     """Return list of WB categories for a project.
 
