@@ -77,3 +77,51 @@ def test_reviews_backfill_missing_date_range():
         ))
     assert result.get("ok") is False
     assert result.get("reason") == "missing_date_range"
+
+
+def test_reviews_full_sync_early_exit_no_project_nm_ids():
+    """With mode=reviews_full_sync and no project nm_ids, ingest skips with reason no_project_nm_ids."""
+    with patch("app.utils.get_project_marketplace_token.get_wb_token_for_project", return_value="token"):
+        with patch("app.ingest_wb_communications.get_wb_nm_ids_for_project", return_value=[]):
+            result = asyncio.run(ingest_wb_communications(
+                project_id=1,
+                run_id=1,
+                params={"mode": "reviews_full_sync"},
+            ))
+    assert result.get("ok") is True
+    assert result.get("skipped") is True
+    assert result.get("reason") == "no_project_nm_ids"
+
+
+def test_reviews_full_sync_progress_saved_after_nm_batch():
+    """Full sync saves progress and pauses when per-run nm batch limit is reached."""
+    class StubClient:
+        async def list_feedbacks(self, **kwargs):
+            return {"data": {"feedbacks": []}}
+
+        async def list_feedbacks_archive(self, **kwargs):
+            return {"data": {"feedbacks": []}}
+
+    paused_calls = []
+
+    def _paused(*args, **kwargs):
+        paused_calls.append({"args": args, "kwargs": kwargs})
+
+    with patch("app.utils.get_project_marketplace_token.get_wb_token_for_project", return_value="token"):
+        with patch("app.ingest_wb_communications.get_wb_nm_ids_for_project", return_value=[101, 202]):
+            with patch("app.ingest_wb_communications.get_backfill_state", return_value=None):
+                with patch("app.ingest_wb_communications.ensure_backfill_state_created"):
+                        with patch("app.ingest_wb_communications.upsert_backfill_state_running"):
+                            with patch("app.ingest_wb_communications.mark_backfill_state_paused", side_effect=_paused):
+                                with patch("app.ingest_wb_communications.mark_backfill_state_completed"):
+                                    with patch("app.ingest_wb_communications._get_use_sandbox", return_value=False):
+                                        with patch("app.ingest_wb_communications.WBCommunicationsClient", return_value=StubClient()):
+                                            result = asyncio.run(ingest_wb_communications(
+                                                project_id=1,
+                                                run_id=1,
+                                                params={"mode": "reviews_full_sync", "max_nm_ids_per_run": 1, "max_seconds": 999},
+                                            ))
+    assert result.get("ok") is False
+    assert result.get("reason") == "progress_saved"
+    assert result.get("cursor") == {"nm_offset": 1, "source_idx": 0, "skip": 0}
+    assert len(paused_calls) == 1

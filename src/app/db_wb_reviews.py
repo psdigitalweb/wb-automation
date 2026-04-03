@@ -1,4 +1,4 @@
-"""DAO for WB reviews/feedback summary (read-only)."""
+"""DAO for WB reviews/feedback summary and detail feed (read-only)."""
 
 from __future__ import annotations
 
@@ -9,6 +9,57 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import text
 
 from app.db import engine
+
+
+def _clean_optional_text(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    text_value = str(value).strip()
+    return text_value or None
+
+
+def _photo_urls_from_raw(raw: Any) -> List[str]:
+    if raw is None:
+        return []
+    try:
+        if isinstance(raw, str):
+            raw = json.loads(raw)
+        photo_links = raw.get("photoLinks") if isinstance(raw, dict) else None
+        if not isinstance(photo_links, list):
+            return []
+        urls: List[str] = []
+        for item in photo_links:
+            if isinstance(item, str):
+                candidate = item.strip()
+            elif isinstance(item, dict):
+                candidate = (
+                    item.get("fullSize")
+                    or item.get("big")
+                    or item.get("miniSize")
+                    or item.get("url")
+                )
+                candidate = str(candidate).strip() if candidate is not None else ""
+            else:
+                candidate = ""
+            if candidate and candidate not in urls:
+                urls.append(candidate)
+        return urls
+    except Exception:
+        return []
+
+
+def _answer_text_from_raw(raw: Any) -> Optional[str]:
+    if raw is None:
+        return None
+    try:
+        if isinstance(raw, str):
+            raw = json.loads(raw)
+        answer = raw.get("answer") if isinstance(raw, dict) else None
+        if isinstance(answer, dict):
+            return _clean_optional_text(answer.get("text"))
+        return _clean_optional_text(answer)
+    except Exception:
+        return None
 
 
 def get_reviews_summary(
@@ -104,3 +155,112 @@ def get_reviews_summary(
         }
         for r in rows
     ]
+
+
+def list_reviews_by_nm_id(
+    project_id: int,
+    nm_id: int,
+    period_from: Optional[date] = None,
+    period_to: Optional[date] = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> Dict[str, Any]:
+    """Detailed reviews feed for one nm_id with pagination."""
+
+    params: Dict[str, Any] = {
+        "project_id": project_id,
+        "nm_id": nm_id,
+        "period_from": period_from,
+        "period_to": period_to,
+        "has_period": period_from is not None and period_to is not None,
+        "limit": limit,
+        "offset": offset,
+    }
+
+    count_sql = text("""
+        SELECT COUNT(*)::int
+        FROM wb_feedback_snapshots fs
+        WHERE fs.project_id = :project_id
+          AND fs.nm_id = :nm_id
+          AND (
+              NOT :has_period
+              OR (
+                  fs.created_date IS NOT NULL
+                  AND fs.created_date::date >= :period_from
+                  AND fs.created_date::date <= :period_to
+              )
+          )
+    """)
+
+    list_sql = text("""
+        SELECT
+            fs.external_id,
+            fs.nm_id,
+            fs.created_date,
+            fs.product_valuation,
+            fs.is_answered,
+            fs.has_media,
+            fs.is_archived,
+            fs.source_endpoint,
+            fs.raw
+        FROM wb_feedback_snapshots fs
+        WHERE fs.project_id = :project_id
+          AND fs.nm_id = :nm_id
+          AND (
+              NOT :has_period
+              OR (
+                  fs.created_date IS NOT NULL
+                  AND fs.created_date::date >= :period_from
+                  AND fs.created_date::date <= :period_to
+              )
+          )
+        ORDER BY fs.created_date DESC NULLS LAST, fs.id DESC
+        LIMIT :limit
+        OFFSET :offset
+    """)
+
+    with engine.connect() as conn:
+        total = int(conn.execute(count_sql, params).scalar() or 0)
+        rows = conn.execute(list_sql, params).mappings().all()
+
+    items: List[Dict[str, Any]] = []
+    for row in rows:
+        raw = row.get("raw")
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except Exception:
+                raw = None
+        items.append({
+            "external_id": str(row["external_id"]),
+            "nm_id": int(row["nm_id"]),
+            "created_date": (
+                row.get("created_date").isoformat()
+                if getattr(row.get("created_date"), "isoformat", None)
+                else None
+            ),
+            "rating": int(row["product_valuation"]) if row.get("product_valuation") is not None else None,
+            "user_name": _clean_optional_text((raw or {}).get("userName") if isinstance(raw, dict) else None),
+            "text": _clean_optional_text((raw or {}).get("text") if isinstance(raw, dict) else None),
+            "pros": _clean_optional_text((raw or {}).get("pros") if isinstance(raw, dict) else None),
+            "cons": _clean_optional_text((raw or {}).get("cons") if isinstance(raw, dict) else None),
+            "answer_text": _answer_text_from_raw(raw),
+            "photo_urls": _photo_urls_from_raw(raw),
+            "video_url": _clean_optional_text(
+                ((raw or {}).get("video") or {}).get("link")
+                if isinstance((raw or {}).get("video"), dict)
+                else None
+            ),
+            "is_answered": bool(row.get("is_answered")),
+            "has_media": bool(row.get("has_media")),
+            "is_archived": bool(row.get("is_archived")),
+            "source_endpoint": _clean_optional_text(row.get("source_endpoint")),
+        })
+
+    return {
+        "items": items,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + len(items) < total,
+    }

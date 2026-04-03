@@ -7,6 +7,7 @@ Mode: default incremental; params_json.mode == "reviews_backfill" for full archi
 
 import json
 import os
+import time
 from datetime import date as date_type, datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Set
 
@@ -17,6 +18,8 @@ from app.db_stocks import get_active_fbs_nm_ids
 from app.db_wb_analytics import get_wb_nm_ids_for_project
 from app.db_wb_backfill_state import (
     JOB_CODE_WB_COMMUNICATIONS_REVIEWS_BACKFILL,
+    JOB_CODE_WB_COMMUNICATIONS_REVIEWS_FULL_SYNC,
+    WB_COMMUNICATIONS_REVIEWS_FULL_SYNC_STATE_DATE,
     ensure_backfill_state_created,
     get_backfill_state,
     mark_backfill_state_completed,
@@ -33,6 +36,14 @@ BATCH_UPSERT_SIZE = 1000
 MAX_FEEDBACK_SKIP = 199990
 QUESTIONS_TAKE_PLUS_SKIP_MAX = 10000
 WINDOW_DAYS = 7
+FULL_SYNC_DEFAULT_MAX_SECONDS = 20 * 60
+FULL_SYNC_DEFAULT_MAX_NM_IDS_PER_RUN = 25
+FULL_SYNC_SOURCE_SPECS = (
+    {"endpoint": "feedbacks", "is_archived": False, "is_answered": False, "source_endpoint": "feedbacks"},
+    {"endpoint": "feedbacks", "is_archived": False, "is_answered": True, "source_endpoint": "feedbacks"},
+    {"endpoint": "feedbacks_archive", "is_archived": True, "is_answered": False, "source_endpoint": "feedbacks/archive"},
+    {"endpoint": "feedbacks_archive", "is_archived": True, "is_answered": True, "source_endpoint": "feedbacks/archive"},
+)
 
 
 def _nm_id(x: Dict[str, Any]) -> Optional[int]:
@@ -93,6 +104,69 @@ def _parse_created_date(s: Any) -> Optional[datetime]:
         return datetime.fromisoformat(str(s).replace("Z", "+00:00"))
     except (ValueError, TypeError):
         return None
+
+
+def _feedback_rows_from_items(
+    items: List[Dict[str, Any]],
+    allowed_nm_ids: Optional[Set[int]] = None,
+    forced_nm_id: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for x in items:
+        nm = forced_nm_id if forced_nm_id is not None else _nm_id(x)
+        if nm is None:
+            continue
+        if allowed_nm_ids is not None and nm not in allowed_nm_ids:
+            continue
+        ext_id = x.get("id") or x.get("external_id")
+        if not ext_id:
+            continue
+        created_dt = _parse_created_date(x.get("createdDate"))
+        answer = x.get("answer")
+        has_media = bool(
+            (x.get("photoLinks") and len(x.get("photoLinks", [])) > 0)
+            or (x.get("video") and (x.get("video") or {}).get("link"))
+        )
+        rows.append({
+            "external_id": str(ext_id),
+            "nm_id": nm,
+            "product_valuation": x.get("productValuation"),
+            "created_date": created_dt,
+            "is_answered": answer is not None,
+            "has_media": has_media,
+            "raw": x,
+        })
+    return rows
+
+
+def _maybe_chain_communications_aggregates(
+    project_id: int,
+    run_id: Optional[int],
+    stats: Dict[str, Any],
+) -> None:
+    if not run_id:
+        return
+    try:
+        from app.services.ingest import runs as runs_service
+        from app.tasks.ingest_execute import execute_ingest
+
+        if not runs_service.has_active_run(
+            project_id=project_id,
+            marketplace_code="internal",
+            job_code="build_wb_communications_aggregates",
+        ):
+            build_run = runs_service.create_run_queued(
+                project_id=project_id,
+                marketplace_code="internal",
+                job_code="build_wb_communications_aggregates",
+                schedule_id=None,
+                triggered_by="chained",
+                params_json={"chained_from_job": "wb_communications", "chained_from_run_id": run_id},
+            )
+            execute_ingest.delay(build_run["id"])
+            stats["chained_aggregates_run_id"] = build_run["id"]
+    except Exception:
+        pass
 
 
 def _bulk_upsert_feedbacks(
@@ -228,31 +302,7 @@ async def _process_feedbacks_window(
                 is_answered=is_answered,
             )
             items = (resp.get("data") or {}).get("feedbacks") or []
-            rows = []
-            for x in items:
-                nm = _nm_id(x)
-                if nm is None:
-                    continue
-                if nm not in active_nm_ids:
-                    continue
-                ext_id = x.get("id") or x.get("external_id")
-                if not ext_id:
-                    continue
-                created_dt = _parse_created_date(x.get("createdDate"))
-                answer = x.get("answer")
-                has_media = bool(
-                    (x.get("photoLinks") and len(x.get("photoLinks", [])) > 0)
-                    or (x.get("video") and (x.get("video") or {}).get("link"))
-                )
-                rows.append({
-                    "external_id": str(ext_id),
-                    "nm_id": nm,
-                    "product_valuation": x.get("productValuation"),
-                    "created_date": created_dt,
-                    "is_answered": answer is not None,
-                    "has_media": has_media,
-                    "raw": x,
-                })
+            rows = _feedback_rows_from_items(items, allowed_nm_ids=active_nm_ids)
             if rows:
                 with engine.begin() as conn:
                     total_upserted += _bulk_upsert_feedbacks(conn, project_id, run_id, snapshot_at, rows)
@@ -367,29 +417,7 @@ async def _process_one_window_reviews_backfill(
                 is_answered=is_answered,
             )
             items = (resp.get("data") or {}).get("feedbacks") or []
-            rows = []
-            for x in items:
-                nm = _nm_id(x)
-                if nm is None or nm not in project_nm_ids:
-                    continue
-                ext_id = x.get("id") or x.get("external_id")
-                if not ext_id:
-                    continue
-                created_dt = _parse_created_date(x.get("createdDate"))
-                answer = x.get("answer")
-                has_media = bool(
-                    (x.get("photoLinks") and len(x.get("photoLinks", [])) > 0)
-                    or (x.get("video") and (x.get("video") or {}).get("link"))
-                )
-                rows.append({
-                    "external_id": str(ext_id),
-                    "nm_id": nm,
-                    "product_valuation": x.get("productValuation"),
-                    "created_date": created_dt,
-                    "is_answered": answer is not None,
-                    "has_media": has_media,
-                    "raw": x,
-                })
+            rows = _feedback_rows_from_items(items, allowed_nm_ids=project_nm_ids)
             if rows:
                 with engine.begin() as conn:
                     total += _bulk_upsert_feedbacks(
@@ -414,29 +442,7 @@ async def _process_one_window_reviews_backfill(
                 is_answered=is_answered,
             )
             items = (resp.get("data") or {}).get("feedbacks") or []
-            rows = []
-            for x in items:
-                nm = _nm_id(x)
-                if nm is None or nm not in project_nm_ids:
-                    continue
-                ext_id = x.get("id") or x.get("external_id")
-                if not ext_id:
-                    continue
-                created_dt = _parse_created_date(x.get("createdDate"))
-                answer = x.get("answer")
-                has_media = bool(
-                    (x.get("photoLinks") and len(x.get("photoLinks", [])) > 0)
-                    or (x.get("video") and (x.get("video") or {}).get("link"))
-                )
-                rows.append({
-                    "external_id": str(ext_id),
-                    "nm_id": nm,
-                    "product_valuation": x.get("productValuation"),
-                    "created_date": created_dt,
-                    "is_answered": answer is not None,
-                    "has_media": has_media,
-                    "raw": x,
-                })
+            rows = _feedback_rows_from_items(items, allowed_nm_ids=project_nm_ids)
             if rows:
                 with engine.begin() as conn:
                     total += _bulk_upsert_feedbacks(
@@ -449,6 +455,335 @@ async def _process_one_window_reviews_backfill(
             if touch_run_fn:
                 touch_run_fn()
     return total
+
+
+def _full_sync_meta(source_idx: int = 0, skip: int = 0, nm_id: Optional[int] = None) -> Dict[str, Any]:
+    meta: Dict[str, Any] = {"source_idx": source_idx, "skip": skip}
+    if nm_id is not None:
+        meta["nm_id"] = nm_id
+    return meta
+
+
+def _normalize_positive_int(value: Any, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+async def _ingest_wb_communications_reviews_full_sync(
+    project_id: int,
+    run_id: Optional[int],
+    params: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Fetch all feedbacks for all project products via nmId-based endpoints; dedupe by external_id."""
+    from app.utils.get_project_marketplace_token import get_wb_token_for_project
+
+    token = get_wb_token_for_project(project_id) or os.getenv("WB_TOKEN", "")
+    if not token or token.upper() == "MOCK":
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "no_token",
+            "domain": "wb_communications",
+            "project_id": project_id,
+        }
+
+    project_nm_ids = sorted(set(get_wb_nm_ids_for_project(project_id)))
+    if not project_nm_ids:
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "no_project_nm_ids",
+            "domain": "wb_communications",
+            "project_id": project_id,
+            "mode": "reviews_full_sync",
+        }
+
+    state = get_backfill_state(
+        project_id,
+        JOB_CODE_WB_COMMUNICATIONS_REVIEWS_FULL_SYNC,
+        WB_COMMUNICATIONS_REVIEWS_FULL_SYNC_STATE_DATE,
+        WB_COMMUNICATIONS_REVIEWS_FULL_SYNC_STATE_DATE,
+    )
+    if state and state.get("status") == "running":
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "already_running_full_sync",
+            "domain": "wb_communications",
+            "project_id": project_id,
+            "mode": "reviews_full_sync",
+        }
+
+    run_id = run_id or 0
+    ensure_backfill_state_created(
+        project_id,
+        JOB_CODE_WB_COMMUNICATIONS_REVIEWS_FULL_SYNC,
+        WB_COMMUNICATIONS_REVIEWS_FULL_SYNC_STATE_DATE,
+        WB_COMMUNICATIONS_REVIEWS_FULL_SYNC_STATE_DATE,
+        run_id,
+    )
+
+    start_nm_index = 0
+    start_source_idx = 0
+    start_skip = 0
+    if state and state.get("status") in ("paused", "failed"):
+        try:
+            start_nm_index = max(0, int(state.get("cursor_nm_offset") or 0))
+        except (TypeError, ValueError):
+            start_nm_index = 0
+        meta = state.get("meta_json") or {}
+        try:
+            start_source_idx = max(0, int(meta.get("source_idx") or 0))
+        except (TypeError, ValueError):
+            start_source_idx = 0
+        try:
+            start_skip = max(0, int(meta.get("skip") or 0))
+        except (TypeError, ValueError):
+            start_skip = 0
+
+    use_sandbox = _get_use_sandbox(project_id)
+    client = WBCommunicationsClient(token=token, use_sandbox=use_sandbox)
+    snapshot_at = datetime.now(timezone.utc)
+    started = time.monotonic()
+    max_seconds = _normalize_positive_int(params.get("max_seconds"), FULL_SYNC_DEFAULT_MAX_SECONDS)
+    max_nm_ids_per_run = _normalize_positive_int(
+        params.get("max_nm_ids_per_run"),
+        FULL_SYNC_DEFAULT_MAX_NM_IDS_PER_RUN,
+    )
+    stats: Dict[str, Any] = {
+        "feedbacks_upserted": 0,
+        "domain": "wb_communications",
+        "project_id": project_id,
+        "mode": "reviews_full_sync",
+        "nm_ids_total": len(project_nm_ids),
+        "nm_ids_processed": 0,
+        "max_seconds": max_seconds,
+        "max_nm_ids_per_run": max_nm_ids_per_run,
+    }
+
+    def touch_run() -> None:
+        if run_id:
+            try:
+                from app.services.ingest import runs as runs_service
+                runs_service.touch_run(run_id)
+            except Exception:
+                pass
+
+    def save_progress(
+        nm_offset: int,
+        source_idx: int,
+        skip: int,
+        nm_id: Optional[int],
+        phase_label: str,
+    ) -> None:
+        if not run_id:
+            return
+        try:
+            from app.services.ingest.runs import set_run_progress
+
+            payload = {
+                "mode": "reviews_full_sync",
+                "range_status": "running",
+                "nm_ids_total": len(project_nm_ids),
+                "nm_ids_processed": stats["nm_ids_processed"],
+                "feedbacks_upserted": stats["feedbacks_upserted"],
+                "cursor": {
+                    "nm_offset": nm_offset,
+                    "source_idx": source_idx,
+                    "skip": skip,
+                    "nm_id": nm_id,
+                },
+                "current_nm_id": nm_id,
+                "phase_label": phase_label,
+            }
+            set_run_progress(run_id, payload)
+        except Exception:
+            pass
+
+    current_nm_index = start_nm_index
+    current_source_idx = start_source_idx
+    current_skip = start_skip
+    processed_nm_ids_this_run = 0
+    try:
+        save_progress(start_nm_index, start_source_idx, start_skip, project_nm_ids[start_nm_index] if start_nm_index < len(project_nm_ids) else None, "Запуск full sync отзывов")
+        for nm_index in range(start_nm_index, len(project_nm_ids)):
+            nm_id = project_nm_ids[nm_index]
+            source_start = start_source_idx if nm_index == start_nm_index else 0
+            skip_start = start_skip if nm_index == start_nm_index else 0
+            for source_idx in range(source_start, len(FULL_SYNC_SOURCE_SPECS)):
+                spec = FULL_SYNC_SOURCE_SPECS[source_idx]
+                skip = skip_start if source_idx == source_start else 0
+                while skip <= MAX_FEEDBACK_SKIP:
+                    elapsed = time.monotonic() - started
+                    if elapsed >= max_seconds:
+                        mark_backfill_state_paused(
+                            project_id,
+                            JOB_CODE_WB_COMMUNICATIONS_REVIEWS_FULL_SYNC,
+                            WB_COMMUNICATIONS_REVIEWS_FULL_SYNC_STATE_DATE,
+                            WB_COMMUNICATIONS_REVIEWS_FULL_SYNC_STATE_DATE,
+                            run_id,
+                            cursor_date=WB_COMMUNICATIONS_REVIEWS_FULL_SYNC_STATE_DATE,
+                            cursor_nm_offset=nm_index,
+                            error_message="max_seconds",
+                            meta_json=_full_sync_meta(source_idx, skip, nm_id),
+                        )
+                        return {
+                            "ok": False,
+                            "reason": "progress_saved",
+                            "cursor": {"nm_offset": nm_index, "source_idx": source_idx, "skip": skip, "nm_id": nm_id},
+                            "nm_ids_processed": stats["nm_ids_processed"],
+                            "nm_ids_total": len(project_nm_ids),
+                            "feedbacks_upserted": stats["feedbacks_upserted"],
+                            "project_id": project_id,
+                            "domain": "wb_communications",
+                            "mode": "reviews_full_sync",
+                            "range_status": "paused",
+                            "saved_state_date": WB_COMMUNICATIONS_REVIEWS_FULL_SYNC_STATE_DATE.isoformat(),
+                            "finished_at": datetime.now(timezone.utc).isoformat(),
+                        }
+                    current_nm_index = nm_index
+                    current_source_idx = source_idx
+                    current_skip = skip
+                    phase_label = (
+                        f"Товар {nm_index + 1}/{len(project_nm_ids)}: nmId {nm_id}, "
+                        f"{'архив' if spec['is_archived'] else 'активные'} / "
+                        f"{'с ответом' if spec['is_answered'] else 'без ответа'}"
+                    )
+                    save_progress(nm_index, source_idx, skip, nm_id, phase_label)
+                    if spec["endpoint"] == "feedbacks":
+                        resp = await client.list_feedbacks(
+                            take=5000,
+                            skip=skip,
+                            order="dateDesc",
+                            is_answered=spec["is_answered"],
+                            nm_id=nm_id,
+                        )
+                    else:
+                        resp = await client.list_feedbacks_archive(
+                            take=5000,
+                            skip=skip,
+                            order="dateDesc",
+                            is_answered=spec["is_answered"],
+                            nm_id=nm_id,
+                        )
+                    items = (resp.get("data") or {}).get("feedbacks") or []
+                    rows = _feedback_rows_from_items(items, forced_nm_id=nm_id)
+                    if rows:
+                        with engine.begin() as conn:
+                            stats["feedbacks_upserted"] += _bulk_upsert_feedbacks(
+                                conn,
+                                project_id,
+                                run_id,
+                                snapshot_at,
+                                rows,
+                                is_archived=bool(spec["is_archived"]),
+                                source_endpoint=str(spec["source_endpoint"]),
+                            )
+                    if len(items) < 5000:
+                        upsert_backfill_state_running(
+                            project_id,
+                            JOB_CODE_WB_COMMUNICATIONS_REVIEWS_FULL_SYNC,
+                            WB_COMMUNICATIONS_REVIEWS_FULL_SYNC_STATE_DATE,
+                            WB_COMMUNICATIONS_REVIEWS_FULL_SYNC_STATE_DATE,
+                            run_id,
+                            cursor_date=WB_COMMUNICATIONS_REVIEWS_FULL_SYNC_STATE_DATE,
+                            cursor_nm_offset=nm_index,
+                            meta_json=_full_sync_meta(source_idx + 1, 0, nm_id),
+                        )
+                        save_progress(nm_index, source_idx + 1, 0, nm_id, phase_label)
+                        break
+                    next_skip = skip + 5000
+                    upsert_backfill_state_running(
+                        project_id,
+                        JOB_CODE_WB_COMMUNICATIONS_REVIEWS_FULL_SYNC,
+                        WB_COMMUNICATIONS_REVIEWS_FULL_SYNC_STATE_DATE,
+                        WB_COMMUNICATIONS_REVIEWS_FULL_SYNC_STATE_DATE,
+                        run_id,
+                        cursor_date=WB_COMMUNICATIONS_REVIEWS_FULL_SYNC_STATE_DATE,
+                        cursor_nm_offset=nm_index,
+                        meta_json=_full_sync_meta(source_idx, next_skip, nm_id),
+                    )
+                    save_progress(nm_index, source_idx, next_skip, nm_id, phase_label)
+                    skip = next_skip
+                    touch_run()
+
+            stats["nm_ids_processed"] = nm_index + 1
+            processed_nm_ids_this_run += 1
+            upsert_backfill_state_running(
+                project_id,
+                JOB_CODE_WB_COMMUNICATIONS_REVIEWS_FULL_SYNC,
+                WB_COMMUNICATIONS_REVIEWS_FULL_SYNC_STATE_DATE,
+                WB_COMMUNICATIONS_REVIEWS_FULL_SYNC_STATE_DATE,
+                run_id,
+                cursor_date=WB_COMMUNICATIONS_REVIEWS_FULL_SYNC_STATE_DATE,
+                cursor_nm_offset=nm_index + 1,
+                meta_json=_full_sync_meta(0, 0),
+            )
+            save_progress(
+                nm_index + 1,
+                0,
+                0,
+                project_nm_ids[nm_index + 1] if (nm_index + 1) < len(project_nm_ids) else None,
+                f"Обработано товаров: {nm_index + 1}/{len(project_nm_ids)}",
+            )
+            touch_run()
+            if processed_nm_ids_this_run >= max_nm_ids_per_run and (nm_index + 1) < len(project_nm_ids):
+                mark_backfill_state_paused(
+                    project_id,
+                    JOB_CODE_WB_COMMUNICATIONS_REVIEWS_FULL_SYNC,
+                    WB_COMMUNICATIONS_REVIEWS_FULL_SYNC_STATE_DATE,
+                    WB_COMMUNICATIONS_REVIEWS_FULL_SYNC_STATE_DATE,
+                    run_id,
+                    cursor_date=WB_COMMUNICATIONS_REVIEWS_FULL_SYNC_STATE_DATE,
+                    cursor_nm_offset=nm_index + 1,
+                    error_message="max_nm_ids_per_run",
+                    meta_json=_full_sync_meta(0, 0),
+                )
+                return {
+                    "ok": False,
+                    "reason": "progress_saved",
+                    "cursor": {"nm_offset": nm_index + 1, "source_idx": 0, "skip": 0},
+                    "nm_ids_processed": stats["nm_ids_processed"],
+                    "nm_ids_total": len(project_nm_ids),
+                    "feedbacks_upserted": stats["feedbacks_upserted"],
+                    "project_id": project_id,
+                    "domain": "wb_communications",
+                    "mode": "reviews_full_sync",
+                    "range_status": "paused",
+                    "saved_state_date": WB_COMMUNICATIONS_REVIEWS_FULL_SYNC_STATE_DATE.isoformat(),
+                    "finished_at": datetime.now(timezone.utc).isoformat(),
+                }
+
+        mark_backfill_state_completed(
+            project_id,
+            JOB_CODE_WB_COMMUNICATIONS_REVIEWS_FULL_SYNC,
+            WB_COMMUNICATIONS_REVIEWS_FULL_SYNC_STATE_DATE,
+            WB_COMMUNICATIONS_REVIEWS_FULL_SYNC_STATE_DATE,
+            run_id,
+            len(project_nm_ids),
+            meta_json={"mode": "reviews_full_sync"},
+        )
+    except Exception as e:
+        mark_backfill_state_failed(
+            project_id,
+            JOB_CODE_WB_COMMUNICATIONS_REVIEWS_FULL_SYNC,
+            WB_COMMUNICATIONS_REVIEWS_FULL_SYNC_STATE_DATE,
+            WB_COMMUNICATIONS_REVIEWS_FULL_SYNC_STATE_DATE,
+            run_id,
+            cursor_date=WB_COMMUNICATIONS_REVIEWS_FULL_SYNC_STATE_DATE,
+            cursor_nm_offset=current_nm_index,
+            error_message=str(e),
+            meta_json=_full_sync_meta(current_source_idx, current_skip, project_nm_ids[current_nm_index] if project_nm_ids else None),
+        )
+        raise
+
+    stats["ok"] = True
+    stats["finished_at"] = datetime.now(timezone.utc).isoformat()
+    _maybe_chain_communications_aggregates(project_id, run_id, stats)
+    return stats
 
 
 async def _ingest_wb_communications_reviews_backfill(
@@ -593,29 +928,7 @@ async def _ingest_wb_communications_reviews_backfill(
     stats["finished_at"] = datetime.utcnow().isoformat()
     stats["date_from"] = date_from.isoformat()
     stats["date_to"] = date_to.isoformat()
-
-    if run_id:
-        try:
-            from app.services.ingest import runs as runs_service
-            from app.tasks.ingest_execute import execute_ingest
-            if not runs_service.has_active_run(
-                project_id=project_id,
-                marketplace_code="internal",
-                job_code="build_wb_communications_aggregates",
-            ):
-                build_run = runs_service.create_run_queued(
-                    project_id=project_id,
-                    marketplace_code="internal",
-                    job_code="build_wb_communications_aggregates",
-                    schedule_id=None,
-                    triggered_by="chained",
-                    params_json={"chained_from_job": "wb_communications", "chained_from_run_id": run_id},
-                )
-                execute_ingest.delay(build_run["id"])
-                stats["chained_aggregates_run_id"] = build_run["id"]
-        except Exception:
-            pass
-
+    _maybe_chain_communications_aggregates(project_id, run_id, stats)
     return stats
 
 
@@ -626,6 +939,8 @@ async def ingest_wb_communications(
 ) -> Dict[str, Any]:
     """Main ingest: incremental (default) or reviews_backfill via params.mode."""
     run_params = params if params is not None else {}
+    if (run_params.get("mode") or "").strip().lower() == "reviews_full_sync":
+        return await _ingest_wb_communications_reviews_full_sync(project_id, run_id, run_params)
     if (run_params.get("mode") or "").strip().lower() == "reviews_backfill":
         return await _ingest_wb_communications_reviews_backfill(project_id, run_id, run_params)
 
@@ -701,29 +1016,7 @@ async def ingest_wb_communications(
 
     stats["ok"] = True
     stats["finished_at"] = datetime.utcnow().isoformat()
-
-    if run_id:
-        try:
-            from app.services.ingest import runs as runs_service
-            from app.tasks.ingest_execute import execute_ingest
-            if not runs_service.has_active_run(
-                project_id=project_id,
-                marketplace_code="internal",
-                job_code="build_wb_communications_aggregates",
-            ):
-                build_run = runs_service.create_run_queued(
-                    project_id=project_id,
-                    marketplace_code="internal",
-                    job_code="build_wb_communications_aggregates",
-                    schedule_id=None,
-                    triggered_by="chained",
-                    params_json={"chained_from_job": "wb_communications", "chained_from_run_id": run_id},
-                )
-                execute_ingest.delay(build_run["id"])
-                stats["chained_aggregates_run_id"] = build_run["id"]
-        except Exception:
-            pass
-
+    _maybe_chain_communications_aggregates(project_id, run_id, stats)
     return stats
 
 

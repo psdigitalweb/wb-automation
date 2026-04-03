@@ -73,23 +73,28 @@ class WBCommunicationsClient:
 
     async def list_feedbacks(
         self,
-        date_from: int,
-        date_to: int,
+        date_from: Optional[int] = None,
+        date_to: Optional[int] = None,
         take: int = 5000,
         skip: int = 0,
         order: str = "dateDesc",
         is_answered: Optional[bool] = None,
+        nm_id: Optional[int] = None,
     ) -> Dict[str, Any]:
         """GET /api/v1/feedbacks. Returns {"data": {"feedbacks": [...], ...}}."""
         params: Dict[str, Any] = {
-            "dateFrom": date_from,
-            "dateTo": date_to,
             "take": take,
             "skip": skip,
             "order": order,
         }
+        if date_from is not None:
+            params["dateFrom"] = date_from
+        if date_to is not None:
+            params["dateTo"] = date_to
         if is_answered is not None:
             params["isAnswered"] = str(is_answered).lower()
+        if nm_id is not None:
+            params["nmId"] = nm_id
         url = f"{self.base_url}/api/v1/feedbacks"
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             r = await self._request_with_retry(client, "GET", url, headers=self.headers, params=params)
@@ -104,26 +109,28 @@ class WBCommunicationsClient:
 
     async def list_feedbacks_archive(
         self,
-        date_from: int,
-        date_to: int,
+        date_from: Optional[int] = None,
+        date_to: Optional[int] = None,
         take: int = 5000,
         skip: int = 0,
         order: str = "dateDesc",
         is_answered: Optional[bool] = None,
+        nm_id: Optional[int] = None,
     ) -> Dict[str, Any]:
-        """GET /api/v1/feedbacks/archive. List of archived feedbacks.
-        Params mirror /feedbacks; exact API contract not fully documented — assume same structure.
-        Returns {"data": {"feedbacks": [...], ...}}.
-        """
+        """GET /api/v1/feedbacks/archive. Returns {"data": {"feedbacks": [...], ...}}."""
         params: Dict[str, Any] = {
-            "dateFrom": date_from,
-            "dateTo": date_to,
             "take": take,
             "skip": skip,
             "order": order,
         }
+        if date_from is not None:
+            params["dateFrom"] = date_from
+        if date_to is not None:
+            params["dateTo"] = date_to
         if is_answered is not None:
             params["isAnswered"] = str(is_answered).lower()
+        if nm_id is not None:
+            params["nmId"] = nm_id
         url = f"{self.base_url}/api/v1/feedbacks/archive"
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             r = await self._request_with_retry(client, "GET", url, headers=self.headers, params=params)

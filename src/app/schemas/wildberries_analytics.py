@@ -34,6 +34,32 @@ class ReviewsSummaryResponse(BaseModel):
     items: List[ReviewsSummaryItem]
 
 
+class ReviewDetailItem(BaseModel):
+    external_id: str
+    nm_id: int
+    created_date: Optional[str] = None
+    rating: Optional[int] = None
+    user_name: Optional[str] = None
+    text: Optional[str] = None
+    pros: Optional[str] = None
+    cons: Optional[str] = None
+    answer_text: Optional[str] = None
+    photo_urls: List[str] = Field(default_factory=list)
+    video_url: Optional[str] = None
+    is_answered: bool = False
+    has_media: bool = False
+    is_archived: bool = False
+    source_endpoint: Optional[str] = None
+
+
+class ReviewsListResponse(BaseModel):
+    items: List[ReviewDetailItem]
+    total: int
+    limit: int
+    offset: int
+    has_more: bool
+
+
 class FunnelSignalSeverity(str, Enum):
     low = "low"
     med = "med"

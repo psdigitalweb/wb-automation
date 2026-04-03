@@ -4,16 +4,39 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useParams } from 'next/navigation'
 import {
   getFunnelSignalsCategories,
+  getReviewsList,
   getReviewsSummary,
+  type ReviewDetailItem,
   type WBProductLookupItem,
-  type ReviewsSummaryItem,
   type ReviewsSummaryResponse,
 } from '@/lib/apiClient'
 import { usePageTitle } from '@/hooks/usePageTitle'
 import PortalBackButton from '@/components/PortalBackButton'
 import WBProductLookupInput from '@/components/WBProductLookupInput'
 
-function PhotoPopover({ photos, size = 36 }: { photos: string[]; size?: number }) {
+const REVIEWS_PAGE_SIZE = 20
+
+type ReviewsListState = {
+  items: ReviewDetailItem[]
+  total: number
+  hasMore: boolean
+  loaded: boolean
+  loading: boolean
+  loadingMore: boolean
+  error: string | null
+}
+
+function PhotoPopover({
+  photos,
+  size = 36,
+  title = 'Фото',
+  emptyLabel = 'Нет фото',
+}: {
+  photos: string[]
+  size?: number
+  title?: string
+  emptyLabel?: string
+}) {
   const [open, setOpen] = useState(false)
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [position, setPosition] = useState<{ top: number; left: number }>({ top: 0, left: 0 })
@@ -109,7 +132,7 @@ function PhotoPopover({ photos, size = 36 }: { photos: string[]; size?: number }
             color: '#999',
           }}
         >
-          Нет фото
+          {emptyLabel}
         </div>
       )}
       {open && hasPhotos && (
@@ -132,7 +155,7 @@ function PhotoPopover({ photos, size = 36 }: { photos: string[]; size?: number }
           }}
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-            <strong style={{ fontSize: 12 }}>Фото товара</strong>
+            <strong style={{ fontSize: 12 }}>{title}</strong>
             <button type="button" onClick={() => setOpen(false)} style={{ fontSize: 12 }}>
               ✕
             </button>
@@ -187,6 +210,41 @@ function formatNmId(value: number | null | undefined): string {
   return String(value)
 }
 
+function formatReviewDate(value: string | null | undefined): string {
+  if (!value) return '—'
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return value
+  return new Intl.DateTimeFormat('ru-RU', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(parsed)
+}
+
+function renderReviewRating(value: number | null | undefined) {
+  if (value == null || Number.isNaN(value)) {
+    return <span style={{ color: '#6b7280' }}>Без оценки</span>
+  }
+  const normalized = Math.max(0, Math.min(5, Math.round(value)))
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+      <span style={{ color: '#f59e0b', letterSpacing: 1 }}>{`${'★'.repeat(normalized)}${'☆'.repeat(5 - normalized)}`}</span>
+      <span style={{ color: '#4b5563', fontSize: 12 }}>{value.toFixed(1)}</span>
+    </span>
+  )
+}
+
+function mergeReviewItems(existing: ReviewDetailItem[], incoming: ReviewDetailItem[]): ReviewDetailItem[] {
+  const seen = new Set(existing.map((item) => item.external_id))
+  const next = [...existing]
+  incoming.forEach((item) => {
+    if (!seen.has(item.external_id)) {
+      seen.add(item.external_id)
+      next.push(item)
+    }
+  })
+  return next
+}
+
 function truncate(value: string | null | undefined, maxLen: number): string {
   if (value == null) return '—'
   if (value.length <= maxLen) return value
@@ -207,6 +265,8 @@ export default function ReviewsPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [data, setData] = useState<ReviewsSummaryResponse | null>(null)
+  const [expandedNmId, setExpandedNmId] = useState<number | null>(null)
+  const [reviewsByNmId, setReviewsByNmId] = useState<Record<number, ReviewsListState>>({})
 
   usePageTitle('Отзывы WB', projectId || null)
 
@@ -253,13 +313,101 @@ export default function ReviewsPage() {
       wb_category: wbCategory || undefined,
       rating_lte: ratingValue,
     })
-      .then((res) => setData(res))
+      .then((res) => {
+        setData(res)
+        setExpandedNmId(null)
+        setReviewsByNmId({})
+      })
       .catch((err: any) => {
         setError(err?.detail || err?.message || 'Ошибка загрузки')
         setData(null)
+        setExpandedNmId(null)
+        setReviewsByNmId({})
       })
       .finally(() => setLoading(false))
   }, [projectId, periodFrom, periodTo, productSearch, selectedProduct, wbCategory, ratingLte])
+
+  const loadReviews = useCallback(
+    (nmId: number, options?: { offset?: number; append?: boolean }) => {
+      if (!projectId) return
+      const offset = options?.offset ?? 0
+      const append = options?.append ?? false
+
+      setReviewsByNmId((prev) => {
+        const current = prev[nmId]
+        return {
+          ...prev,
+          [nmId]: {
+            items: append ? current?.items ?? [] : current?.items ?? [],
+            total: current?.total ?? 0,
+            hasMore: current?.hasMore ?? false,
+            loaded: current?.loaded ?? false,
+            loading: !append,
+            loadingMore: append,
+            error: null,
+          },
+        }
+      })
+
+      getReviewsList(projectId, {
+        nm_id: nmId,
+        period_from: periodFrom.trim() || undefined,
+        period_to: periodTo.trim() || undefined,
+        limit: REVIEWS_PAGE_SIZE,
+        offset,
+      })
+        .then((res) => {
+          setReviewsByNmId((prev) => {
+            const current = prev[nmId]
+            return {
+              ...prev,
+              [nmId]: {
+                items: append ? mergeReviewItems(current?.items ?? [], res.items) : res.items,
+                total: res.total,
+                hasMore: res.has_more,
+                loaded: true,
+                loading: false,
+                loadingMore: false,
+                error: null,
+              },
+            }
+          })
+        })
+        .catch((err: any) => {
+          setReviewsByNmId((prev) => {
+            const current = prev[nmId]
+            return {
+              ...prev,
+              [nmId]: {
+                items: current?.items ?? [],
+                total: current?.total ?? 0,
+                hasMore: current?.hasMore ?? false,
+                loaded: current?.loaded ?? false,
+                loading: false,
+                loadingMore: false,
+                error: err?.detail || err?.message || 'Не удалось загрузить отзывы',
+              },
+            }
+          })
+        })
+    },
+    [projectId, periodFrom, periodTo]
+  )
+
+  const toggleReviews = useCallback(
+    (nmId: number) => {
+      if (expandedNmId === nmId) {
+        setExpandedNmId(null)
+        return
+      }
+      setExpandedNmId(nmId)
+      const state = reviewsByNmId[nmId]
+      if (!state || (!state.loaded && !state.loading)) {
+        loadReviews(nmId)
+      }
+    },
+    [expandedNmId, loadReviews, reviewsByNmId]
+  )
 
   useEffect(() => {
     if (!projectId) return
@@ -367,7 +515,7 @@ export default function ReviewsPage() {
             </div>
           </div>
           <div style={{ marginTop: 10, fontSize: 12, color: '#6b7280' }}>
-            Если даты не заданы, показывается полная картина по SKU. Даты влияют только на колонку новых отзывов за период.
+            Если даты не заданы, показывается полная картина по SKU. Даты влияют на колонку новых отзывов и на раскрытый список отзывов по товару.
           </div>
         </div>
       </div>

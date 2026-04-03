@@ -379,6 +379,40 @@ async def get_wb_ingest_status(
 ):
     """Get status of all Wildberries ingestion jobs for a project."""
     marketplace_code = "wildberries"
+
+    def _extract_progress(run: dict | None) -> dict:
+        if not run:
+            return {}
+        stats = run.get("stats_json") or {}
+        if not isinstance(stats, dict):
+            return {}
+        if (stats.get("mode") or "").strip().lower() != "reviews_full_sync":
+            return {}
+        try:
+            current = int(stats.get("nm_ids_processed") or 0)
+        except (TypeError, ValueError):
+            current = 0
+        try:
+            total = int(stats.get("nm_ids_total") or 0)
+        except (TypeError, ValueError):
+            total = 0
+        pct = None
+        if total > 0:
+            pct = round(max(0.0, min(100.0, (current / total) * 100.0)), 1)
+        detail_parts = []
+        feedbacks_upserted = stats.get("feedbacks_upserted")
+        if feedbacks_upserted is not None:
+            detail_parts.append(f"Отзывы: {feedbacks_upserted}")
+        phase_label = stats.get("phase_label")
+        if phase_label:
+            detail_parts.append(str(phase_label))
+        return {
+            "progress_current": current or None,
+            "progress_total": total or None,
+            "progress_pct": pct,
+            "progress_text": f"{current}/{total} товаров" if total > 0 else None,
+            "progress_detail": " | ".join(detail_parts) if detail_parts else None,
+        }
     
     # Get all WB job definitions
     all_jobs = list_job_definitions()
@@ -402,13 +436,12 @@ async def get_wb_ingest_status(
             marketplace_code=marketplace_code,
             job_code=job_code,
         )
-        
-        # Check if there's an active run
-        is_running = runs_service.has_active_run(
+        active_run = runs_service.get_active_run(
             project_id=project_id,
             marketplace_code=marketplace_code,
             job_code=job_code,
         )
+        is_running = active_run is not None
         
         # Get schedule info
         schedule = schedules_by_job.get(job_code)
@@ -426,6 +459,7 @@ async def get_wb_ingest_status(
             # If run is still active, show current status
             if last_run.get("status") in ("running", "queued"):
                 last_status = last_run.get("status")
+        progress = _extract_progress(active_run or last_run)
         
         result.append(
             WBIngestStatusResponse(
@@ -436,6 +470,7 @@ async def get_wb_ingest_status(
                 last_run_at=last_run_at,
                 last_status=last_status,
                 is_running=is_running,
+                **progress,
             )
         )
     
@@ -555,4 +590,3 @@ async def run_wb_ingest_manual(
         ) from exc
     
     return IngestRunResponse(**run)
-

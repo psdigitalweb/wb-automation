@@ -428,6 +428,11 @@ export interface WBIngestStatus {
   last_run_at: string | null
   last_status: string | null
   is_running: boolean
+  progress_current?: number | null
+  progress_total?: number | null
+  progress_pct?: number | null
+  progress_text?: string | null
+  progress_detail?: string | null
 }
 
 export interface IngestRunResponse {
@@ -1120,6 +1125,32 @@ export interface ReviewsSummaryResponse {
   items: ReviewsSummaryItem[]
 }
 
+export interface ReviewDetailItem {
+  external_id: string
+  nm_id: number
+  created_date: string | null
+  rating: number | null
+  user_name: string | null
+  text: string | null
+  pros: string | null
+  cons: string | null
+  answer_text: string | null
+  photo_urls: string[]
+  video_url: string | null
+  is_answered: boolean
+  has_media: boolean
+  is_archived: boolean
+  source_endpoint: string | null
+}
+
+export interface ReviewsListResponse {
+  items: ReviewDetailItem[]
+  total: number
+  limit: number
+  offset: number
+  has_more: boolean
+}
+
 export async function getReviewsSummary(
   projectId: string,
   params: {
@@ -1140,6 +1171,28 @@ export async function getReviewsSummary(
   if (params.rating_lte != null && !Number.isNaN(params.rating_lte)) qs.set('rating_lte', String(params.rating_lte))
   const res = await apiGet<ReviewsSummaryResponse>(
     `/api/v1/projects/${projectId}/wildberries/reviews/summary?${qs.toString()}`
+  )
+  return res.data
+}
+
+export async function getReviewsList(
+  projectId: string,
+  params: {
+    nm_id: number
+    period_from?: string
+    period_to?: string
+    limit?: number
+    offset?: number
+  }
+): Promise<ReviewsListResponse> {
+  const qs = new URLSearchParams()
+  qs.set('nm_id', String(params.nm_id))
+  if (params.period_from != null && params.period_from !== '') qs.set('period_from', params.period_from)
+  if (params.period_to != null && params.period_to !== '') qs.set('period_to', params.period_to)
+  if (params.limit != null && !Number.isNaN(params.limit)) qs.set('limit', String(params.limit))
+  if (params.offset != null && !Number.isNaN(params.offset)) qs.set('offset', String(params.offset))
+  const res = await apiGet<ReviewsListResponse>(
+    `/api/v1/projects/${projectId}/wildberries/reviews/items?${qs.toString()}`
   )
   return res.data
 }

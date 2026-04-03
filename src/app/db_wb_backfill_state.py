@@ -11,9 +11,12 @@ from app.db import engine
 
 JOB_CODE_WB_CARD_STATS_DAILY = "wb_card_stats_daily"
 JOB_CODE_WB_COMMUNICATIONS_REVIEWS_BACKFILL = "wb_communications_reviews_backfill"
+JOB_CODE_WB_COMMUNICATIONS_REVIEWS_FULL_SYNC = "wb_communications_reviews_full_sync"
+WB_COMMUNICATIONS_REVIEWS_FULL_SYNC_STATE_DATE = date(2000, 1, 1)
 
 # Max automatic continuation runs per single-day range (prevents infinite chain)
 MAX_AUTO_CONTINUES_PER_DAY = 10
+MAX_AUTO_CONTINUES_WB_COMMUNICATIONS_FULL_SYNC = 500
 
 
 def _row_to_state(row: Any) -> Dict[str, Any]:

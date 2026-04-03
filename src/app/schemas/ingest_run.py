@@ -65,6 +65,11 @@ class WBIngestStatusResponse(BaseModel):
     last_run_at: Optional[datetime]  # finished_at последнего успешного/неуспешного run
     last_status: Optional[str]  # "success", "failed", "running", "queued" или None
     is_running: bool  # есть ли активный run (running или queued)
+    progress_current: Optional[int] = None
+    progress_total: Optional[int] = None
+    progress_pct: Optional[float] = None
+    progress_text: Optional[str] = None
+    progress_detail: Optional[str] = None
 
 
 class WBIngestRunRequest(BaseModel):

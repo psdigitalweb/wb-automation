@@ -13,7 +13,7 @@ from app.db_wb_analytics import (
     get_funnel_signals_raw,
     get_funnel_categories,
 )
-from app.db_wb_reviews import get_reviews_summary
+from app.db_wb_reviews import get_reviews_summary, list_reviews_by_nm_id
 from app.db_stocks import (
     get_latest_fbo_stock_totals_by_nm_id,
     get_latest_enterprise_stock_by_vendor_code_norm,
@@ -36,6 +36,8 @@ from app.schemas.wildberries_analytics import (
     ContentAnalyticsSummaryItem,
     ReviewsSummaryResponse,
     ReviewsSummaryItem,
+    ReviewsListResponse,
+    ReviewDetailItem,
     FunnelSignalsResponse,
     FunnelSignalsItem,
     FunnelSignalsCategoryItem,
@@ -130,6 +132,43 @@ async def get_reviews_summary_endpoint(
     )
     return ReviewsSummaryResponse(
         items=[ReviewsSummaryItem(**r) for r in rows]
+    )
+
+
+@router.get(
+    "/projects/{project_id}/wildberries/reviews/items",
+    response_model=ReviewsListResponse,
+    summary="Reviews list for one nm_id",
+)
+async def get_reviews_list_endpoint(
+    project_id: int = Path(..., description="Project ID"),
+    nm_id: int = Query(..., description="Filter by nm_id"),
+    period_from: Optional[date] = Query(None, description="Start date (YYYY-MM-DD)"),
+    period_to: Optional[date] = Query(None, description="End date (YYYY-MM-DD)"),
+    limit: int = Query(20, ge=1, le=100, description="Items per page"),
+    offset: int = Query(0, ge=0, description="Offset"),
+    _member=Depends(get_project_membership),
+):
+    """Detailed reviews feed for a product, including archive and seller answers."""
+    if (period_from is None) != (period_to is None):
+        raise HTTPException(
+            status_code=400,
+            detail="Specify both period_from and period_to, or leave both empty",
+        )
+    payload = list_reviews_by_nm_id(
+        project_id=project_id,
+        nm_id=nm_id,
+        period_from=period_from,
+        period_to=period_to,
+        limit=limit,
+        offset=offset,
+    )
+    return ReviewsListResponse(
+        items=[ReviewDetailItem(**r) for r in payload["items"]],
+        total=payload["total"],
+        limit=payload["limit"],
+        offset=payload["offset"],
+        has_more=payload["has_more"],
     )
 
 

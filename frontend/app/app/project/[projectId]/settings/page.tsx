@@ -166,6 +166,11 @@ export default function ProjectSettingsPage({ params }: { params: { projectId: s
         last_run_at: s.last_run_at,
         last_status: s.last_status,
         is_running: s.is_running,
+        progress_current: s.progress_current,
+        progress_total: s.progress_total,
+        progress_pct: s.progress_pct,
+        progress_text: s.progress_text,
+        progress_detail: s.progress_detail,
       }))
     )
   }
@@ -243,7 +248,10 @@ export default function ProjectSettingsPage({ params }: { params: { projectId: s
     }
 
     // For other jobs, run immediately
-    await runIngestWithParams(jobCode)
+    await runIngestWithParams(
+      jobCode,
+      jobCode === 'wb_communications' ? { mode: 'reviews_full_sync' } : undefined
+    )
   }
 
   const runIngestWithParams = async (
@@ -251,7 +259,7 @@ export default function ProjectSettingsPage({ params }: { params: { projectId: s
     params?: {
       date_from?: string
       date_to?: string
-      mode?: 'daily' | 'backfill'
+      mode?: 'daily' | 'backfill' | 'reviews_full_sync'
       max_seconds?: number
       max_batches?: number
       cursor?: { date: string; nm_offset: number }
@@ -546,6 +554,40 @@ export default function ProjectSettingsPage({ params }: { params: { projectId: s
                               {status.job_code === 'frontend_prices' && (
                                 <div style={{ fontSize: '0.85rem', color: '#666', marginTop: '2px' }}>
                                   Примечание: перед загрузкой витринных цен автоматически обновляются «Цены WB» (prices).
+                                </div>
+                              )}
+                              {status.progress_text && (
+                                <div style={{ marginTop: '4px' }}>
+                                  <div style={{ fontSize: '0.85rem', color: '#374151' }}>
+                                    {status.progress_text}
+                                    {typeof status.progress_pct === 'number' ? ` (${status.progress_pct.toFixed(1)}%)` : ''}
+                                  </div>
+                                  {status.progress_detail && (
+                                    <div style={{ fontSize: '0.8rem', color: '#6b7280', marginTop: '2px' }}>
+                                      {status.progress_detail}
+                                    </div>
+                                  )}
+                                  {typeof status.progress_pct === 'number' && (
+                                    <div
+                                      style={{
+                                        marginTop: '6px',
+                                        width: '100%',
+                                        maxWidth: 260,
+                                        height: 6,
+                                        borderRadius: 999,
+                                        backgroundColor: '#e5e7eb',
+                                        overflow: 'hidden',
+                                      }}
+                                    >
+                                      <div
+                                        style={{
+                                          width: `${Math.max(0, Math.min(100, status.progress_pct))}%`,
+                                          height: '100%',
+                                          backgroundColor: '#2563eb',
+                                        }}
+                                      />
+                                    </div>
+                                  )}
                                 </div>
                               )}
                             </div>
