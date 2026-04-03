@@ -267,6 +267,7 @@ export default function ReviewsPage() {
   const [data, setData] = useState<ReviewsSummaryResponse | null>(null)
   const [expandedNmId, setExpandedNmId] = useState<number | null>(null)
   const [reviewsByNmId, setReviewsByNmId] = useState<Record<number, ReviewsListState>>({})
+  const [appliedPeriod, setAppliedPeriod] = useState<{ periodFrom?: string; periodTo?: string }>({})
 
   usePageTitle('Отзывы WB', projectId || null)
 
@@ -317,6 +318,10 @@ export default function ReviewsPage() {
         setData(res)
         setExpandedNmId(null)
         setReviewsByNmId({})
+        setAppliedPeriod({
+          periodFrom: periodFrom.trim() || undefined,
+          periodTo: periodTo.trim() || undefined,
+        })
       })
       .catch((err: any) => {
         setError(err?.detail || err?.message || 'Ошибка загрузки')
@@ -351,8 +356,8 @@ export default function ReviewsPage() {
 
       getReviewsList(projectId, {
         nm_id: nmId,
-        period_from: periodFrom.trim() || undefined,
-        period_to: periodTo.trim() || undefined,
+        period_from: appliedPeriod.periodFrom,
+        period_to: appliedPeriod.periodTo,
         limit: REVIEWS_PAGE_SIZE,
         offset,
       })
@@ -391,7 +396,7 @@ export default function ReviewsPage() {
           })
         })
     },
-    [projectId, periodFrom, periodTo]
+    [appliedPeriod.periodFrom, appliedPeriod.periodTo, projectId]
   )
 
   const toggleReviews = useCallback(
@@ -565,57 +570,300 @@ export default function ReviewsPage() {
                   </td>
                 </tr>
               ) : (
-                items.map((row, idx) => (
-                  <tr
-                    key={row.nm_id}
-                    style={{
-                      borderBottom: '1px solid #eee',
-                      backgroundColor: idx % 2 === 0 ? '#fff' : '#f8f9fa',
-                    }}
-                  >
-                    <td style={{ padding: '8px 6px' }}>
-                      <PhotoPopover photos={row.image_url ? [row.image_url] : []} size={36} />
-                    </td>
-                    <td style={{ padding: '8px 6px', overflow: 'hidden' }}>
-                      <div style={{ fontSize: 13, minWidth: 0 }}>
-                        <div
-                          style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                          title={row.vendor_code ?? undefined}
-                        >
-                          {row.vendor_code || '—'}
-                        </div>
-                        <div style={{ fontSize: 11, color: '#666' }}>
-                          <a
-                            href={`https://www.wildberries.ru/catalog/${row.nm_id}/detail.aspx`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            style={{ color: '#2563eb', textDecoration: 'none' }}
-                          >
-                            {formatNmId(row.nm_id)}
-                            <span style={{ marginLeft: 4, fontSize: 10 }}>↗</span>
-                          </a>
-                        </div>
-                      </div>
-                    </td>
-                    <td style={{ padding: '8px 6px', overflow: 'hidden' }}>
-                      <div style={{ maxWidth: '100%', minWidth: 0 }}>
-                        <div style={{ fontSize: 13 }} title={row.title ?? undefined}>
-                          {row.title ? truncate(row.title, 60) : '—'}
-                        </div>
-                        {row.wb_category && (
-                          <div style={{ fontSize: 11, color: '#777', marginTop: 2 }}>
-                            {row.wb_category}
+                items.map((row, idx) => {
+                  const isExpanded = expandedNmId === row.nm_id
+                  const reviewsState = reviewsByNmId[row.nm_id]
+                  const reviewItems = reviewsState?.items ?? []
+                  const reviewsTotal = reviewsState?.total ?? 0
+                  const reviewsHasMore = reviewsState?.hasMore ?? false
+
+                  return (
+                    <React.Fragment key={row.nm_id}>
+                      <tr
+                        style={{
+                          borderBottom: isExpanded ? 'none' : '1px solid #eee',
+                          backgroundColor: idx % 2 === 0 ? '#fff' : '#f8f9fa',
+                        }}
+                      >
+                        <td style={{ padding: '8px 6px' }}>
+                          <PhotoPopover photos={row.image_url ? [row.image_url] : []} size={36} title="Фото товара" />
+                        </td>
+                        <td style={{ padding: '8px 6px', overflow: 'hidden' }}>
+                          <div style={{ fontSize: 13, minWidth: 0 }}>
+                            <div
+                              style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                              title={row.vendor_code ?? undefined}
+                            >
+                              {row.vendor_code || '—'}
+                            </div>
+                            <div style={{ fontSize: 11, color: '#666' }}>
+                              <a
+                                href={`https://www.wildberries.ru/catalog/${row.nm_id}/detail.aspx`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                style={{ color: '#2563eb', textDecoration: 'none' }}
+                              >
+                                {formatNmId(row.nm_id)}
+                                <span style={{ marginLeft: 4, fontSize: 10 }}>↗</span>
+                              </a>
+                            </div>
                           </div>
-                        )}
-                      </div>
-                    </td>
-                    <td style={{ padding: '8px 6px', textAlign: 'right' }}>{formatInt(row.reviews_count_total)}</td>
-                    <td style={{ padding: '8px 6px', textAlign: 'right' }}>{formatRating(row.avg_rating)}</td>
-                    <td style={{ padding: '8px 6px', textAlign: 'right' }}>
-                      {showNewReviews ? formatInt(row.new_reviews) : '—'}
-                    </td>
-                  </tr>
-                ))
+                        </td>
+                        <td style={{ padding: '8px 6px', overflow: 'hidden' }}>
+                          <div style={{ maxWidth: '100%', minWidth: 0 }}>
+                            <div style={{ fontSize: 13 }} title={row.title ?? undefined}>
+                              {row.title ? truncate(row.title, 60) : '—'}
+                            </div>
+                            {row.wb_category && (
+                              <div style={{ fontSize: 11, color: '#777', marginTop: 2 }}>{row.wb_category}</div>
+                            )}
+                            <div style={{ marginTop: 8 }}>
+                              <button
+                                type="button"
+                                onClick={() => toggleReviews(row.nm_id)}
+                                disabled={reviewsState?.loadingMore}
+                                style={{
+                                  border: '1px solid #d1d5db',
+                                  background: '#fff',
+                                  borderRadius: 6,
+                                  padding: '6px 10px',
+                                  fontSize: 12,
+                                  color: '#1f2937',
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                {isExpanded ? 'Скрыть отзывы' : 'Показать отзывы'}
+                              </button>
+                            </div>
+                          </div>
+                        </td>
+                        <td style={{ padding: '8px 6px', textAlign: 'right' }}>{formatInt(row.reviews_count_total)}</td>
+                        <td style={{ padding: '8px 6px', textAlign: 'right' }}>{formatRating(row.avg_rating)}</td>
+                        <td style={{ padding: '8px 6px', textAlign: 'right' }}>
+                          {showNewReviews ? formatInt(row.new_reviews) : '—'}
+                        </td>
+                      </tr>
+                      {isExpanded && (
+                        <tr style={{ borderBottom: '1px solid #eee', backgroundColor: '#f9fafb' }}>
+                          <td colSpan={6} style={{ padding: '0 12px 12px' }}>
+                            <div
+                              style={{
+                                border: '1px solid #e5e7eb',
+                                borderRadius: 10,
+                                background: '#fff',
+                                padding: 16,
+                              }}
+                            >
+                              <div
+                                style={{
+                                  display: 'flex',
+                                  justifyContent: 'space-between',
+                                  gap: 12,
+                                  flexWrap: 'wrap',
+                                  marginBottom: 12,
+                                }}
+                              >
+                                <div style={{ fontSize: 14, fontWeight: 600, color: '#111827' }}>
+                                  Отзывы по товару
+                                </div>
+                                <div style={{ fontSize: 12, color: '#6b7280' }}>
+                                  Загружено {formatInt(reviewItems.length)} из {formatInt(reviewsTotal)}
+                                </div>
+                              </div>
+
+                              {reviewsState?.loading && !reviewsState.loaded && (
+                                <div style={{ color: '#6b7280', fontSize: 14 }}>Загружаем отзывы…</div>
+                              )}
+
+                              {reviewsState?.error && (
+                                <div
+                                  style={{
+                                    background: '#fef2f2',
+                                    color: '#991b1b',
+                                    border: '1px solid #fecaca',
+                                    borderRadius: 8,
+                                    padding: 12,
+                                    marginBottom: 12,
+                                  }}
+                                >
+                                  {reviewsState.error}
+                                </div>
+                              )}
+
+                              {reviewsState?.loaded &&
+                                !reviewsState.loading &&
+                                !reviewsState.error &&
+                                reviewItems.length === 0 && (
+                                  <div style={{ color: '#6b7280', fontSize: 14 }}>По этому товару отзывов пока нет.</div>
+                                )}
+
+                              {reviewItems.length ? (
+                                <div style={{ display: 'grid', gap: 12 }}>
+                                  {reviewItems.map((review) => (
+                                    <div
+                                      key={review.external_id}
+                                      style={{
+                                        border: '1px solid #e5e7eb',
+                                        borderRadius: 10,
+                                        padding: 14,
+                                        background: review.is_archived ? '#fafafa' : '#ffffff',
+                                      }}
+                                    >
+                                      <div
+                                        style={{
+                                          display: 'flex',
+                                          justifyContent: 'space-between',
+                                          gap: 12,
+                                          flexWrap: 'wrap',
+                                          marginBottom: 10,
+                                        }}
+                                      >
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                                          <strong style={{ fontSize: 14, color: '#111827' }}>
+                                            {review.user_name || 'Покупатель'}
+                                          </strong>
+                                          <span style={{ fontSize: 12, color: '#6b7280' }}>
+                                            {formatReviewDate(review.created_date)}
+                                          </span>
+                                          {review.is_archived && (
+                                            <span
+                                              style={{
+                                                fontSize: 11,
+                                                padding: '2px 8px',
+                                                borderRadius: 999,
+                                                background: '#f3f4f6',
+                                                color: '#4b5563',
+                                              }}
+                                            >
+                                              Архив
+                                            </span>
+                                          )}
+                                          {review.is_answered && (
+                                            <span
+                                              style={{
+                                                fontSize: 11,
+                                                padding: '2px 8px',
+                                                borderRadius: 999,
+                                                background: '#dcfce7',
+                                                color: '#166534',
+                                              }}
+                                            >
+                                              Есть ответ
+                                            </span>
+                                          )}
+                                          {review.has_media && (
+                                            <span
+                                              style={{
+                                                fontSize: 11,
+                                                padding: '2px 8px',
+                                                borderRadius: 999,
+                                                background: '#dbeafe',
+                                                color: '#1d4ed8',
+                                              }}
+                                            >
+                                              Медиа
+                                            </span>
+                                          )}
+                                        </div>
+                                        <div>{renderReviewRating(review.rating)}</div>
+                                      </div>
+
+                                      {review.text && (
+                                        <div style={{ marginBottom: 10, whiteSpace: 'pre-wrap', color: '#111827', lineHeight: 1.5 }}>
+                                          {review.text}
+                                        </div>
+                                      )}
+
+                                      {review.pros && (
+                                        <div style={{ marginBottom: 8, color: '#166534', lineHeight: 1.5 }}>
+                                          <strong>Плюсы:</strong> {review.pros}
+                                        </div>
+                                      )}
+
+                                      {review.cons && (
+                                        <div style={{ marginBottom: 8, color: '#991b1b', lineHeight: 1.5 }}>
+                                          <strong>Минусы:</strong> {review.cons}
+                                        </div>
+                                      )}
+
+                                      {!review.text && !review.pros && !review.cons && (
+                                        <div style={{ marginBottom: 10, color: '#6b7280' }}>Без текстового комментария</div>
+                                      )}
+
+                                      {(review.photo_urls.length > 0 || review.video_url) && (
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
+                                          {review.photo_urls.length > 0 && (
+                                            <PhotoPopover
+                                              photos={review.photo_urls}
+                                              size={44}
+                                              title="Фото отзыва"
+                                              emptyLabel="Нет медиа"
+                                            />
+                                          )}
+                                          {review.video_url && (
+                                            <a
+                                              href={review.video_url}
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              style={{ color: '#2563eb', fontSize: 13, textDecoration: 'none' }}
+                                            >
+                                              Видео отзыва ↗
+                                            </a>
+                                          )}
+                                        </div>
+                                      )}
+
+                                      {review.answer_text && (
+                                        <div
+                                          style={{
+                                            borderRadius: 8,
+                                            background: '#eff6ff',
+                                            border: '1px solid #bfdbfe',
+                                            padding: 12,
+                                            color: '#1e3a8a',
+                                            lineHeight: 1.5,
+                                          }}
+                                        >
+                                          <strong style={{ display: 'block', marginBottom: 4 }}>Ответ продавца</strong>
+                                          {review.answer_text}
+                                        </div>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : null}
+
+                              {reviewsHasMore && (
+                                <div style={{ marginTop: 12, display: 'flex', justifyContent: 'center' }}>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      loadReviews(row.nm_id, {
+                                        offset: reviewItems.length,
+                                        append: true,
+                                      })
+                                    }
+                                    disabled={reviewsState.loadingMore}
+                                    style={{
+                                      border: '1px solid #d1d5db',
+                                      background: '#fff',
+                                      borderRadius: 8,
+                                      padding: '8px 14px',
+                                      fontSize: 13,
+                                      cursor: 'pointer',
+                                    }}
+                                  >
+                                    {reviewsState.loadingMore ? 'Загружаем…' : 'Показать ещё отзывы'}
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  )
+                })
               )}
             </tbody>
           </table>
