@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState, useRef } from 'react'
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
-import { apiGetData, apiPost } from '@/lib/apiClient'
+import { apiDownload, apiGetData, apiPost } from '@/lib/apiClient'
 import { usePageTitle } from '@/hooks/usePageTitle'
 import CategoryMultiSelectPopover from '@/components/CategoryMultiSelectPopover'
 import PortalBackButton from '@/components/PortalBackButton'
@@ -76,6 +76,7 @@ interface PriceDiscrepancyResponse {
     page: number
     page_size: number
     updated_at: string
+    front_snapshot_at?: string | null
   }
   items: PriceDiscrepancyItem[]
   diagnostic?: DiagnosticInfo
@@ -88,12 +89,19 @@ interface CategoryOption {
   name: string | null
 }
 
+interface FrontSnapshotOption {
+  snapshot_at: string | null
+  items_count: number
+}
+
 interface FiltersState {
   q: string
   categoryIds: number[]
   hasWbStock: HasStockFilter
   hasEnterpriseStock: HasStockFilter
   onlyBelowRrp: boolean
+  showAll: boolean
+  frontSnapshotAt: string
   sort: string
   page: number
   pageSize: number
@@ -121,6 +129,8 @@ function parseFiltersFromSearchParams(searchParams: URLSearchParams): FiltersSta
   const hasEnterpriseStock = (searchParams.get('has_enterprise_stock') as HasStockFilter) || 'any'
   const onlyBelowRrpParam = searchParams.get('only_below_rrp')
   const onlyBelowRrp = onlyBelowRrpParam === null ? true : onlyBelowRrpParam === 'true'
+  const showAll = searchParams.get('show_all') === 'true'
+  const frontSnapshotAt = searchParams.get('front_snapshot_at') || ''
   const sort = searchParams.get('sort') || 'diff_rub_desc'
   const page = Number(searchParams.get('page') || '1')
   const pageSize = Number(searchParams.get('page_size') || '25')
@@ -131,6 +141,8 @@ function parseFiltersFromSearchParams(searchParams: URLSearchParams): FiltersSta
     hasWbStock,
     hasEnterpriseStock,
     onlyBelowRrp,
+    showAll,
+    frontSnapshotAt,
     sort,
     page: Number.isNaN(page) || page < 1 ? 1 : page,
     pageSize: Number.isNaN(pageSize) || pageSize <= 0 ? 25 : pageSize,
@@ -229,10 +241,13 @@ function PhotoPopover({ photos, size = 40 }: PhotoPopoverProps) {
       onMouseEnter={handleOpen}
       onMouseLeave={(e) => {
         // Закрываем только если курсор не перешёл на поповер
-        const relatedTarget = e.relatedTarget as Node | null
+        const relatedTarget = e.relatedTarget
+        if (!(relatedTarget instanceof Node)) {
+          handleClose()
+          return
+        }
         if (
           !popoverRef.current ||
-          !relatedTarget ||
           (!popoverRef.current.contains(relatedTarget) &&
             !anchorRef.current?.contains(relatedTarget))
         ) {
@@ -346,11 +361,18 @@ function PhotoPopover({ photos, size = 40 }: PhotoPopoverProps) {
 interface FiltersBarProps {
   filters: FiltersState
   categories: CategoryOption[]
+  frontSnapshots: FrontSnapshotOption[]
+  frontSnapshotsLoading: boolean
   onChange: (next: Partial<FiltersState>, resetPage?: boolean) => void
-  onExportCsv: () => void
 }
 
-function PriceDiscrepancyFilters({ filters, categories, onChange, onExportCsv }: FiltersBarProps) {
+function PriceDiscrepancyFilters({
+  filters,
+  categories,
+  frontSnapshots,
+  frontSnapshotsLoading,
+  onChange,
+}: FiltersBarProps) {
   const [searchInput, setSearchInput] = useState(filters.q)
 
   useEffect(() => {
@@ -369,95 +391,281 @@ function PriceDiscrepancyFilters({ filters, categories, onChange, onExportCsv }:
 
   return (
     <div className="card" style={{ marginTop: 16, marginBottom: 16 }}>
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          gap: 12,
-          flexWrap: 'wrap',
-          marginBottom: 8,
-        }}
-      >
+      <div style={{ marginBottom: 12 }}>
         <h2 style={{ margin: 0 }}>Фильтры</h2>
       </div>
 
       <div
+        className="pricediff-filters-layout"
         style={{
-          display: 'flex',
-          flexWrap: 'wrap',
-          gap: 12,
-          alignItems: 'center',
-          marginBottom: 8,
+          display: 'grid',
+          gridTemplateColumns: '1fr',
+          gap: 24,
         }}
       >
-        <div style={{ flex: 1, minWidth: 220 }}>
-          <input
-            type="text"
-            placeholder="Поиск по артикулу / nmID / названию"
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-            style={{ width: '100%', padding: 8, fontSize: 14 }}
-          />
+        <div className="pricediff-column pricediff-column--left" style={{ minWidth: 0 }}>
+          <div className="pricediff-field" style={{ minWidth: 0 }}>
+            <label
+              className="pricediff-label"
+              style={{ display: 'block', fontSize: 14, fontWeight: 500, marginBottom: 6 }}
+            >
+              Поиск
+            </label>
+            <input
+              type="text"
+              placeholder="Поиск по артикулу / nmID / названию"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              className="pricediff-control"
+              style={{
+                width: '100%',
+                minHeight: 40,
+                padding: '8px 12px',
+                fontSize: 14,
+                lineHeight: '20px',
+                borderRadius: 6,
+                border: '1px solid #d1d5db',
+                background: '#fff',
+                boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+              }}
+            />
+          </div>
+
+          <div
+            className="pricediff-field pricediff-field--category"
+            style={{ minWidth: 0 }}
+          >
+            <label
+              className="pricediff-label"
+              style={{ display: 'block', fontSize: 14, fontWeight: 500, marginBottom: 6 }}
+            >
+              Категория WB
+            </label>
+            {categories.length > 0 ? (
+              <CategoryMultiSelectPopover
+                categories={categories}
+                selectedIds={filters.categoryIds}
+                onChange={(ids) => onChange({ categoryIds: ids }, true)}
+                fullWidth
+              />
+            ) : (
+              <div
+                className="pricediff-control"
+                style={{
+                  width: '100%',
+                  minHeight: 40,
+                  padding: '8px 12px',
+                  fontSize: 14,
+                  lineHeight: '20px',
+                  borderRadius: 6,
+                  border: '1px solid #d1d5db',
+                  background: '#f9fafb',
+                  color: '#9ca3af',
+                  display: 'flex',
+                  alignItems: 'center',
+                }}
+              >
+                Нет данных о категориях
+              </div>
+            )}
+          </div>
         </div>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <input
-            type="checkbox"
-            checked={filters.onlyBelowRrp}
-            onChange={(e) => onChange({ onlyBelowRrp: e.target.checked }, true)}
-          />
-          Только ниже РРЦ
-        </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span>Наличие WB:</span>
-          <select
-            value={filters.hasWbStock}
-            onChange={(e) => onChange({ hasWbStock: e.target.value as HasStockFilter }, true)}
-          >
-            <option value="any">Любое</option>
-            <option value="true">Только есть</option>
-            <option value="false">Только нет</option>
-          </select>
-        </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span>Наличие склад:</span>
-          <select
-            value={filters.hasEnterpriseStock}
-            onChange={(e) =>
-              onChange({ hasEnterpriseStock: e.target.value as HasStockFilter }, true)
-            }
-          >
-            <option value="any">Любое</option>
-            <option value="true">Только есть</option>
-            <option value="false">Только нет</option>
-          </select>
-        </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span>Сортировка:</span>
-          <select
-            value={filters.sort}
-            onChange={(e) => onChange({ sort: e.target.value }, true)}
-          >
-            <option value="diff_rub_desc">Δ ₽ (убывание)</option>
-            <option value="diff_rub_asc">Δ ₽ (возрастание)</option>
-            <option value="diff_percent_desc">Δ % (убывание)</option>
-            <option value="diff_percent_asc">Δ % (возрастание)</option>
-            <option value="rrp_price_desc">РРЦ (убывание)</option>
-            <option value="rrp_price_asc">РРЦ (возрастание)</option>
-            <option value="showcase_price_desc">Витрина (убывание)</option>
-            <option value="showcase_price_asc">Витрина (возрастание)</option>
-            <option value="nm_id_desc">nmID (убывание)</option>
-            <option value="nm_id_asc">nmID (возрастание)</option>
-          </select>
-        </label>
-        {categories.length > 0 && (
-          <CategoryMultiSelectPopover
-            categories={categories}
-            selectedIds={filters.categoryIds}
-            onChange={(ids) => onChange({ categoryIds: ids }, true)}
-          />
-        )}
+
+        <div className="pricediff-column pricediff-column--center" style={{ minWidth: 0 }}>
+          <div className="pricediff-field" style={{ minWidth: 0 }}>
+            <label
+              className="pricediff-label"
+              style={{ display: 'block', fontSize: 14, fontWeight: 500, marginBottom: 6 }}
+            >
+              Сортировка
+            </label>
+            <select
+              value={filters.sort}
+              onChange={(e) => onChange({ sort: e.target.value }, true)}
+              className="pricediff-control"
+              style={{
+                width: '100%',
+                minHeight: 40,
+                padding: '8px 12px',
+                fontSize: 14,
+                lineHeight: '20px',
+                borderRadius: 6,
+                border: '1px solid #d1d5db',
+                background: '#fff',
+                boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+              }}
+            >
+              <option value="diff_rub_desc">Δ ₽ (убывание)</option>
+              <option value="diff_rub_asc">Δ ₽ (возрастание)</option>
+              <option value="diff_percent_desc">Δ % (убывание)</option>
+              <option value="diff_percent_asc">Δ % (возрастание)</option>
+              <option value="rrp_price_desc">РРЦ (убывание)</option>
+              <option value="rrp_price_asc">РРЦ (возрастание)</option>
+              <option value="showcase_price_desc">Витрина (убывание)</option>
+              <option value="showcase_price_asc">Витрина (возрастание)</option>
+              <option value="nm_id_desc">nmID (убывание)</option>
+              <option value="nm_id_asc">nmID (возрастание)</option>
+            </select>
+          </div>
+
+          <div className="pricediff-checkbox-row">
+            <label className="pricediff-checkbox">
+              <input
+                type="checkbox"
+                checked={filters.hasWbStock === 'true'}
+                onChange={(e) =>
+                  onChange({ hasWbStock: e.target.checked ? 'true' : 'any' }, true)
+                }
+                style={{ width: 16, height: 16 }}
+              />
+              Только товары с cart &gt; 0
+            </label>
+
+            <label className="pricediff-checkbox">
+              <input
+                type="checkbox"
+                checked={filters.hasEnterpriseStock === 'true'}
+                onChange={(e) =>
+                  onChange({ hasEnterpriseStock: e.target.checked ? 'true' : 'any' }, true)
+                }
+                style={{ width: 16, height: 16 }}
+              />
+              Наличие склада &gt; 0
+            </label>
+
+            <label className="pricediff-checkbox">
+              <input
+                type="checkbox"
+                checked={filters.onlyBelowRrp}
+                onChange={(e) => onChange({ onlyBelowRrp: e.target.checked }, true)}
+                style={{ width: 16, height: 16 }}
+              />
+              Только ниже РРЦ
+            </label>
+          </div>
+        </div>
+
+        <div className="pricediff-column pricediff-column--right" style={{ minWidth: 0 }}>
+          <div className="pricediff-field" style={{ minWidth: 0 }}>
+            <label
+              className="pricediff-label"
+              style={{ display: 'block', fontSize: 14, fontWeight: 500, marginBottom: 6 }}
+            >
+              Витрина WB
+            </label>
+            <select
+              value={filters.frontSnapshotAt}
+              onChange={(e) => onChange({ frontSnapshotAt: e.target.value }, true)}
+              className="pricediff-control"
+              disabled={frontSnapshotsLoading}
+              style={{
+                width: '100%',
+                minHeight: 40,
+                padding: '8px 12px',
+                fontSize: 14,
+                lineHeight: '20px',
+                borderRadius: 6,
+                border: '1px solid #d1d5db',
+                background: '#fff',
+                boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+              }}
+            >
+              {(() => {
+                const fmt = new Intl.NumberFormat('ru-RU')
+                const latest = frontSnapshots?.[0]
+                const latestCount =
+                  latest && typeof latest.items_count === 'number' ? fmt.format(latest.items_count) : null
+                const latestLabel = latestCount ? `Последняя (${latestCount})` : 'Последняя'
+
+                const selected = filters.frontSnapshotAt
+                const selectedExists =
+                  !selected || (frontSnapshots || []).some((s) => s.snapshot_at === selected)
+
+                const otherSnapshots = (frontSnapshots || []).slice(1).filter((s) => Boolean(s.snapshot_at))
+
+                return (
+                  <>
+                    <option value="">{latestLabel}</option>
+                    {!selectedExists && (
+                      <option value={selected}>
+                        Выбранный (вне списка): {formatDate(selected)}
+                      </option>
+                    )}
+                    {otherSnapshots.map((s) => (
+                      <option key={s.snapshot_at || ''} value={s.snapshot_at || ''}>
+                        {formatDate(s.snapshot_at)} ({fmt.format(s.items_count || 0)})
+                      </option>
+                    ))}
+                  </>
+                )
+              })()}
+            </select>
+          </div>
+        </div>
       </div>
+
+      <style jsx>{`
+        @media (min-width: 768px) {
+          .pricediff-filters-layout {
+            grid-template-columns:
+              minmax(300px, 1.3fr)
+              minmax(320px, 1fr)
+              minmax(240px, 0.75fr);
+            align-items: start;
+          }
+          .pricediff-column--left {
+            grid-column: 1;
+            grid-row: 1 / span 2;
+          }
+          .pricediff-column--center {
+            grid-column: 2;
+            grid-row: 1 / span 2;
+          }
+          .pricediff-column--right {
+            grid-column: 3;
+            grid-row: 1;
+          }
+        }
+
+        .pricediff-column {
+          display: flex;
+          flex-direction: column;
+          gap: 16px;
+        }
+
+        .pricediff-field--category {
+          max-width: 520px;
+        }
+
+        .pricediff-checkbox-row {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 18px;
+          align-items: center;
+          min-height: 40px;
+          padding-top: 36px;
+        }
+
+        .pricediff-checkbox {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          cursor: pointer;
+          font-size: 14px;
+          line-height: 1.35;
+          white-space: nowrap;
+        }
+
+        @media (max-width: 767px) {
+          .pricediff-checkbox-row {
+            padding-top: 0;
+          }
+          .pricediff-field--category {
+            max-width: none;
+          }
+        }
+      `}</style>
+
     </div>
   )
 }
@@ -624,35 +832,45 @@ function PriceDiscrepancyTable({ items }: TableProps) {
 
 interface PaginationProps {
   meta: PriceDiscrepancyResponse['meta']
+  showAll: boolean
+  loading: boolean
   onPageChange: (page: number) => void
 }
 
-function Pagination({ meta, onPageChange }: PaginationProps) {
+function Pagination({ meta, showAll, loading, onPageChange }: PaginationProps) {
   const totalPages = Math.max(1, Math.ceil(meta.total_count / meta.page_size))
 
-  if (totalPages <= 1) {
+  if (meta.total_count <= 0) {
     return null
   }
 
   return (
-    <div className="pagination">
-      <button
-        type="button"
-        onClick={() => onPageChange(Math.max(1, meta.page - 1))}
-        disabled={meta.page <= 1}
-      >
-        Предыдущая
-      </button>
-      <span>
-        Страница {meta.page} из {totalPages} (Всего: {meta.total_count})
-      </span>
-      <button
-        type="button"
-        onClick={() => onPageChange(Math.min(totalPages, meta.page + 1))}
-        disabled={meta.page >= totalPages}
-      >
-        Следующая
-      </button>
+    <div className="pagination" style={{ flexWrap: 'wrap', gap: 8 }}>
+      {!showAll ? (
+        <>
+          <button
+            type="button"
+            onClick={() => onPageChange(Math.max(1, meta.page - 1))}
+            disabled={totalPages <= 1 || meta.page <= 1}
+          >
+            Предыдущая
+          </button>
+          <span>
+            Страница {meta.page} из {totalPages} (Всего: {meta.total_count})
+          </span>
+          <button
+            type="button"
+            onClick={() => onPageChange(Math.min(totalPages, meta.page + 1))}
+            disabled={totalPages <= 1 || meta.page >= totalPages}
+          >
+            Следующая
+          </button>
+        </>
+      ) : (
+        <>
+          <span>Показаны все записи (Всего: {meta.total_count})</span>
+        </>
+      )}
     </div>
   )
 }
@@ -670,13 +888,15 @@ export default function WbPriceDiscrepanciesPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [categories, setCategories] = useState<CategoryOption[]>([])
-  const [diagnosing, setDiagnosing] = useState(false)
-  const [diagnosticMessage, setDiagnosticMessage] = useState<string | null>(null)
+  const [frontSnapshots, setFrontSnapshots] = useState<FrontSnapshotOption[]>([])
+  const [frontSnapshotsLoading, setFrontSnapshotsLoading] = useState(false)
   const [diagnosticInfo, setDiagnosticInfo] = useState<DiagnosticInfo | null>(null)
   const [buildingRrp, setBuildingRrp] = useState(false)
+  const [exportingCsv, setExportingCsv] = useState(false)
   const [rrpBuildMessage, setRrpBuildMessage] = useState<string | null>(null)
   const [reloadToken, setReloadToken] = useState(0)
   const [isReportsHost, setIsReportsHost] = useState(false)
+  const loadRequestSeqRef = useRef(0)
 
   useEffect(() => {
     if (typeof window !== 'undefined' && window.location.hostname === 'reports.zakka.ru') {
@@ -684,9 +904,10 @@ export default function WbPriceDiscrepanciesPage() {
     }
   }, [])
 
+  const searchParamsKey = searchParams.toString()
   const filters = useMemo(
-    () => parseFiltersFromSearchParams(searchParams),
-    [searchParams],
+    () => parseFiltersFromSearchParams(new URLSearchParams(searchParamsKey)),
+    [searchParamsKey],
   )
 
   const updateQuery = (patch: Partial<FiltersState>, resetPage: boolean = false) => {
@@ -705,9 +926,13 @@ export default function WbPriceDiscrepanciesPage() {
     if (catParam) current.set('category_ids', catParam)
     else current.delete('category_ids')
 
+    if (next.frontSnapshotAt) current.set('front_snapshot_at', next.frontSnapshotAt)
+    else current.delete('front_snapshot_at')
+
     current.set('has_wb_stock', next.hasWbStock)
     current.set('has_enterprise_stock', next.hasEnterpriseStock)
     current.set('only_below_rrp', String(next.onlyBelowRrp))
+    current.set('show_all', String(next.showAll))
     current.set('sort', next.sort)
     current.set('page', String(next.page))
     current.set('page_size', String(next.pageSize))
@@ -721,34 +946,80 @@ export default function WbPriceDiscrepanciesPage() {
 
   useEffect(() => {
     let cancelled = false
+    const requestSeq = ++loadRequestSeqRef.current
 
     async function loadData() {
       setLoading(true)
       setError(null)
       try {
-        const qs = new URLSearchParams()
-        if (filters.q) qs.set('q', filters.q)
-        const catsParam = buildCategoryIdsParam(filters.categoryIds)
-        if (catsParam) qs.set('category_ids', catsParam)
-        if (filters.hasWbStock !== 'any') qs.set('has_wb_stock', filters.hasWbStock)
-        if (filters.hasEnterpriseStock !== 'any') {
-          qs.set('has_enterprise_stock', filters.hasEnterpriseStock)
+        const buildBaseQuery = () => {
+          const qs = new URLSearchParams()
+          if (filters.q) qs.set('q', filters.q)
+          const catsParam = buildCategoryIdsParam(filters.categoryIds)
+          if (catsParam) qs.set('category_ids', catsParam)
+          if (filters.frontSnapshotAt) qs.set('front_snapshot_at', filters.frontSnapshotAt)
+          if (filters.hasWbStock !== 'any') qs.set('has_wb_stock', filters.hasWbStock)
+          if (filters.hasEnterpriseStock !== 'any') {
+            qs.set('has_enterprise_stock', filters.hasEnterpriseStock)
+          }
+          if (!filters.onlyBelowRrp) qs.set('only_below_rrp', 'false')
+          else qs.set('only_below_rrp', 'true')
+          qs.set('sort', filters.sort)
+          return qs
         }
-        if (!filters.onlyBelowRrp) qs.set('only_below_rrp', 'false')
-        else qs.set('only_below_rrp', 'true')
-        qs.set('sort', filters.sort)
-        qs.set('page', String(filters.page))
-        qs.set('page_size', String(filters.pageSize))
 
-        const url = `/api/v1/projects/${projectId}/wildberries/price-discrepancies?${qs.toString()}`
-        const resp = await apiGetData<PriceDiscrepancyResponse>(url)
-        if (cancelled) return
+        let resp: PriceDiscrepancyResponse
+        if (filters.showAll) {
+          const allItems: PriceDiscrepancyItem[] = []
+          const pageSize = 200
+          let page = 1
+          let totalCount = 0
+
+          while (true) {
+            const qs = buildBaseQuery()
+            qs.set('page', String(page))
+            qs.set('page_size', String(pageSize))
+            const url = `/api/v1/projects/${projectId}/wildberries/price-discrepancies?${qs.toString()}`
+            const pageResp = await apiGetData<PriceDiscrepancyResponse>(url)
+            if (cancelled) return
+
+            if (page === 1) {
+              totalCount = pageResp.meta?.total_count || 0
+            }
+
+            const items = pageResp.items || []
+            allItems.push(...items)
+
+            if (!items.length || allItems.length >= totalCount) {
+              resp = {
+                meta: {
+                  total_count: totalCount || allItems.length,
+                  page: 1,
+                  page_size: Math.max(allItems.length, 1),
+                  updated_at: pageResp.meta?.updated_at || new Date().toISOString(),
+                },
+                items: allItems,
+                diagnostic: pageResp.diagnostic,
+              }
+              break
+            }
+            page += 1
+          }
+        } else {
+          const qs = buildBaseQuery()
+          qs.set('page', String(filters.page))
+          qs.set('page_size', String(filters.pageSize))
+          const url = `/api/v1/projects/${projectId}/wildberries/price-discrepancies?${qs.toString()}`
+          resp = await apiGetData<PriceDiscrepancyResponse>(url)
+        }
+
+        if (cancelled || requestSeq !== loadRequestSeqRef.current) return
         setData(resp.items || [])
         setMeta(resp.meta)
         setDiagnosticInfo(resp.diagnostic || null)
         setError(null)
       } catch (e: any) {
-        if (cancelled) return
+        if (cancelled || requestSeq !== loadRequestSeqRef.current) return
         console.error('Failed to load price discrepancies', e)
         setError(e?.detail || e?.message || 'Не удалось загрузить данные')
         setData([])
@@ -759,7 +1030,7 @@ export default function WbPriceDiscrepanciesPage() {
           updated_at: new Date().toISOString(),
         })
       } finally {
-        if (!cancelled) {
+        if (!cancelled && requestSeq === loadRequestSeqRef.current) {
           setLoading(false)
         }
       }
@@ -769,7 +1040,7 @@ export default function WbPriceDiscrepanciesPage() {
     return () => {
       cancelled = true
     }
-  }, [projectId, filters, reloadToken])
+  }, [projectId, searchParamsKey, reloadToken])
 
   useEffect(() => {
     let cancelled = false
@@ -795,33 +1066,57 @@ export default function WbPriceDiscrepanciesPage() {
     }
   }, [projectId])
 
-  const handleExportCsv = () => {
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadFrontSnapshots() {
+      setFrontSnapshotsLoading(true)
+      try {
+        const resp = await apiGetData<{ items: FrontSnapshotOption[] }>(
+          `/api/v1/projects/${projectId}/wildberries/price-discrepancies/front-snapshots?limit=50`,
+        )
+        if (cancelled) return
+        setFrontSnapshots(resp.items || [])
+      } catch (e) {
+        if (cancelled) return
+        console.warn('Failed to load WB frontend snapshots', e)
+        setFrontSnapshots([])
+      } finally {
+        if (!cancelled) setFrontSnapshotsLoading(false)
+      }
+    }
+
+    loadFrontSnapshots()
+    return () => {
+      cancelled = true
+    }
+  }, [projectId])
+
+  const handleExportCsv = async () => {
     const current = new URLSearchParams(searchParams.toString())
     const base = `/api/v1/projects/${projectId}/wildberries/price-discrepancies/export.csv`
     const url = current.toString() ? `${base}?${current.toString()}` : base
-    if (typeof window !== 'undefined') {
-      window.location.href = url
-    }
-  }
 
-  const handleDiagnose = async () => {
-    setDiagnosing(true)
-    setDiagnosticMessage(null)
+    setExportingCsv(true)
     setError(null)
+
     try {
-      const { data: resp } = await apiPost<{ task_id: string; status: string; message: string }>(
-        `/api/v1/projects/${projectId}/wildberries/price-discrepancies/diagnose`
-      )
-      setDiagnosticMessage(
-        `Диагностика запущена (task_id: ${resp.task_id}). Проверьте логи worker для деталей.`
-      )
-      // Clear message after 5 seconds
-      setTimeout(() => setDiagnosticMessage(null), 5000)
+      const { blob, filename } = await apiDownload(url, { method: 'GET' })
+      if (typeof window === 'undefined') return
+
+      const objectUrl = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = objectUrl
+      link.download = filename || 'wb_price_discrepancies.csv'
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.setTimeout(() => window.URL.revokeObjectURL(objectUrl), 1000)
     } catch (e: any) {
-      console.error('Failed to trigger diagnostics', e)
-      setError(e?.detail || e?.message || 'Не удалось запустить диагностику')
+      console.error('Failed to export price discrepancies CSV', e)
+      setError(e?.detail || e?.message || 'Не удалось скачать CSV')
     } finally {
-      setDiagnosing(false)
+      setExportingCsv(false)
     }
   }
 
@@ -990,7 +1285,7 @@ export default function WbPriceDiscrepanciesPage() {
               fontSize: 14,
             }}
           >
-            <strong>Внимание:</strong> Отчёт пуст. Нажмите "Собрать отчёт" для диагностики данных или проверьте логи worker.
+            <strong>Внимание:</strong> Отчёт пуст. Проверьте доступность источников данных или логи worker.
           </div>
         )}
         </div>
@@ -1000,14 +1295,6 @@ export default function WbPriceDiscrepanciesPage() {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
           <h2 style={{ margin: 0 }}>Действия</h2>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <button
-              type="button"
-              onClick={handleDiagnose}
-              disabled={diagnosing}
-              style={{ minWidth: 140 }}
-            >
-              {diagnosing ? 'Запуск...' : 'Собрать отчёт'}
-            </button>
             {diagnosticInfo?.data_availability?.rrp_snapshots_count === 0 && (
               <button
                 type="button"
@@ -1018,25 +1305,28 @@ export default function WbPriceDiscrepanciesPage() {
                 {buildingRrp ? 'Запуск...' : 'Построить RRP snapshots'}
               </button>
             )}
-            <button type="button" onClick={handleExportCsv}>
-              Экспорт CSV
+            {!filters.showAll ? (
+              <button
+                type="button"
+                onClick={() => updateQuery({ showAll: true, page: 1 }, true)}
+                disabled={loading}
+              >
+                Показать все ({meta?.total_count ?? 0})
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => updateQuery({ showAll: false, page: 1 }, true)}
+                disabled={loading}
+              >
+                Вернуть пагинацию
+              </button>
+            )}
+            <button type="button" onClick={handleExportCsv} disabled={exportingCsv}>
+              {exportingCsv ? 'Экспортируем CSV…' : 'Экспорт CSV'}
             </button>
           </div>
         </div>
-        {diagnosticMessage && (
-          <div
-            style={{
-              marginTop: 12,
-              padding: 12,
-              background: '#d1fae5',
-              border: '1px solid #10b981',
-              borderRadius: 4,
-              fontSize: 14,
-            }}
-          >
-            {diagnosticMessage}
-          </div>
-        )}
         {rrpBuildMessage && (
           <div
             style={{
@@ -1056,8 +1346,9 @@ export default function WbPriceDiscrepanciesPage() {
       <PriceDiscrepancyFilters
         filters={filters}
         categories={categories}
+        frontSnapshots={frontSnapshots}
+        frontSnapshotsLoading={frontSnapshotsLoading}
         onChange={updateQuery}
-        onExportCsv={handleExportCsv}
       />
 
       {loading && <p>Загрузка данных…</p>}
@@ -1073,6 +1364,8 @@ export default function WbPriceDiscrepanciesPage() {
       {meta && (
         <Pagination
           meta={meta}
+          showAll={filters.showAll}
+          loading={loading}
           onPageChange={(page) => {
             updateQuery({ page }, false)
           }}
@@ -1081,4 +1374,3 @@ export default function WbPriceDiscrepanciesPage() {
     </div>
   )
 }
-

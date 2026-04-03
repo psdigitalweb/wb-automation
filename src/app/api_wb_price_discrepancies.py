@@ -103,6 +103,7 @@ class DiscrepancyFilters:
     only_below_rrp: bool
     has_wb_stock: Literal["any", "true", "false"]
     has_enterprise_stock: Literal["any", "true", "false"]
+    front_snapshot_at: Optional[datetime]
     sort: SortKey
     page: int
     page_size: int
@@ -144,6 +145,7 @@ def _build_discrepancies_sql(
         "offset": (filters.page - 1) * filters.page_size,
         "qpat": None,
         "category_ids": filters.category_ids or None,
+        "front_snapshot_at": filters.front_snapshot_at,
     }
 
     # Search by article / nm_id / title
@@ -214,7 +216,7 @@ def _build_discrepancies_sql(
         WHERE project_id = :project_id
     ),
     front_run AS (
-        SELECT MAX(f.snapshot_at) AS run_at
+        SELECT COALESCE(CAST(:front_snapshot_at AS timestamptz), MAX(f.snapshot_at)) AS run_at
         FROM frontend_catalog_price_snapshots f
         JOIN brand b ON b.brand_id IS NOT NULL
         WHERE f.query_type = 'brand'
@@ -285,7 +287,7 @@ def _build_discrepancies_sql(
             front_run.run_at   AS showcase_run_at,
             wb_price_latest.wb_price_updated_at
         FROM products p
-        LEFT JOIN rrp_latest ON rrp_latest.vendor_code_norm = p.vendor_code_norm
+        LEFT JOIN rrp_latest ON btrim(rrp_latest.vendor_code_norm) = btrim(p.vendor_code_norm)
         LEFT JOIN wb_price_latest ON wb_price_latest.nm_id = p.nm_id
         LEFT JOIN front_latest ON front_latest.nm_id = p.nm_id
         LEFT JOIN stock_latest ON stock_latest.nm_id = p.nm_id
@@ -475,26 +477,9 @@ def _row_to_item(row: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _get_updated_at(project_id: int) -> str:
-    """Return ISO8601 updated_at for meta based on latest snapshot timestamps.
-
-    If no data is available at all, fallback to `datetime.now(timezone.utc)`.
-    """
-    # We intentionally keep this as a separate lightweight query instead of
-    # complicating the main aggregation SQL.
+def _get_latest_front_snapshot_at(project_id: int) -> Optional[datetime]:
+    """Return the latest WB frontend (showcase) snapshot_at for the project's brand_id."""
     with engine.connect() as conn:
-        rrp_max = conn.execute(
-            text("SELECT MAX(snapshot_at) FROM rrp_snapshots WHERE project_id = :project_id"),
-            {"project_id": project_id},
-        ).scalar()
-        stock_max = conn.execute(
-            text("SELECT MAX(snapshot_at) FROM stock_snapshots WHERE project_id = :project_id"),
-            {"project_id": project_id},
-        ).scalar()
-        price_max = conn.execute(
-            text("SELECT MAX(created_at) FROM price_snapshots WHERE project_id = :project_id"),
-            {"project_id": project_id},
-        ).scalar()
         front_max = conn.execute(
             text(
                 """
@@ -509,6 +494,53 @@ def _get_updated_at(project_id: int) -> str:
             ),
             {"project_id": project_id},
         ).scalar()
+    if isinstance(front_max, datetime):
+        if front_max.tzinfo is None:
+            return front_max.replace(tzinfo=timezone.utc)
+        return front_max
+    return None
+
+
+def _get_updated_at(project_id: int, front_snapshot_at: Optional[datetime] = None) -> str:
+    """Return ISO8601 updated_at for meta based on latest snapshot timestamps.
+
+    If no data is available at all, fallback to `datetime.now(timezone.utc)`.
+    """
+    # We intentionally keep this as a separate lightweight query instead of
+    # complicating the main aggregation SQL.
+    if front_snapshot_at is not None and isinstance(front_snapshot_at, datetime):
+        if front_snapshot_at.tzinfo is None:
+            front_snapshot_at = front_snapshot_at.replace(tzinfo=timezone.utc)
+    with engine.connect() as conn:
+        rrp_max = conn.execute(
+            text("SELECT MAX(snapshot_at) FROM rrp_snapshots WHERE project_id = :project_id"),
+            {"project_id": project_id},
+        ).scalar()
+        stock_max = conn.execute(
+            text("SELECT MAX(snapshot_at) FROM stock_snapshots WHERE project_id = :project_id"),
+            {"project_id": project_id},
+        ).scalar()
+        price_max = conn.execute(
+            text("SELECT MAX(created_at) FROM price_snapshots WHERE project_id = :project_id"),
+            {"project_id": project_id},
+        ).scalar()
+        if front_snapshot_at is None:
+            front_max = conn.execute(
+                text(
+                    """
+                    SELECT MAX(f.snapshot_at)
+                    FROM frontend_catalog_price_snapshots f
+                    JOIN project_marketplaces pm ON pm.project_id = :project_id
+                    JOIN marketplaces m ON m.id = pm.marketplace_id
+                    WHERE m.code = 'wildberries'
+                      AND f.query_type = 'brand'
+                      AND f.query_value = pm.settings_json->>'brand_id'
+                    """
+                ),
+                {"project_id": project_id},
+            ).scalar()
+        else:
+            front_max = front_snapshot_at
 
     candidates = [
         ts
@@ -535,6 +567,13 @@ async def get_wb_price_discrepancies(
         description='Comma-separated WB category/subject IDs, e.g. "1,2,3"',
         example="12,34,56",
     ),
+    front_snapshot_at: Optional[datetime] = Query(
+        None,
+        description=(
+            "Use a specific WB frontend showcase snapshot_at (UTC recommended). "
+            "If omitted, the latest available snapshot is used."
+        ),
+    ),
     only_below_rrp: bool = Query(
         True,
         description="Filter: only items where showcase_price < rrp_price",
@@ -560,15 +599,21 @@ async def get_wb_price_discrepancies(
     start_time = datetime.now(timezone.utc)
     logger.info(
         f"get_wb_price_discrepancies: starting for project_id={project_id} "
-        f"page={page} page_size={page_size} only_below_rrp={only_below_rrp}"
+        f"page={page} page_size={page_size} only_below_rrp={only_below_rrp} "
+        f"front_snapshot_at={front_snapshot_at.isoformat() if front_snapshot_at else None}"
     )
     
+    if front_snapshot_at is not None and isinstance(front_snapshot_at, datetime) and front_snapshot_at.tzinfo is None:
+        # Treat naive datetimes as UTC to avoid environment-dependent casts in Postgres.
+        front_snapshot_at = front_snapshot_at.replace(tzinfo=timezone.utc)
+
     filters = DiscrepancyFilters(
         q=q,
         category_ids=_parse_category_ids(category_ids),
         only_below_rrp=only_below_rrp,
         has_wb_stock=has_wb_stock,
         has_enterprise_stock=has_enterprise_stock,
+        front_snapshot_at=front_snapshot_at,
         sort=_parse_sort(sort),
         page=page,
         page_size=page_size,
@@ -790,7 +835,7 @@ async def get_wb_price_discrepancies(
                             COUNT(front_latest.nm_id) AS products_with_frontend,
                             COUNT(CASE WHEN rrp_latest.vendor_code_norm IS NOT NULL AND front_latest.nm_id IS NOT NULL THEN 1 END) AS products_with_both
                         FROM products p
-                        LEFT JOIN rrp_latest ON rrp_latest.vendor_code_norm = p.vendor_code_norm
+                        LEFT JOIN rrp_latest ON btrim(rrp_latest.vendor_code_norm) = btrim(p.vendor_code_norm)
                         LEFT JOIN front_latest ON front_latest.nm_id = p.nm_id
                         WHERE p.project_id = :project_id AND p.vendor_code_norm IS NOT NULL
                     """),
@@ -1074,7 +1119,7 @@ async def get_wb_price_discrepancies(
                         )
                         SELECT COUNT(*) AS count
                         FROM products p
-                        LEFT JOIN rrp_latest ON rrp_latest.vendor_code_norm = p.vendor_code_norm
+                        LEFT JOIN rrp_latest ON btrim(rrp_latest.vendor_code_norm) = btrim(p.vendor_code_norm)
                         LEFT JOIN front_latest ON front_latest.nm_id = p.nm_id
                         WHERE p.project_id = :project_id
                           AND p.vendor_code_norm IS NOT NULL
@@ -1142,6 +1187,36 @@ async def get_wb_price_discrepancies(
                 if frontend_count == 0 and brand_check and brand_check.get("brand_id"):
                     diagnostic_info["issues"].append("No frontend catalog price snapshots found")
                     diagnostic_info["recommendations"].append("Run frontend prices ingestion: POST /api/v1/projects/{project_id}/ingest/run with domain='frontend_prices'")
+
+                # If a specific vitrine snapshot was requested, validate it exists for this brand.
+                if front_snapshot_at is not None and brand_check and brand_check.get("brand_id"):
+                    selected_front_count = (
+                        conn.execute(
+                            text(
+                                """
+                                SELECT COUNT(DISTINCT f.nm_id)::bigint
+                                FROM frontend_catalog_price_snapshots f
+                                WHERE f.query_type = 'brand'
+                                  AND f.query_value = :brand_id
+                                  AND f.snapshot_at = :front_snapshot_at
+                                """
+                            ),
+                            {
+                                "brand_id": str(brand_check.get("brand_id")),
+                                "front_snapshot_at": front_snapshot_at,
+                            },
+                        ).scalar()
+                        or 0
+                    )
+                    diagnostic_info["data_availability"]["front_snapshot_at_requested"] = (
+                        front_snapshot_at.isoformat() if isinstance(front_snapshot_at, datetime) else None
+                    )
+                    diagnostic_info["data_availability"]["front_snapshot_distinct_nm_id_count"] = int(selected_front_count)
+                    if int(selected_front_count) == 0:
+                        diagnostic_info["issues"].append("Requested frontend showcase snapshot not found for this brand_id")
+                        diagnostic_info["recommendations"].append(
+                            "Pick another snapshot: GET /api/v1/projects/{project_id}/wildberries/price-discrepancies/front-snapshots"
+                        )
                 
                 if products_count == 0:
                     diagnostic_info["issues"].append("No products found")
@@ -1158,7 +1233,8 @@ async def get_wb_price_discrepancies(
             # Don't fail the request if diagnostic collection fails
             diagnostic_info = None
 
-    updated_at_iso = _get_updated_at(project_id)
+    front_snapshot_at_used = front_snapshot_at or _get_latest_front_snapshot_at(project_id)
+    updated_at_iso = _get_updated_at(project_id, front_snapshot_at=front_snapshot_at_used)
 
     response = {
         "meta": {
@@ -1166,6 +1242,7 @@ async def get_wb_price_discrepancies(
             "page": page,
             "page_size": page_size,
             "updated_at": updated_at_iso,
+            "front_snapshot_at": front_snapshot_at_used.isoformat() if isinstance(front_snapshot_at_used, datetime) else None,
         },
         "items": items,
     }
@@ -1186,6 +1263,13 @@ async def export_wb_price_discrepancies_csv(
         description='Comma-separated WB category/subject IDs, e.g. "1,2,3"',
         example="12,34,56",
     ),
+    front_snapshot_at: Optional[datetime] = Query(
+        None,
+        description=(
+            "Use a specific WB frontend showcase snapshot_at (UTC recommended). "
+            "If omitted, the latest available snapshot is used."
+        ),
+    ),
     only_below_rrp: bool = Query(
         True,
         description="Filter: only items where showcase_price < rrp_price",
@@ -1200,10 +1284,13 @@ async def export_wb_price_discrepancies_csv(
         "diff_rub_desc",
         description="Sort key, e.g. diff_rub_desc, diff_percent_desc, nm_id_asc",
     ),
-    current_user: dict = Depends(get_current_active_user),
-    membership: dict = Depends(get_project_membership),
+    _auth: dict = Depends(allow_client_portal_read),
 ):
     """Export price discrepancies as CSV with current filters and sort applied."""
+    if front_snapshot_at is not None and isinstance(front_snapshot_at, datetime) and front_snapshot_at.tzinfo is None:
+        # Treat naive datetimes as UTC to avoid environment-dependent casts in Postgres.
+        front_snapshot_at = front_snapshot_at.replace(tzinfo=timezone.utc)
+
     # Reuse the same SQL builder, but remove pagination limits for export.
     filters = DiscrepancyFilters(
         q=q,
@@ -1211,6 +1298,7 @@ async def export_wb_price_discrepancies_csv(
         only_below_rrp=only_below_rrp,
         has_wb_stock=has_wb_stock,
         has_enterprise_stock=has_enterprise_stock,
+        front_snapshot_at=front_snapshot_at,
         sort=_parse_sort(sort),
         page=1,
         page_size=1000000,  # large upper bound; DB will still stream
@@ -1367,3 +1455,55 @@ async def get_wb_categories(
     return {"items": items}
 
 
+@router.get("/{project_id}/wildberries/price-discrepancies/front-snapshots")
+async def get_wb_front_price_discrepancies_snapshots(
+    project_id: int = Path(..., description="Project ID"),
+    limit: int = Query(25, ge=1, le=200, description="Max number of snapshots to return"),
+    _auth: dict = Depends(allow_client_portal_read),
+):
+    """Return available WB frontend showcase snapshot versions for the project's brand_id.
+
+    Each item contains snapshot_at + count of distinct nm_id for that snapshot.
+    """
+    sql = text(
+        """
+        WITH brand AS (
+            SELECT pm.settings_json->>'brand_id' AS brand_id
+            FROM project_marketplaces pm
+            JOIN marketplaces m ON m.id = pm.marketplace_id
+            WHERE pm.project_id = :project_id
+              AND m.code = 'wildberries'
+            LIMIT 1
+        )
+        SELECT
+            f.snapshot_at AS snapshot_at,
+            COUNT(DISTINCT f.nm_id)::bigint AS items_count
+        FROM frontend_catalog_price_snapshots f
+        JOIN brand b ON b.brand_id IS NOT NULL
+        WHERE f.query_type = 'brand'
+          AND f.query_value = b.brand_id
+        GROUP BY f.snapshot_at
+        ORDER BY f.snapshot_at DESC
+        LIMIT :limit
+        """
+    )
+    with engine.connect() as conn:
+        rows = conn.execute(sql, {"project_id": project_id, "limit": limit}).mappings().all()
+
+    items = []
+    for row in rows:
+        snapshot_at = row.get("snapshot_at")
+        if isinstance(snapshot_at, datetime):
+            if snapshot_at.tzinfo is None:
+                snapshot_at = snapshot_at.replace(tzinfo=timezone.utc)
+            snapshot_at_str = snapshot_at.isoformat()
+        else:
+            snapshot_at_str = None
+        items.append(
+            {
+                "snapshot_at": snapshot_at_str,
+                "items_count": int(row.get("items_count") or 0),
+            }
+        )
+
+    return {"items": items}

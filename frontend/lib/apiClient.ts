@@ -32,6 +32,12 @@ export interface ApiResult<T> {
   debug: ApiDebug
 }
 
+export interface ApiDownloadResult {
+  blob: Blob
+  filename: string | null
+  contentType: string | null
+}
+
 /**
  * Refresh access token using refresh token
  */
@@ -271,6 +277,136 @@ export async function apiPatch<T = any>(url: string, body?: any): Promise<ApiRes
  */
 export async function apiDelete<T = any>(url: string): Promise<ApiResult<T>> {
   return apiRequest<T>(url, { method: 'DELETE' })
+}
+
+function getFilenameFromContentDisposition(contentDisposition: string | null): string | null {
+  if (!contentDisposition) return null
+
+  const utf8Match = contentDisposition.match(/filename\*\s*=\s*UTF-8''([^;]+)/i)
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1].trim())
+    } catch {
+      return utf8Match[1].trim()
+    }
+  }
+
+  const plainMatch = contentDisposition.match(/filename\s*=\s*"?([^\";]+)"?/i)
+  return plainMatch?.[1]?.trim() || null
+}
+
+export async function apiDownload(
+  url: string,
+  options: RequestInit = {}
+): Promise<ApiDownloadResult> {
+  const apiBase = getApiBase()
+  const fullUrl = url.startsWith('http') ? url : `${apiBase}${url}`
+
+  let accessToken = getAccessToken()
+
+  const buildHeaders = () => {
+    const headers = new Headers(options.headers)
+    if (accessToken) {
+      headers.set('Authorization', `Bearer ${accessToken}`)
+    }
+    return headers
+  }
+
+  let res: Response
+  try {
+    res = await fetch(fullUrl, {
+      ...options,
+      headers: buildHeaders(),
+    })
+  } catch (fetchError: any) {
+    throw {
+      detail: fetchError?.message || 'Failed to fetch',
+      status: 0,
+      url: fullUrl,
+      bodyPreview: fetchError?.message || 'Network error',
+      isJson: false,
+      parsed: null,
+      debug: {
+        url: fullUrl,
+        status: 0,
+        bodyPreview: fetchError?.message || 'Network error',
+        isJson: false,
+        parsed: null,
+      },
+    } as ApiError
+  }
+
+  if (res.status === 401 && accessToken) {
+    const newToken = await refreshAccessToken()
+    if (newToken) {
+      accessToken = newToken
+      res = await fetch(fullUrl, {
+        ...options,
+        headers: buildHeaders(),
+      })
+    } else {
+      clearAuth()
+      if (typeof window !== 'undefined') {
+        window.location.href = '/'
+      }
+      throw {
+        detail: 'Authentication failed',
+        status: 401,
+        url: fullUrl,
+        bodyPreview: 'Authentication failed',
+        isJson: true,
+        parsed: { detail: 'Authentication failed' },
+        debug: {
+          url: fullUrl,
+          status: 401,
+          bodyPreview: 'Authentication failed',
+          isJson: true,
+          parsed: { detail: 'Authentication failed' },
+        },
+      } as ApiError
+    }
+  }
+
+  if (!res.ok) {
+    const rawText = await res.text()
+    const bodyPreview = rawText.slice(0, 500)
+    const contentType = (res.headers.get('content-type') || '').toLowerCase()
+    const isJson =
+      contentType.includes('application/json') ||
+      rawText.trim().startsWith('{') ||
+      rawText.trim().startsWith('[')
+
+    let parsed: any | null = null
+    if (rawText && isJson) {
+      try {
+        parsed = JSON.parse(rawText)
+      } catch {
+        parsed = null
+      }
+    }
+
+    throw {
+      detail: parsed?.detail || parsed?.message || `HTTP ${res.status}: ${res.statusText}`,
+      status: res.status,
+      url: fullUrl,
+      bodyPreview,
+      isJson,
+      parsed,
+      debug: {
+        url: fullUrl,
+        status: res.status,
+        bodyPreview,
+        isJson,
+        parsed,
+      },
+    } as ApiError
+  }
+
+  return {
+    blob: await res.blob(),
+    filename: getFilenameFromContentDisposition(res.headers.get('content-disposition')),
+    contentType: res.headers.get('content-type'),
+  }
 }
 
 // Convenience adapters: return only `.data` so most UI code doesn't depend on `{data, debug}`
@@ -855,6 +991,10 @@ export interface FunnelSignalsItem {
   wb_category: string | null
   image_url: string | null
   vendor_code: string | null
+  fbo_stock_qty?: number | null
+  fbo_stock_updated_at?: string | null
+  enterprise_stock_qty?: number | null
+  enterprise_stock_updated_at?: string | null
   opens: number
   carts: number
   orders: number
@@ -880,6 +1020,11 @@ export interface FunnelSignalsResponse {
   pages: number
 }
 
+export interface FunnelSignalsCategoryItem {
+  wb_category: string
+  products_cnt: number
+}
+
 export async function getFunnelSignals(
   projectId: string,
   params: {
@@ -887,6 +1032,8 @@ export async function getFunnelSignals(
     period_to: string
     min_opens?: number
     only_cart_gt0?: boolean
+    only_enterprise_gt0?: boolean
+    only_fbo_gt0?: boolean
     wb_category?: string
     signal_code?: string
     page?: number
@@ -902,6 +1049,8 @@ export async function getFunnelSignals(
     qs.set('min_opens', String(params.min_opens))
   }
   if (params.only_cart_gt0 === true) qs.set('only_cart_gt0', 'true')
+  if (params.only_enterprise_gt0 === true) qs.set('only_enterprise_gt0', 'true')
+  if (params.only_fbo_gt0 === true) qs.set('only_fbo_gt0', 'true')
   if (params.wb_category != null && params.wb_category !== '') qs.set('wb_category', params.wb_category)
   if (params.signal_code != null && params.signal_code !== '') qs.set('signal_code', params.signal_code)
   if (params.page != null && params.page >= 1) qs.set('page', String(params.page))
@@ -917,6 +1066,34 @@ export async function getFunnelSignals(
 export async function getFunnelSignalsCategories(projectId: string): Promise<string[]> {
   const res = await apiGet<string[]>(
     `/api/v1/projects/${projectId}/wildberries/analytics/funnel-signals/categories`
+  )
+  return res.data
+}
+
+export async function getFunnelSignalsCategoriesStats(
+  projectId: string,
+  params: {
+    period_from: string
+    period_to: string
+    min_opens?: number
+    only_cart_gt0?: boolean
+    only_enterprise_gt0?: boolean
+    only_fbo_gt0?: boolean
+    signal_code?: string
+  }
+): Promise<FunnelSignalsCategoryItem[]> {
+  const qs = new URLSearchParams()
+  qs.set('period_from', params.period_from)
+  qs.set('period_to', params.period_to)
+  if (params.min_opens != null && !Number.isNaN(params.min_opens)) {
+    qs.set('min_opens', String(params.min_opens))
+  }
+  if (params.only_cart_gt0 === true) qs.set('only_cart_gt0', 'true')
+  if (params.only_enterprise_gt0 === true) qs.set('only_enterprise_gt0', 'true')
+  if (params.only_fbo_gt0 === true) qs.set('only_fbo_gt0', 'true')
+  if (params.signal_code != null && params.signal_code !== '') qs.set('signal_code', params.signal_code)
+  const res = await apiGet<FunnelSignalsCategoryItem[]>(
+    `/api/v1/projects/${projectId}/wildberries/analytics/funnel-signals/categories-stats?${qs.toString()}`
   )
   return res.data
 }

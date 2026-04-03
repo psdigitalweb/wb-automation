@@ -2,7 +2,13 @@
 
 import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react'
 import { useParams } from 'next/navigation'
-import { getFunnelSignals, getFunnelSignalsCategories, type FunnelSignalsItem, type FunnelSignalsResponse } from '@/lib/apiClient'
+import {
+  getFunnelSignals,
+  getFunnelSignalsCategoriesStats,
+  type FunnelSignalsCategoryItem,
+  type FunnelSignalsItem,
+  type FunnelSignalsResponse,
+} from '@/lib/apiClient'
 import { usePageTitle } from '@/hooks/usePageTitle'
 import PortalBackButton from '@/components/PortalBackButton'
 
@@ -250,12 +256,16 @@ export default function FunnelSignalsPage() {
   const [signalFilter, setSignalFilter] = useState('')
   const [onlyCartGt0, setOnlyCartGt0] = useState(false)
   const [wbCategory, setWbCategory] = useState('')
-  const [categories, setCategories] = useState<string[]>([])
+  const [onlyEnterpriseGt0, setOnlyEnterpriseGt0] = useState(false)
+  const [onlyFboGt0, setOnlyFboGt0] = useState(false)
+  const [categories, setCategories] = useState<FunnelSignalsCategoryItem[]>([])
+  const [categoriesLoading, setCategoriesLoading] = useState(false)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(50)
-  const [sortBy, setSortBy] = useState<'potential_rub' | 'opens' | 'cart_rate' | 'order_rate' | 'revenue'>('potential_rub')
+  const [sortBy, setSortBy] = useState<'opens' | 'cart_rate' | 'cart_to_order' | 'order_rate' | 'revenue'>('opens')
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
   const [loading, setLoading] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [meta, setMeta] = useState<Pick<FunnelSignalsResponse, 'page' | 'page_size' | 'total' | 'pages'> | null>(null)
   const [data, setData] = useState<FunnelSignalsItem[] | null>(null)
@@ -263,15 +273,33 @@ export default function FunnelSignalsPage() {
 
   usePageTitle('Воронка: Сигналы', projectId || null)
 
-  useEffect(() => {
+  const loadCategories = useCallback(() => {
     if (!projectId) return
-    getFunnelSignalsCategories(projectId)
-      .then(setCategories)
+    const pf = periodFrom || defaultPeriod().period_from
+    const pt = periodTo || defaultPeriod().period_to
+    if (!pf || !pt) return
+    setCategoriesLoading(true)
+    getFunnelSignalsCategoriesStats(projectId, {
+      period_from: pf,
+      period_to: pt,
+      min_opens: minOpens,
+      only_cart_gt0: onlyCartGt0,
+      only_enterprise_gt0: onlyEnterpriseGt0,
+      only_fbo_gt0: onlyFboGt0,
+      signal_code: signalFilter || undefined,
+    })
+      .then((items) => setCategories(items || []))
       .catch(() => setCategories([]))
-  }, [projectId])
+      .finally(() => setCategoriesLoading(false))
+  }, [projectId, periodFrom, periodTo, minOpens, onlyCartGt0, onlyEnterpriseGt0, onlyFboGt0, signalFilter])
 
   const load = useCallback(
-    (pageNum: number = 1, pageSizeOverride?: number, sortOverride?: 'potential_rub' | 'opens' | 'cart_rate' | 'order_rate' | 'revenue', orderOverride?: 'asc' | 'desc') => {
+    (
+      pageNum: number = 1,
+      pageSizeOverride?: number,
+      sortOverride?: 'opens' | 'cart_rate' | 'cart_to_order' | 'order_rate' | 'revenue',
+      orderOverride?: 'asc' | 'desc'
+    ) => {
       if (!projectId) return
       const pf = periodFrom || defaultPeriod().period_from
       const pt = periodTo || defaultPeriod().period_to
@@ -289,6 +317,8 @@ export default function FunnelSignalsPage() {
         period_to: pt,
         min_opens: minOpens,
         only_cart_gt0: onlyCartGt0,
+        only_enterprise_gt0: onlyEnterpriseGt0,
+        only_fbo_gt0: onlyFboGt0,
         wb_category: wbCategory || undefined,
         signal_code: signalFilter || undefined,
         page: pageNum,
@@ -307,19 +337,39 @@ export default function FunnelSignalsPage() {
         })
         .finally(() => setLoading(false))
     },
-    [projectId, periodFrom, periodTo, minOpens, onlyCartGt0, wbCategory, signalFilter, pageSize, sortBy, sortOrder]
+    [
+      projectId,
+      periodFrom,
+      periodTo,
+      minOpens,
+      onlyCartGt0,
+      onlyEnterpriseGt0,
+      onlyFboGt0,
+      wbCategory,
+      signalFilter,
+      pageSize,
+      sortBy,
+      sortOrder,
+    ]
   )
 
   const handleApplyFilters = useCallback(() => {
     setPage(1)
     load(1)
-  }, [load])
+    loadCategories()
+  }, [load, loadCategories])
 
   useEffect(() => {
     const def = defaultPeriod()
     setPeriodFrom(def.period_from)
     setPeriodTo(def.period_to)
   }, [])
+
+  useEffect(() => {
+    if (!projectId || !periodFrom || !periodTo) return
+    const t = setTimeout(() => loadCategories(), 200)
+    return () => clearTimeout(t)
+  }, [projectId, periodFrom, periodTo, minOpens, onlyCartGt0, onlyEnterpriseGt0, onlyFboGt0, signalFilter, loadCategories])
 
   const truncate = (s: string | null | undefined, maxLen: number) => {
     if (s == null) return '—'
@@ -331,13 +381,146 @@ export default function FunnelSignalsPage() {
   const canGoPrev = (meta?.page ?? 1) > 1
   const canGoNext = (meta?.page ?? 1) < totalPages
 
-  const handleSort = (field: 'opens' | 'cart_rate' | 'order_rate' | 'revenue') => {
+  const handleSort = (field: 'opens' | 'cart_rate' | 'cart_to_order' | 'order_rate' | 'revenue') => {
     const nextOrder = sortBy === field ? (sortOrder === 'desc' ? 'asc' : 'desc') : 'desc'
     setSortBy(field)
     setSortOrder(nextOrder)
     setPage(1)
     load(1, undefined, field, nextOrder)
   }
+
+  const handleExportCsv = useCallback(async () => {
+    if (!projectId) return
+    const pf = periodFrom || defaultPeriod().period_from
+    const pt = periodTo || defaultPeriod().period_to
+    if (!pf || !pt) {
+      setError('Укажите период')
+      return
+    }
+    setExporting(true)
+    setError(null)
+    try {
+      const pageSizeExport = 500
+      const first = await getFunnelSignals(projectId, {
+        period_from: pf,
+        period_to: pt,
+        min_opens: minOpens,
+        only_cart_gt0: onlyCartGt0,
+        only_enterprise_gt0: onlyEnterpriseGt0,
+        only_fbo_gt0: onlyFboGt0,
+        wb_category: wbCategory || undefined,
+        signal_code: signalFilter || undefined,
+        page: 1,
+        page_size: pageSizeExport,
+        sort: sortBy,
+        order: sortOrder,
+      })
+      const all: FunnelSignalsItem[] = [...(first.items || [])]
+      const totalPagesExport = first.pages || 1
+      for (let p = 2; p <= totalPagesExport; p += 1) {
+        const res = await getFunnelSignals(projectId, {
+          period_from: pf,
+          period_to: pt,
+          min_opens: minOpens,
+          only_cart_gt0: onlyCartGt0,
+          only_enterprise_gt0: onlyEnterpriseGt0,
+          only_fbo_gt0: onlyFboGt0,
+          wb_category: wbCategory || undefined,
+          signal_code: signalFilter || undefined,
+          page: p,
+          page_size: pageSizeExport,
+          sort: sortBy,
+          order: sortOrder,
+        })
+        if (res.items && res.items.length > 0) all.push(...res.items)
+      }
+
+      const delim = ';'
+      const headers = [
+        'Артикул',
+        'nmID',
+        'Название',
+        'Склад',
+        'Просмотры',
+        'Корзины (шт)',
+        'Корзины %',
+        'Заказы (шт)',
+        'Конверсия в заказ',
+        'Заказы ₽',
+      ]
+
+      const esc = (v: unknown) => {
+        if (v == null) return ''
+        const s = String(v)
+        if (s.includes('"') || s.includes('\n') || s.includes('\r') || s.includes(delim)) {
+          return `"${s.replace(/\"/g, '""')}"`
+        }
+        return s
+      }
+
+      const pct1 = (value: number | null | undefined) => {
+        if (value == null || Number.isNaN(value)) return ''
+        return `${(value * 100).toFixed(1)}%`
+      }
+
+      const intRaw = (value: number | null | undefined) => {
+        if (value == null || Number.isNaN(value)) return ''
+        return String(Math.trunc(value))
+      }
+
+      const moneyRaw = (value: number | null | undefined) => {
+        if (value == null || Number.isNaN(value)) return ''
+        return String(Math.round(value))
+      }
+
+      const lines = [
+        headers.join(delim),
+        ...all.map((r) =>
+          [
+            esc(r.vendor_code ?? ''),
+            esc(r.nm_id),
+            esc(r.title ?? ''),
+            esc(intRaw(r.enterprise_stock_qty ?? null)),
+            esc(intRaw(r.opens)),
+            esc(intRaw(r.carts)),
+            esc(pct1(r.cart_rate)),
+            esc(intRaw(r.orders)),
+            esc(pct1(r.order_rate)),
+            esc(moneyRaw(r.revenue)),
+          ].join(delim)
+        ),
+      ]
+
+      const bom = '\uFEFF'
+      const csv = bom + lines.join('\n')
+      const filename = `funnel-signals_${pf}_${pt}.csv`
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+    } catch (e: any) {
+      setError(e?.detail || e?.message || 'Ошибка экспорта')
+    } finally {
+      setExporting(false)
+    }
+  }, [
+    projectId,
+    periodFrom,
+    periodTo,
+    minOpens,
+    onlyCartGt0,
+    onlyEnterpriseGt0,
+    onlyFboGt0,
+    wbCategory,
+    signalFilter,
+    sortBy,
+    sortOrder,
+  ])
 
   return (
     <div className="container">
@@ -350,7 +533,7 @@ export default function FunnelSignalsPage() {
       <div className="card mb-5">
         <div className="p-4">
           <h3 className="m-0 mb-3 text-base font-semibold">Фильтры</h3>
-          <div className="unitpnl-grid unitpnl-grid--funnel-row1 grid grid-cols-1 gap-6 md:grid-cols-[140px_140px_100px_1fr_120px] items-end">
+          <div className="unitpnl-grid unitpnl-grid--funnel-row1 grid grid-cols-1 gap-6 md:grid-cols-[140px_140px_100px_1fr_180px] items-end">
             <div className="unitpnl-col flex flex-col min-w-0">
               <label className="unitpnl-label block text-sm font-medium mb-1">Дата с</label>
               <input
@@ -399,38 +582,81 @@ export default function FunnelSignalsPage() {
                 type="button"
                 onClick={handleApplyFilters}
                 disabled={loading || !periodFrom || !periodTo}
-                className="unitpnl-btn h-10 px-6 w-full md:w-auto rounded border border-gray-300 bg-white text-sm hover:bg-gray-50 disabled:opacity-50"
+                className="unitpnl-btn funnel-side-button h-10 px-6 w-full rounded border border-gray-300 bg-white text-sm hover:bg-gray-50 disabled:opacity-50"
+                style={{ margin: 0 }}
               >
                 {loading ? 'Загрузка…' : 'Обновить'}
               </button>
             </div>
           </div>
-          <div className="unitpnl-grid unitpnl-grid--funnel-row2 grid grid-cols-1 gap-6 md:grid-cols-[140px_auto] items-end mt-4" style={{ marginTop: 15 }}>
-            <div className="unitpnl-col flex flex-col min-w-0">
+          <div
+            className="unitpnl-grid unitpnl-grid--funnel-row2 grid grid-cols-1 gap-6 md:grid-cols-[140px_140px_100px_1fr_180px] items-end"
+            style={{ marginTop: 15 }}
+          >
+            <div className="unitpnl-col flex flex-col min-w-0 funnel-row2-category">
               <label className="unitpnl-label block text-sm font-medium mb-1">Категория WB</label>
               <select
                 value={wbCategory}
                 onChange={(e) => setWbCategory(e.target.value)}
                 className="unitpnl-control h-10 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm leading-5 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                disabled={categoriesLoading}
               >
                 <option value="">Любая</option>
                 {categories.map((c) => (
-                  <option key={c} value={c}>
-                    {truncate(c, 50)}
+                  <option key={c.wb_category} value={c.wb_category}>
+                    {truncate(c.wb_category, 45)} ({c.products_cnt})
                   </option>
                 ))}
               </select>
             </div>
-            <div className="unitpnl-col unitpnl-checkbox-wrap flex items-center h-10 md:justify-start">
-              <label className="flex cursor-pointer select-none items-center text-sm leading-tight">
-                <input
-                  type="checkbox"
-                  checked={onlyCartGt0}
-                  onChange={(e) => setOnlyCartGt0(e.target.checked)}
-                  className="mr-2 rounded border-gray-300"
-                />
-                Только товары с cart &gt; 0
+            <div className="unitpnl-col funnel-row2-checks">
+              <label className="unitpnl-label block text-sm font-medium mb-1" style={{ visibility: 'hidden' }}>
+                ·
               </label>
+              <div className="funnel-checkbox-row" style={{ width: '100%' }}>
+                <label className="funnel-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={onlyCartGt0}
+                    onChange={(e) => setOnlyCartGt0(e.target.checked)}
+                    style={{ marginRight: 8 }}
+                  />
+                  Только товары с cart &gt; 0
+                </label>
+                <label className="funnel-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={onlyEnterpriseGt0}
+                    onChange={(e) => setOnlyEnterpriseGt0(e.target.checked)}
+                    style={{ marginRight: 8 }}
+                  />
+                  Наличие склад &gt; 0
+                </label>
+                <label className="funnel-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={onlyFboGt0}
+                    onChange={(e) => setOnlyFboGt0(e.target.checked)}
+                    style={{ marginRight: 8 }}
+                  />
+                  Наличие FBO &gt; 0
+                </label>
+              </div>
+            </div>
+            <div className="unitpnl-col funnel-row2-export">
+              <label className="unitpnl-label block text-sm font-medium mb-1" style={{ visibility: 'hidden' }}>
+                ·
+              </label>
+              <button
+                type="button"
+                onClick={handleExportCsv}
+                disabled={exporting || loading || !periodFrom || !periodTo}
+                className="unitpnl-btn funnel-side-button h-10 px-6 w-full rounded border border-gray-300 bg-white text-sm hover:bg-gray-50 disabled:opacity-50"
+                title="Экспорт в CSV"
+                style={{ margin: 0 }}
+              >
+                {exporting ? 'Экспорт…' : 'Экспорт CSV'}
+              </button>
             </div>
           </div>
         </div>
@@ -460,20 +686,33 @@ export default function FunnelSignalsPage() {
               <colgroup>
                 <col style={{ width: 48 }} />
                 <col style={{ width: 110 }} />
-                <col style={{ width: '18%' }} />
+                <col style={{ width: '16%' }} />
+                <col style={{ width: 70 }} />
+                <col style={{ width: 70 }} />
                 <col style={{ width: 90 }} />
-                <col style={{ width: 95 }} />
+                <col style={{ width: 85 }} />
                 <col style={{ width: 95 }} />
                 <col style={{ width: 88 }} />
+                <col style={{ width: 95 }} />
                 <col style={{ width: '12%' }} />
-                <col style={{ width: 80 }} />
-                <col style={{ width: 88 }} />
               </colgroup>
               <thead>
                 <tr style={{ borderBottom: '2px solid #dee2e6' }}>
                   <th style={{ padding: '10px 8px', textAlign: 'left', fontWeight: 600, lineHeight: 1.3 }}>Фото</th>
                   <th style={{ padding: '10px 8px', textAlign: 'left', fontWeight: 600, lineHeight: 1.3 }}>Артикул / nmID</th>
                   <th style={{ padding: '10px 8px', textAlign: 'left', fontWeight: 600, lineHeight: 1.3 }}>Название</th>
+                  <th
+                    style={{ padding: '10px 8px', textAlign: 'right', fontWeight: 600, lineHeight: 1.3 }}
+                    title="FBO: товар на складах Wildberries (не FBS)"
+                  >
+                    FBO
+                  </th>
+                  <th
+                    style={{ padding: '10px 8px', textAlign: 'right', fontWeight: 600, lineHeight: 1.3 }}
+                    title="Остаток предприятия из каталога/РРЦ (если загружено)"
+                  >
+                    Склад
+                  </th>
                   <th
                     style={{
                       padding: '10px 8px',
@@ -490,7 +729,7 @@ export default function FunnelSignalsPage() {
                     onClick={() => handleSort('opens')}
                     title="Сортировать по просмотрам"
                   >
-                    Просмотры карточки
+                    Просмотры
                     {sortBy === 'opens' && <span style={{ marginLeft: 4, fontSize: 10 }}>{sortOrder === 'asc' ? '↑' : '↓'}</span>}
                   </th>
                   <th
@@ -507,10 +746,31 @@ export default function FunnelSignalsPage() {
                       color: sortBy === 'cart_rate' ? '#0ea5e9' : 'inherit',
                     }}
                     onClick={() => handleSort('cart_rate')}
-                    title="Сортировать по добавлениям в корзину"
+                    title="Сортировать по корзинам (cart/opens)"
                   >
-                    Добавления в корзину
+                    Корзины
                     {sortBy === 'cart_rate' && <span style={{ marginLeft: 4, fontSize: 10 }}>{sortOrder === 'asc' ? '↑' : '↓'}</span>}
+                  </th>
+                  <th
+                    style={{
+                      padding: '10px 8px',
+                      textAlign: 'right',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      userSelect: 'none',
+                      whiteSpace: 'normal',
+                      lineHeight: 1.3,
+                      wordBreak: 'break-word',
+                      overflowWrap: 'break-word',
+                      color: sortBy === 'cart_to_order' ? '#0ea5e9' : 'inherit',
+                    }}
+                    onClick={() => handleSort('cart_to_order')}
+                    title="Сортировать по конверсии корзина→заказ"
+                  >
+                    Корзины → Заказ
+                    {sortBy === 'cart_to_order' && (
+                      <span style={{ marginLeft: 4, fontSize: 10 }}>{sortOrder === 'asc' ? '↑' : '↓'}</span>
+                    )}
                   </th>
                   <th
                     style={{
@@ -551,14 +811,12 @@ export default function FunnelSignalsPage() {
                     {sortBy === 'revenue' && <span style={{ marginLeft: 4, fontSize: 10 }}>{sortOrder === 'asc' ? '↑' : '↓'}</span>}
                   </th>
                   <th style={{ padding: '10px 8px', textAlign: 'left', fontWeight: 600, lineHeight: 1.3 }}>Сигнал</th>
-                  <th style={{ padding: '10px 8px', textAlign: 'right', fontWeight: 600, lineHeight: 1.3 }}>Potential ₽</th>
-                  <th style={{ padding: '10px 8px', textAlign: 'center', fontWeight: 600, lineHeight: 1.3 }}>Критичность</th>
                 </tr>
               </thead>
               <tbody>
                 {data.length === 0 ? (
                   <tr>
-                    <td colSpan={10} style={{ padding: 24, textAlign: 'center', color: '#6b7280' }}>
+                    <td colSpan={11} style={{ padding: 24, textAlign: 'center', color: '#6b7280' }}>
                       Нет данных за выбранный период
                     </td>
                   </tr>
@@ -619,18 +877,27 @@ export default function FunnelSignalsPage() {
                           )}
                         </div>
                       </td>
+                      <td
+                        style={{ padding: '8px 6px', textAlign: 'right' }}
+                        title={row.fbo_stock_updated_at ? `Обновлено: ${new Date(row.fbo_stock_updated_at).toLocaleString('ru-RU')}` : ''}
+                      >
+                        {formatInt(row.fbo_stock_qty)}
+                      </td>
+                      <td
+                        style={{ padding: '8px 6px', textAlign: 'right' }}
+                        title={row.enterprise_stock_updated_at ? `Обновлено: ${new Date(row.enterprise_stock_updated_at).toLocaleString('ru-RU')}` : ''}
+                      >
+                        {formatInt(row.enterprise_stock_qty)}
+                      </td>
                       <td style={{ padding: '8px 6px', textAlign: 'right' }}>{formatInt(row.opens)}</td>
                       <td style={{ padding: '8px 6px', textAlign: 'right' }}>{formatPct(row.cart_rate)}</td>
+                      <td style={{ padding: '8px 6px', textAlign: 'right' }}>{formatPct(row.cart_to_order)}</td>
                       <td style={{ padding: '8px 6px', textAlign: 'right' }}>{formatPct(row.order_rate)}</td>
                       <td style={{ padding: '8px 6px', textAlign: 'right' }}>{formatRUB(row.revenue)}</td>
                       <td style={{ padding: '8px 6px', overflow: 'hidden' }} title={row.signal_label}>
                         <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {row.signal_label}
                         </span>
-                      </td>
-                      <td style={{ padding: '8px 6px', textAlign: 'right' }}>{formatRUB(row.potential_rub)}</td>
-                      <td style={{ padding: '8px 6px', textAlign: 'center' }}>
-                        <SeverityBadge severity={row.severity} />
                       </td>
                     </tr>
                   ))
@@ -795,6 +1062,28 @@ export default function FunnelSignalsPage() {
                 <dt style={{ margin: 0, fontSize: 12, color: '#6b7280' }}>Сигнал</dt>
                 <dd style={{ margin: '2px 0 0', fontWeight: 500 }}>{drawerRow.signal_label}</dd>
               </div>
+              <div>
+                <dt style={{ margin: 0, fontSize: 12, color: '#6b7280' }}>Остаток WB (FBO)</dt>
+                <dd style={{ margin: '2px 0 0' }}>
+                  {formatInt(drawerRow.fbo_stock_qty)}{' '}
+                  {drawerRow.fbo_stock_updated_at ? (
+                    <span style={{ fontSize: 12, color: '#6b7280' }}>
+                      (обновлено {new Date(drawerRow.fbo_stock_updated_at).toLocaleString('ru-RU')})
+                    </span>
+                  ) : null}
+                </dd>
+              </div>
+              <div>
+                <dt style={{ margin: 0, fontSize: 12, color: '#6b7280' }}>Остаток предприятия</dt>
+                <dd style={{ margin: '2px 0 0' }}>
+                  {formatInt(drawerRow.enterprise_stock_qty)}{' '}
+                  {drawerRow.enterprise_stock_updated_at ? (
+                    <span style={{ fontSize: 12, color: '#6b7280' }}>
+                      (обновлено {new Date(drawerRow.enterprise_stock_updated_at).toLocaleString('ru-RU')})
+                    </span>
+                  ) : null}
+                </dd>
+              </div>
               {drawerRow.signal_details && (
                 <div>
                   <dt style={{ margin: 0, fontSize: 12, color: '#6b7280' }}>Детали</dt>
@@ -806,7 +1095,7 @@ export default function FunnelSignalsPage() {
                 <dd style={{ margin: '2px 0 0' }}>{formatInt(drawerRow.opens)}</dd>
               </div>
               <div>
-                <dt style={{ margin: 0, fontSize: 12, color: '#6b7280' }}>Добавления в корзину</dt>
+                <dt style={{ margin: 0, fontSize: 12, color: '#6b7280' }}>Корзины</dt>
                 <dd style={{ margin: '2px 0 0' }}>{formatPct(drawerRow.cart_rate)}</dd>
               </div>
               <div>
@@ -877,12 +1166,47 @@ export default function FunnelSignalsPage() {
           align-items: center;
           min-height: 40px;
         }
+        .funnel-checkbox-row {
+          display: flex;
+          align-items: center;
+          gap: 20px;
+          height: 40px;
+          flex-wrap: nowrap;
+          width: 100%;
+          overflow: visible;
+        }
+        .funnel-checkbox {
+          display: flex;
+          align-items: center;
+          white-space: nowrap;
+          font-size: 14px;
+          line-height: 20px;
+          cursor: pointer;
+          user-select: none;
+          min-width: 0;
+        }
+        .funnel-side-button {
+          width: 180px !important;
+          min-width: 180px !important;
+          max-width: 180px !important;
+          height: 40px !important;
+          box-sizing: border-box;
+        }
         @media (min-width: 768px) {
           .unitpnl-grid--funnel-row1 {
-            grid-template-columns: minmax(120px, 140px) minmax(120px, 140px) minmax(80px, 100px) minmax(140px, 1fr) 120px;
+            grid-template-columns: minmax(120px, 140px) minmax(120px, 140px) minmax(80px, 100px) minmax(140px, 1fr) minmax(160px, 180px);
           }
           .unitpnl-grid--funnel-row2 {
-            grid-template-columns: minmax(120px, 140px) auto;
+            grid-template-columns: minmax(120px, 140px) minmax(120px, 140px) minmax(80px, 100px) minmax(140px, 1fr) minmax(160px, 180px);
+          }
+          .funnel-row2-category {
+            grid-column: 1 / span 3;
+          }
+          .funnel-row2-checks {
+            grid-column: 4;
+          }
+          .funnel-row2-export {
+            grid-column: 5;
           }
           .unitpnl-actions {
             justify-content: flex-end;

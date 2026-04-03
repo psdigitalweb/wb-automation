@@ -55,6 +55,10 @@ class FunnelSignalsItem(BaseModel):
     wb_category: Optional[str] = None
     image_url: Optional[str] = None
     vendor_code: Optional[str] = None
+    fbo_stock_qty: Optional[int] = None
+    fbo_stock_updated_at: Optional[str] = None
+    enterprise_stock_qty: Optional[int] = None
+    enterprise_stock_updated_at: Optional[str] = None
     opens: int
     carts: int
     orders: int
@@ -79,6 +83,11 @@ class FunnelSignalsResponse(BaseModel):
     page_size: int = 50
     total: int = 0
     pages: int = 0
+
+
+class FunnelSignalsCategoryItem(BaseModel):
+    wb_category: str
+    products_cnt: int
 
 
 class WBProductLookupItem(BaseModel):

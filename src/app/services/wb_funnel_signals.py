@@ -337,6 +337,7 @@ def compute_funnel_signals(
             "wb_category": row.get("wb_category"),
             "image_url": row.get("image_url"),
             "vendor_code": row.get("vendor_code"),
+            "vendor_code_norm": row.get("vendor_code_norm"),
             "signal_code": row["_signal_code"],
             "signal": signal_display.get(row["_signal_code"], row["_signal_code"]),
             "signal_label": signal_label_display.get(row["_signal_code"], row["_signal_code"]),

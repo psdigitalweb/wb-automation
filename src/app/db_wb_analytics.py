@@ -296,7 +296,8 @@ def get_funnel_signals_raw(
             p.title AS product_title,
             p.subject_name AS wb_category,
             p.pics AS pics,
-            p.vendor_code AS vendor_code
+            p.vendor_code AS vendor_code,
+            p.vendor_code_norm AS vendor_code_norm
         FROM agg
         LEFT JOIN products p ON p.project_id = :project_id AND p.nm_id = agg.nm_id{join_filter}
         WHERE 1=1{where_category}
@@ -326,6 +327,7 @@ def get_funnel_signals_raw(
         wb_cat = r[6] if r[6] is not None else None
         pics = r[7]
         vendor_code = r[8] if len(r) > 8 and r[8] is not None else None
+        vendor_code_norm = r[9] if len(r) > 9 and r[9] is not None else None
         image_url = _first_image_url_from_pics(pics)
         result.append({
             "nm_id": nm_id,
@@ -341,6 +343,7 @@ def get_funnel_signals_raw(
             "wb_category": wb_cat,
             "image_url": image_url,
             "vendor_code": vendor_code,
+            "vendor_code_norm": vendor_code_norm,
         })
     return result
 
