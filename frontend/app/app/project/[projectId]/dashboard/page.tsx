@@ -707,6 +707,67 @@ export default function ProjectDashboard() {
                   </Link>
 
                   <Link
+                    href={`/app/project/${projectId}/wildberries/hypothesis-lab/experiments`}
+                    style={{ textDecoration: 'none', color: 'inherit', display: 'block', minHeight: 0 }}
+                  >
+                    <div
+                      className="card"
+                      style={{
+                        padding: 16,
+                        border: '1px solid #e5e7eb',
+                        borderRadius: 8,
+                        background: '#fff',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 8,
+                        height: '100%',
+                        minHeight: 0,
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.borderColor = '#d1d5db'
+                        e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.05)'
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.borderColor = '#e5e7eb'
+                        e.currentTarget.style.boxShadow = 'none'
+                      }}
+                    >
+                      <div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+                          <div style={{ fontSize: 20, flexShrink: 0 }}>🧪</div>
+                          <div style={{ fontSize: 18, fontWeight: 600, color: '#111827' }}>
+                            Hypothesis Lab — Эксперименты
+                          </div>
+                        </div>
+                        <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6, marginLeft: 30 }}>
+                          A/B эксперименты: 1 TEST SKU, контроль по subject_id, DiD / before-after
+                        </div>
+                        <div style={{ fontSize: 13, color: '#374151', marginBottom: 8, marginLeft: 30 }}>
+                          Создание экспериментов, запуск, подтверждение изменения, результаты
+                        </div>
+                      </div>
+                      <div
+                        style={{
+                          marginTop: 'auto',
+                          fontSize: 13,
+                          color: '#2563eb',
+                          fontWeight: 500,
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.textDecoration = 'underline'
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.textDecoration = 'none'
+                        }}
+                      >
+                        Открыть эксперименты →
+                      </div>
+                    </div>
+                  </Link>
+
+                  <Link
                     href={`/app/project/${projectId}/wildberries/search-report`}
                     style={{ textDecoration: 'none', color: 'inherit', display: 'block', minHeight: 0 }}
                   >
