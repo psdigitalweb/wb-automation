@@ -1097,3 +1097,50 @@ export async function getFunnelSignalsCategoriesStats(
   )
   return res.data
 }
+
+// Hypotheses MVP
+export interface HypothesisLatestVersion {
+  id: number
+  version: number
+  primary_metric_key: string | null
+}
+
+export interface HypothesisMvpItem {
+  id: number
+  key: string
+  title: string | null
+  description?: string | null
+  domain: string | null
+  hypothesis_type?: string | null
+  status: string
+  created_at: string | null
+  updated_at: string | null
+  latest_version?: HypothesisLatestVersion | null
+}
+
+export async function getHypothesesMvp(params?: {
+  query?: string
+  limit?: number
+  status?: string
+}): Promise<HypothesisMvpItem[]> {
+  const qs = new URLSearchParams()
+  if (params?.query) qs.set('query', params.query)
+  if (params?.limit != null) qs.set('limit', String(params.limit))
+  if (params?.status) qs.set('status', params.status)
+  const suffix = qs.toString() ? `?${qs.toString()}` : ''
+  const res = await apiGet<HypothesisMvpItem[]>(`/api/v1/hypotheses${suffix}`)
+  return res.data
+}
+
+export async function createHypothesis(body: {
+  key: string
+  title: string
+  description?: string
+  domain?: string
+  hypothesis_type?: string
+  hypothesis_text?: string
+  primary_metric_key?: string
+}): Promise<HypothesisMvpItem> {
+  const res = await apiPost<HypothesisMvpItem>('/api/v1/hypotheses', body)
+  return res.data
+}
