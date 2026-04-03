@@ -1144,3 +1144,131 @@ export async function createHypothesis(body: {
   const res = await apiPost<HypothesisMvpItem>('/api/v1/hypotheses', body)
   return res.data
 }
+
+export interface HypothesisExperimentListItem {
+  id: number
+  project_id: number
+  hypothesis_id: number
+  nm_id: number
+  change_type: string
+  change_note: string
+  metric: string
+  control_mode: string
+  controls_count: number | null
+  status: string
+  period_start: string | null
+  period_end: string | null
+  created_at: string | null
+  updated_at: string | null
+  hypothesis_title: string | null
+  product_title: string | null
+}
+
+export interface HypothesisExperimentRun {
+  id: number
+  experiment_id: number
+  started_at: string | null
+  change_confirmed_at: string | null
+  ended_at: string | null
+  status: string
+}
+
+export interface HypothesisExperimentResult {
+  id: number
+  run_id: number
+  control_mode: string
+  did_effect: number | null
+  p_value: number | null
+  ci_low: number | null
+  ci_high: number | null
+  pretrend_pass: boolean | null
+  before_after_delta: number | null
+  computed_at: string | null
+}
+
+export interface HypothesisExperimentDetail extends HypothesisExperimentListItem {
+  runs: HypothesisExperimentRun[]
+  latest_result: HypothesisExperimentResult | null
+}
+
+export async function getHypothesisExperiments(
+  projectId: string,
+  params?: {
+    status?: string
+    metric?: string
+    hypothesis_id?: number
+    nm_id?: number
+    query?: string
+    limit?: number
+  }
+): Promise<HypothesisExperimentListItem[]> {
+  const qs = new URLSearchParams()
+  if (params?.status) qs.set('status', params.status)
+  if (params?.metric) qs.set('metric', params.metric)
+  if (params?.hypothesis_id != null) qs.set('hypothesis_id', String(params.hypothesis_id))
+  if (params?.nm_id != null) qs.set('nm_id', String(params.nm_id))
+  if (params?.query) qs.set('query', params.query)
+  if (params?.limit != null) qs.set('limit', String(params.limit))
+  const suffix = qs.toString() ? `?${qs.toString()}` : ''
+  const res = await apiGet<HypothesisExperimentListItem[]>(
+    `/api/v1/projects/${projectId}/hypothesis/experiments${suffix}`
+  )
+  return res.data
+}
+
+export async function createHypothesisExperiment(
+  projectId: string,
+  body: {
+    hypothesis_id: number
+    nm_id: number
+    change_type: string
+    change_note: string
+    metric: string
+  }
+): Promise<HypothesisExperimentListItem> {
+  const res = await apiPost<HypothesisExperimentListItem>(
+    `/api/v1/projects/${projectId}/hypothesis/experiments`,
+    body
+  )
+  return res.data
+}
+
+export async function getHypothesisExperimentDetail(
+  projectId: string,
+  experimentId: number
+): Promise<HypothesisExperimentDetail> {
+  const res = await apiGet<HypothesisExperimentDetail>(
+    `/api/v1/projects/${projectId}/hypothesis/experiments/${experimentId}`
+  )
+  return res.data
+}
+
+export async function startHypothesisExperiment(
+  projectId: string,
+  experimentId: number
+): Promise<HypothesisExperimentListItem> {
+  const res = await apiPost<HypothesisExperimentListItem>(
+    `/api/v1/projects/${projectId}/hypothesis/experiments/${experimentId}/start`
+  )
+  return res.data
+}
+
+export async function confirmHypothesisRun(
+  projectId: string,
+  runId: number
+): Promise<{ run_id: number; change_confirmed_at: string }> {
+  const res = await apiPost<{ run_id: number; change_confirmed_at: string }>(
+    `/api/v1/projects/${projectId}/hypothesis/runs/${runId}/confirm`
+  )
+  return res.data
+}
+
+export async function stopHypothesisExperiment(
+  projectId: string,
+  experimentId: number
+): Promise<HypothesisExperimentListItem> {
+  const res = await apiPost<HypothesisExperimentListItem>(
+    `/api/v1/projects/${projectId}/hypothesis/experiments/${experimentId}/stop`
+  )
+  return res.data
+}

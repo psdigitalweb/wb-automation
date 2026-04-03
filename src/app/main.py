@@ -31,7 +31,7 @@ from app.routers.ingest import router as ingest_router
 from app.routers.projects import router as projects_router
 from app.routers.marketplaces import router as marketplaces_router
 from app.routers.wildberries_analytics import router as wildberries_analytics_router
-from app.routers.hypothesis_mvp import router_hypotheses
+from app.routers.hypothesis_mvp import router_experiments, router_hypotheses
 from app.routers.internal_data import router as internal_data_router
 # Project-scoped proxy settings (frontend_prices)
 from app.routers.project_proxy_settings import router as project_proxy_settings_router
@@ -102,6 +102,7 @@ app.include_router(wildberries_analytics_router)
 
 # Hypotheses library (requires authentication)
 app.include_router(router_hypotheses)
+app.include_router(router_experiments)
 
 # Internal Data router (project-scoped)
 app.include_router(internal_data_router)
