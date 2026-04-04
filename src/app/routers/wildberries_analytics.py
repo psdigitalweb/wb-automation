@@ -113,6 +113,9 @@ async def get_reviews_summary_endpoint(
     vendor_code: Optional[str] = Query(None, description="Filter by vendor_code (article)"),
     wb_category: Optional[str] = Query(None, description="Filter by WB category (subject_name)"),
     rating_lte: Optional[float] = Query(None, ge=0, le=5, description="Filter by avg rating <= value"),
+    only_enterprise_gt0: bool = Query(False, description="Only products with enterprise stock > 0"),
+    only_fbo_gt0: bool = Query(False, description="Only products with FBO stock > 0"),
+    only_with_reviews_in_period: bool = Query(False, description="Only products with reviews in selected period"),
     _member=Depends(get_project_membership),
 ):
     """Avg rating, total reviews count, and new reviews in period by nm_id."""
@@ -129,6 +132,9 @@ async def get_reviews_summary_endpoint(
         vendor_code=vendor_code,
         wb_category=wb_category,
         rating_lte=rating_lte,
+        only_enterprise_gt0=only_enterprise_gt0,
+        only_fbo_gt0=only_fbo_gt0,
+        only_with_reviews_in_period=only_with_reviews_in_period,
     )
     return ReviewsSummaryResponse(
         items=[ReviewsSummaryItem(**r) for r in rows]

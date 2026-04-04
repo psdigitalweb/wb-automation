@@ -386,7 +386,8 @@ async def get_wb_ingest_status(
         stats = run.get("stats_json") or {}
         if not isinstance(stats, dict):
             return {}
-        if (stats.get("mode") or "").strip().lower() != "reviews_full_sync":
+        mode = (stats.get("mode") or "").strip().lower()
+        if mode not in ("reviews_full_sync", "reviews_incremental_all_nm_ids"):
             return {}
         try:
             current = int(stats.get("nm_ids_processed") or 0)
@@ -403,6 +404,8 @@ async def get_wb_ingest_status(
         feedbacks_upserted = stats.get("feedbacks_upserted")
         if feedbacks_upserted is not None:
             detail_parts.append(f"Отзывы: {feedbacks_upserted}")
+        if mode == "reviews_incremental_all_nm_ids":
+            detail_parts.append("Режим: догрузка нового по всем товарам")
         phase_label = stats.get("phase_label")
         if phase_label:
             detail_parts.append(str(phase_label))
@@ -460,6 +463,11 @@ async def get_wb_ingest_status(
             if last_run.get("status") in ("running", "queued"):
                 last_status = last_run.get("status")
         progress = _extract_progress(active_run or last_run)
+        active_params = active_run.get("params_json") if isinstance(active_run, dict) else None
+        active_mode = None
+        if isinstance(active_params, dict):
+            raw_mode = active_params.get("mode")
+            active_mode = str(raw_mode) if raw_mode is not None else None
         
         result.append(
             WBIngestStatusResponse(
@@ -470,6 +478,8 @@ async def get_wb_ingest_status(
                 last_run_at=last_run_at,
                 last_status=last_status,
                 is_running=is_running,
+                active_run_id=active_run.get("id") if active_run else None,
+                active_mode=active_mode,
                 **progress,
             )
         )

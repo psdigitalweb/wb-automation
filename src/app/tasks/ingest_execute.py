@@ -23,9 +23,12 @@ from app.services.ingest.registry import execute_ingest_job, IngestJobNotFound
 from app.utils.asyncio_runner import run_async_safe
 from app.db_wb_backfill_state import (
     JOB_CODE_WB_CARD_STATS_DAILY,
+    JOB_CODE_WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS,
     JOB_CODE_WB_COMMUNICATIONS_REVIEWS_FULL_SYNC,
     MAX_AUTO_CONTINUES_PER_DAY,
+    MAX_AUTO_CONTINUES_WB_COMMUNICATIONS_INCREMENTAL_ALL_NM_IDS,
     MAX_AUTO_CONTINUES_WB_COMMUNICATIONS_FULL_SYNC,
+    WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE,
     WB_COMMUNICATIONS_REVIEWS_FULL_SYNC_STATE_DATE,
     get_backfill_state,
     try_increment_auto_continue_count,
@@ -93,6 +96,84 @@ def _maybe_schedule_wb_communications_full_sync_continuation(
     )
     params_json = {
         "mode": "reviews_full_sync",
+    }
+    if params.get("max_seconds") is not None:
+        params_json["max_seconds"] = params.get("max_seconds")
+    if params.get("max_nm_ids_per_run") is not None:
+        params_json["max_nm_ids_per_run"] = params.get("max_nm_ids_per_run")
+
+    new_run = create_run_queued(
+        project_id=project_id,
+        marketplace_code=marketplace_code,
+        job_code="wb_communications",
+        schedule_id=run.get("schedule_id"),
+        triggered_by="auto_continue",
+        params_json=params_json,
+    )
+    new_run_id = new_run["id"]
+    res = execute_ingest.delay(new_run_id)
+    set_run_celery_task_id(new_run_id, res.id)
+
+
+def _maybe_schedule_wb_communications_incremental_all_nm_ids_continuation(
+    run_id: int,
+    run: dict,
+    project_id: int,
+    marketplace_code: str,
+    stats: dict,
+) -> None:
+    """If reviews_incremental_all_nm_ids ended with progress_saved and state is paused, schedule next run."""
+    params = run.get("params_json")
+    if isinstance(params, str):
+        try:
+            params = json.loads(params) if params else {}
+        except Exception:
+            params = {}
+    if not isinstance(params, dict):
+        return
+    if (params.get("mode") or "").strip().lower() != "reviews_incremental_all_nm_ids":
+        return
+
+    range_state = get_backfill_state(
+        project_id,
+        JOB_CODE_WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS,
+        WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE,
+        WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE,
+    )
+    if not range_state:
+        return
+    status = range_state.get("status")
+    if status == "completed":
+        logger.info("wb_communications incremental_all_nm_ids auto-continue: skipped because completed")
+        return
+    if status == "running":
+        logger.info("wb_communications incremental_all_nm_ids auto-continue: skipped because already_running")
+        return
+    if status == "failed":
+        return
+    if status != "paused":
+        return
+
+    new_count = try_increment_auto_continue_count(
+        project_id,
+        JOB_CODE_WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS,
+        WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE,
+        WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE,
+        MAX_AUTO_CONTINUES_WB_COMMUNICATIONS_INCREMENTAL_ALL_NM_IDS,
+    )
+    if new_count is None:
+        logger.warning(
+            "wb_communications incremental_all_nm_ids auto-continue: stopped by max_auto_continues (limit=%s)",
+            MAX_AUTO_CONTINUES_WB_COMMUNICATIONS_INCREMENTAL_ALL_NM_IDS,
+        )
+        return
+
+    logger.info(
+        "wb_communications incremental_all_nm_ids auto-continue: scheduling next run count=%s",
+        new_count,
+    )
+    params_json = {
+        "mode": "reviews_incremental_all_nm_ids",
     }
     if params.get("max_seconds") is not None:
         params_json["max_seconds"] = params.get("max_seconds")
@@ -309,6 +390,13 @@ def execute_ingest(run_id: int) -> dict:
                 )
             if reason == "progress_saved" and job_code == "wb_communications":
                 _maybe_schedule_wb_communications_full_sync_continuation(
+                    run_id=run_id,
+                    run=run,
+                    project_id=project_id,
+                    marketplace_code=marketplace_code,
+                    stats=stats,
+                )
+                _maybe_schedule_wb_communications_incremental_all_nm_ids_continuation(
                     run_id=run_id,
                     run=run,
                     project_id=project_id,

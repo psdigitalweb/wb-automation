@@ -433,6 +433,8 @@ export interface WBIngestStatus {
   progress_pct?: number | null
   progress_text?: string | null
   progress_detail?: string | null
+  active_run_id?: number | null
+  active_mode?: string | null
 }
 
 export interface IngestRunResponse {
@@ -471,6 +473,18 @@ export async function runWBIngest(
   const res = await apiPost<IngestRunResponse>(
     `/api/v1/projects/${projectId}/ingestions/wb/${jobCode}/run`,
     body
+  )
+  return res.data
+}
+
+export async function markIngestRunTimeout(
+  projectId: string,
+  runId: number,
+  body?: { reason_code?: string; reason_text?: string }
+): Promise<IngestRunResponse> {
+  const res = await apiPost<IngestRunResponse>(
+    `/api/v1/projects/${projectId}/ingest/runs/${runId}/mark-timeout`,
+    body ?? { reason_code: 'manual', reason_text: 'Stopped from project settings UI' }
   )
   return res.data
 }
@@ -1160,6 +1174,9 @@ export async function getReviewsSummary(
     vendor_code?: string
     wb_category?: string
     rating_lte?: number
+    only_enterprise_gt0?: boolean
+    only_fbo_gt0?: boolean
+    only_with_reviews_in_period?: boolean
   }
 ): Promise<ReviewsSummaryResponse> {
   const qs = new URLSearchParams()
@@ -1169,6 +1186,9 @@ export async function getReviewsSummary(
   if (params.vendor_code != null && params.vendor_code.trim() !== '') qs.set('vendor_code', params.vendor_code.trim())
   if (params.wb_category != null && params.wb_category !== '') qs.set('wb_category', params.wb_category)
   if (params.rating_lte != null && !Number.isNaN(params.rating_lte)) qs.set('rating_lte', String(params.rating_lte))
+  if (params.only_enterprise_gt0) qs.set('only_enterprise_gt0', 'true')
+  if (params.only_fbo_gt0) qs.set('only_fbo_gt0', 'true')
+  if (params.only_with_reviews_in_period) qs.set('only_with_reviews_in_period', 'true')
   const res = await apiGet<ReviewsSummaryResponse>(
     `/api/v1/projects/${projectId}/wildberries/reviews/summary?${qs.toString()}`
   )

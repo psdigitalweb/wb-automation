@@ -19,7 +19,9 @@ from app.db_wb_analytics import get_wb_nm_ids_for_project
 from app.db_wb_backfill_state import (
     JOB_CODE_WB_COMMUNICATIONS_REVIEWS_BACKFILL,
     JOB_CODE_WB_COMMUNICATIONS_REVIEWS_FULL_SYNC,
+    JOB_CODE_WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS,
     WB_COMMUNICATIONS_REVIEWS_FULL_SYNC_STATE_DATE,
+    WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE,
     ensure_backfill_state_created,
     get_backfill_state,
     mark_backfill_state_completed,
@@ -38,11 +40,18 @@ QUESTIONS_TAKE_PLUS_SKIP_MAX = 10000
 WINDOW_DAYS = 7
 FULL_SYNC_DEFAULT_MAX_SECONDS = 20 * 60
 FULL_SYNC_DEFAULT_MAX_NM_IDS_PER_RUN = 25
+INCREMENTAL_ALL_NM_IDS_DEFAULT_MAX_SECONDS = 15 * 60
+INCREMENTAL_ALL_NM_IDS_DEFAULT_MAX_NM_IDS_PER_RUN = 100
+WATERMARK_FEEDBACK_ALL_NM_IDS = "feedback_all_nm_ids"
 FULL_SYNC_SOURCE_SPECS = (
     {"endpoint": "feedbacks", "is_archived": False, "is_answered": False, "source_endpoint": "feedbacks"},
     {"endpoint": "feedbacks", "is_archived": False, "is_answered": True, "source_endpoint": "feedbacks"},
     {"endpoint": "feedbacks_archive", "is_archived": True, "is_answered": False, "source_endpoint": "feedbacks/archive"},
     {"endpoint": "feedbacks_archive", "is_archived": True, "is_answered": True, "source_endpoint": "feedbacks/archive"},
+)
+INCREMENTAL_ALL_NM_IDS_SOURCE_SPECS = (
+    {"endpoint": "feedbacks", "is_answered": False, "source_endpoint": "feedbacks"},
+    {"endpoint": "feedbacks", "is_answered": True, "source_endpoint": "feedbacks"},
 )
 
 
@@ -92,6 +101,20 @@ def _update_watermark(project_id: int, entity_type: str, last_date_to: int, conn
         """),
         {"pid": project_id, "et": entity_type, "last_date_to": last_date_to},
     )
+
+
+def _get_latest_feedback_created_ts(project_id: int, conn) -> Optional[int]:
+    row = conn.execute(
+        text("""
+            SELECT EXTRACT(EPOCH FROM MAX(created_date))::bigint AS max_created_ts
+            FROM wb_feedback_snapshots
+            WHERE project_id = :pid
+              AND created_date IS NOT NULL
+        """),
+        {"pid": project_id},
+    ).mappings().first()
+    value = row.get("max_created_ts") if row else None
+    return int(value) if value is not None else None
 
 
 def _parse_created_date(s: Any) -> Optional[datetime]:
@@ -472,6 +495,441 @@ def _normalize_positive_int(value: Any, default: int) -> int:
     return parsed if parsed > 0 else default
 
 
+def _incremental_all_nm_ids_meta(
+    date_from_ts: int,
+    date_to_ts: int,
+    source_idx: int = 0,
+    skip: int = 0,
+    nm_id: Optional[int] = None,
+) -> Dict[str, Any]:
+    meta: Dict[str, Any] = {
+        "date_from_ts": date_from_ts,
+        "date_to_ts": date_to_ts,
+        "source_idx": source_idx,
+        "skip": skip,
+    }
+    if nm_id is not None:
+        meta["nm_id"] = nm_id
+    return meta
+
+
+async def _ingest_wb_communications_reviews_incremental_all_nm_ids(
+    project_id: int,
+    run_id: Optional[int],
+    params: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Incremental reviews sync for all project nm_ids, starting from watermark or latest loaded review date."""
+    from app.utils.get_project_marketplace_token import get_wb_token_for_project
+
+    token = get_wb_token_for_project(project_id) or os.getenv("WB_TOKEN", "")
+    if not token or token.upper() == "MOCK":
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "no_token",
+            "domain": "wb_communications",
+            "project_id": project_id,
+            "mode": "reviews_incremental_all_nm_ids",
+        }
+
+    project_nm_ids = sorted(set(get_wb_nm_ids_for_project(project_id)))
+    if not project_nm_ids:
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "no_project_nm_ids",
+            "domain": "wb_communications",
+            "project_id": project_id,
+            "mode": "reviews_incremental_all_nm_ids",
+        }
+
+    state = get_backfill_state(
+        project_id,
+        JOB_CODE_WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS,
+        WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE,
+        WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE,
+    )
+    if state and state.get("status") == "running":
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "already_running_incremental_all_nm_ids",
+            "domain": "wb_communications",
+            "project_id": project_id,
+            "mode": "reviews_incremental_all_nm_ids",
+        }
+
+    run_id = run_id or 0
+    ensure_backfill_state_created(
+        project_id,
+        JOB_CODE_WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS,
+        WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE,
+        WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE,
+        run_id,
+    )
+
+    snapshot_at = datetime.now(timezone.utc)
+    now_ts = int(snapshot_at.timestamp())
+    start_nm_index = 0
+    start_source_idx = 0
+    start_skip = 0
+    date_from_ts = 0
+    date_to_ts = now_ts
+
+    if state and state.get("status") in ("paused", "failed"):
+        try:
+            start_nm_index = max(0, int(state.get("cursor_nm_offset") or 0))
+        except (TypeError, ValueError):
+            start_nm_index = 0
+        meta = state.get("meta_json") or {}
+        try:
+            start_source_idx = max(0, int(meta.get("source_idx") or 0))
+        except (TypeError, ValueError):
+            start_source_idx = 0
+        try:
+            start_skip = max(0, int(meta.get("skip") or 0))
+        except (TypeError, ValueError):
+            start_skip = 0
+        try:
+            date_from_ts = max(0, int(meta.get("date_from_ts") or 0))
+        except (TypeError, ValueError):
+            date_from_ts = 0
+        try:
+            date_to_ts = max(0, int(meta.get("date_to_ts") or now_ts))
+        except (TypeError, ValueError):
+            date_to_ts = now_ts
+    else:
+        with engine.connect() as conn:
+            watermark = _load_watermark(project_id, WATERMARK_FEEDBACK_ALL_NM_IDS, conn)
+            latest_loaded = _get_latest_feedback_created_ts(project_id, conn)
+        base_ts = watermark if watermark is not None else latest_loaded
+        date_from_ts = max(0, (base_ts - OVERLAP_SEC)) if base_ts is not None else max(0, now_ts - 90 * 86400)
+        date_to_ts = now_ts
+
+    if date_from_ts >= date_to_ts:
+        with engine.begin() as conn:
+            _update_watermark(project_id, WATERMARK_FEEDBACK_ALL_NM_IDS, date_to_ts, conn)
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "already_up_to_date",
+            "domain": "wb_communications",
+            "project_id": project_id,
+            "mode": "reviews_incremental_all_nm_ids",
+            "date_from_ts": date_from_ts,
+            "date_to_ts": date_to_ts,
+        }
+
+    use_sandbox = _get_use_sandbox(project_id)
+    client = WBCommunicationsClient(token=token, use_sandbox=use_sandbox)
+    started = time.monotonic()
+    max_seconds = _normalize_positive_int(params.get("max_seconds"), INCREMENTAL_ALL_NM_IDS_DEFAULT_MAX_SECONDS)
+    max_nm_ids_per_run = _normalize_positive_int(
+        params.get("max_nm_ids_per_run"),
+        INCREMENTAL_ALL_NM_IDS_DEFAULT_MAX_NM_IDS_PER_RUN,
+    )
+    stats: Dict[str, Any] = {
+        "feedbacks_upserted": 0,
+        "domain": "wb_communications",
+        "project_id": project_id,
+        "mode": "reviews_incremental_all_nm_ids",
+        "nm_ids_total": len(project_nm_ids),
+        "nm_ids_processed": 0,
+        "max_seconds": max_seconds,
+        "max_nm_ids_per_run": max_nm_ids_per_run,
+        "date_from_ts": date_from_ts,
+        "date_to_ts": date_to_ts,
+    }
+
+    def touch_run() -> None:
+        if run_id:
+            try:
+                from app.services.ingest import runs as runs_service
+                runs_service.touch_run(run_id)
+            except Exception:
+                pass
+
+    def should_stop() -> bool:
+        if not run_id:
+            return False
+        try:
+            from app.services.ingest import runs as runs_service
+
+            current_run = runs_service.get_run(run_id)
+            return not current_run or str(current_run.get("status") or "").lower() not in ("queued", "running")
+        except Exception:
+            return False
+
+    def save_progress(
+        nm_offset: int,
+        source_idx: int,
+        skip: int,
+        nm_id: Optional[int],
+        phase_label: str,
+    ) -> None:
+        if not run_id:
+            return
+        try:
+            from app.services.ingest.runs import set_run_progress
+
+            payload = {
+                "mode": "reviews_incremental_all_nm_ids",
+                "range_status": "running",
+                "nm_ids_total": len(project_nm_ids),
+                "nm_ids_processed": stats["nm_ids_processed"],
+                "feedbacks_upserted": stats["feedbacks_upserted"],
+                "date_from_ts": date_from_ts,
+                "date_to_ts": date_to_ts,
+                "cursor": {
+                    "nm_offset": nm_offset,
+                    "source_idx": source_idx,
+                    "skip": skip,
+                    "nm_id": nm_id,
+                },
+                "current_nm_id": nm_id,
+                "phase_label": phase_label,
+            }
+            set_run_progress(run_id, payload)
+        except Exception:
+            pass
+
+    def stop_result(
+        nm_offset: int,
+        source_idx: int,
+        skip: int,
+        nm_id: Optional[int],
+        phase_label: str,
+    ) -> Dict[str, Any]:
+        mark_backfill_state_paused(
+            project_id,
+            JOB_CODE_WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS,
+            WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE,
+            WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE,
+            run_id,
+            cursor_date=WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE,
+            cursor_nm_offset=nm_offset,
+            error_message="stopped_by_user",
+            meta_json=_incremental_all_nm_ids_meta(date_from_ts, date_to_ts, source_idx, skip, nm_id),
+        )
+        return {
+            "ok": False,
+            "reason": "stopped",
+            "cursor": {"nm_offset": nm_offset, "source_idx": source_idx, "skip": skip, "nm_id": nm_id},
+            "nm_ids_processed": stats["nm_ids_processed"],
+            "nm_ids_total": len(project_nm_ids),
+            "feedbacks_upserted": stats["feedbacks_upserted"],
+            "project_id": project_id,
+            "domain": "wb_communications",
+            "mode": "reviews_incremental_all_nm_ids",
+            "range_status": "paused",
+            "date_from_ts": date_from_ts,
+            "date_to_ts": date_to_ts,
+            "phase_label": phase_label,
+            "saved_state_date": WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE.isoformat(),
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    current_nm_index = start_nm_index
+    current_source_idx = start_source_idx
+    current_skip = start_skip
+    processed_nm_ids_this_run = 0
+    try:
+        save_progress(
+            start_nm_index,
+            start_source_idx,
+            start_skip,
+            project_nm_ids[start_nm_index] if start_nm_index < len(project_nm_ids) else None,
+            "Запуск incremental sync отзывов по всем товарам",
+        )
+        for nm_index in range(start_nm_index, len(project_nm_ids)):
+            nm_id = project_nm_ids[nm_index]
+            source_start = start_source_idx if nm_index == start_nm_index else 0
+            skip_start = start_skip if nm_index == start_nm_index else 0
+            for source_idx in range(source_start, len(INCREMENTAL_ALL_NM_IDS_SOURCE_SPECS)):
+                spec = INCREMENTAL_ALL_NM_IDS_SOURCE_SPECS[source_idx]
+                skip = skip_start if source_idx == source_start else 0
+                while skip <= MAX_FEEDBACK_SKIP:
+                    if should_stop():
+                        return stop_result(nm_index, source_idx, skip, nm_id, "Остановлено пользователем")
+                    elapsed = time.monotonic() - started
+                    if elapsed >= max_seconds:
+                        mark_backfill_state_paused(
+                            project_id,
+                            JOB_CODE_WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS,
+                            WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE,
+                            WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE,
+                            run_id,
+                            cursor_date=WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE,
+                            cursor_nm_offset=nm_index,
+                            error_message="max_seconds",
+                            meta_json=_incremental_all_nm_ids_meta(date_from_ts, date_to_ts, source_idx, skip, nm_id),
+                        )
+                        return {
+                            "ok": False,
+                            "reason": "progress_saved",
+                            "cursor": {"nm_offset": nm_index, "source_idx": source_idx, "skip": skip, "nm_id": nm_id},
+                            "nm_ids_processed": stats["nm_ids_processed"],
+                            "nm_ids_total": len(project_nm_ids),
+                            "feedbacks_upserted": stats["feedbacks_upserted"],
+                            "project_id": project_id,
+                            "domain": "wb_communications",
+                            "mode": "reviews_incremental_all_nm_ids",
+                            "range_status": "paused",
+                            "date_from_ts": date_from_ts,
+                            "date_to_ts": date_to_ts,
+                            "saved_state_date": WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE.isoformat(),
+                            "finished_at": datetime.now(timezone.utc).isoformat(),
+                        }
+                    current_nm_index = nm_index
+                    current_source_idx = source_idx
+                    current_skip = skip
+                    phase_label = (
+                        f"Товар {nm_index + 1}/{len(project_nm_ids)}: nmId {nm_id}, "
+                        f"активные / {'с ответом' if spec['is_answered'] else 'без ответа'}"
+                    )
+                    save_progress(nm_index, source_idx, skip, nm_id, phase_label)
+                    resp = await client.list_feedbacks(
+                        date_from=date_from_ts,
+                        date_to=date_to_ts,
+                        take=5000,
+                        skip=skip,
+                        order="dateDesc",
+                        is_answered=spec["is_answered"],
+                        nm_id=nm_id,
+                    )
+                    items = (resp.get("data") or {}).get("feedbacks") or []
+                    rows = _feedback_rows_from_items(items, forced_nm_id=nm_id)
+                    if rows:
+                        with engine.begin() as conn:
+                            stats["feedbacks_upserted"] += _bulk_upsert_feedbacks(
+                                conn,
+                                project_id,
+                                run_id,
+                                snapshot_at,
+                                rows,
+                                is_archived=False,
+                                source_endpoint=str(spec["source_endpoint"]),
+                            )
+                    if should_stop():
+                        return stop_result(nm_index, source_idx, skip, nm_id, phase_label)
+                    if len(items) < 5000:
+                        upsert_backfill_state_running(
+                            project_id,
+                            JOB_CODE_WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS,
+                            WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE,
+                            WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE,
+                            run_id,
+                            cursor_date=WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE,
+                            cursor_nm_offset=nm_index,
+                            meta_json=_incremental_all_nm_ids_meta(date_from_ts, date_to_ts, source_idx + 1, 0, nm_id),
+                        )
+                        save_progress(nm_index, source_idx + 1, 0, nm_id, phase_label)
+                        break
+                    next_skip = skip + 5000
+                    upsert_backfill_state_running(
+                        project_id,
+                        JOB_CODE_WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS,
+                        WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE,
+                        WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE,
+                        run_id,
+                        cursor_date=WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE,
+                        cursor_nm_offset=nm_index,
+                        meta_json=_incremental_all_nm_ids_meta(date_from_ts, date_to_ts, source_idx, next_skip, nm_id),
+                    )
+                    save_progress(nm_index, source_idx, next_skip, nm_id, phase_label)
+                    skip = next_skip
+                    touch_run()
+
+            stats["nm_ids_processed"] = nm_index + 1
+            processed_nm_ids_this_run += 1
+            if should_stop():
+                return stop_result(
+                    nm_index + 1,
+                    0,
+                    0,
+                    project_nm_ids[nm_index + 1] if (nm_index + 1) < len(project_nm_ids) else None,
+                    "Остановлено пользователем",
+                )
+            upsert_backfill_state_running(
+                project_id,
+                JOB_CODE_WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS,
+                WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE,
+                WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE,
+                run_id,
+                cursor_date=WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE,
+                cursor_nm_offset=nm_index + 1,
+                meta_json=_incremental_all_nm_ids_meta(date_from_ts, date_to_ts, 0, 0),
+            )
+            save_progress(
+                nm_index + 1,
+                0,
+                0,
+                project_nm_ids[nm_index + 1] if (nm_index + 1) < len(project_nm_ids) else None,
+                f"Обработано товаров: {nm_index + 1}/{len(project_nm_ids)}",
+            )
+            touch_run()
+            if processed_nm_ids_this_run >= max_nm_ids_per_run and (nm_index + 1) < len(project_nm_ids):
+                mark_backfill_state_paused(
+                    project_id,
+                    JOB_CODE_WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS,
+                    WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE,
+                    WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE,
+                    run_id,
+                    cursor_date=WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE,
+                    cursor_nm_offset=nm_index + 1,
+                    error_message="max_nm_ids_per_run",
+                    meta_json=_incremental_all_nm_ids_meta(date_from_ts, date_to_ts, 0, 0),
+                )
+                return {
+                    "ok": False,
+                    "reason": "progress_saved",
+                    "cursor": {"nm_offset": nm_index + 1, "source_idx": 0, "skip": 0},
+                    "nm_ids_processed": stats["nm_ids_processed"],
+                    "nm_ids_total": len(project_nm_ids),
+                    "feedbacks_upserted": stats["feedbacks_upserted"],
+                    "project_id": project_id,
+                    "domain": "wb_communications",
+                    "mode": "reviews_incremental_all_nm_ids",
+                    "range_status": "paused",
+                    "date_from_ts": date_from_ts,
+                    "date_to_ts": date_to_ts,
+                    "saved_state_date": WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE.isoformat(),
+                    "finished_at": datetime.now(timezone.utc).isoformat(),
+                }
+
+        with engine.begin() as conn:
+            _update_watermark(project_id, WATERMARK_FEEDBACK_ALL_NM_IDS, date_to_ts, conn)
+        mark_backfill_state_completed(
+            project_id,
+            JOB_CODE_WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS,
+            WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE,
+            WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE,
+            run_id,
+            len(project_nm_ids),
+            meta_json={"mode": "reviews_incremental_all_nm_ids", "date_from_ts": date_from_ts, "date_to_ts": date_to_ts},
+        )
+    except Exception as e:
+        mark_backfill_state_failed(
+            project_id,
+            JOB_CODE_WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS,
+            WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE,
+            WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE,
+            run_id,
+            cursor_date=WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE,
+            cursor_nm_offset=current_nm_index,
+            error_message=str(e),
+            meta_json=_incremental_all_nm_ids_meta(date_from_ts, date_to_ts, current_source_idx, current_skip, project_nm_ids[current_nm_index] if project_nm_ids else None),
+        )
+        raise
+
+    stats["ok"] = True
+    stats["date_from_ts"] = date_from_ts
+    stats["date_to_ts"] = date_to_ts
+    stats["finished_at"] = datetime.now(timezone.utc).isoformat()
+    _maybe_chain_communications_aggregates(project_id, run_id, stats)
+    return stats
+
+
 async def _ingest_wb_communications_reviews_full_sync(
     project_id: int,
     run_id: Optional[int],
@@ -572,6 +1030,17 @@ async def _ingest_wb_communications_reviews_full_sync(
             except Exception:
                 pass
 
+    def should_stop() -> bool:
+        if not run_id:
+            return False
+        try:
+            from app.services.ingest import runs as runs_service
+
+            current_run = runs_service.get_run(run_id)
+            return not current_run or str(current_run.get("status") or "").lower() not in ("queued", "running")
+        except Exception:
+            return False
+
     def save_progress(
         nm_offset: int,
         source_idx: int,
@@ -603,6 +1072,40 @@ async def _ingest_wb_communications_reviews_full_sync(
         except Exception:
             pass
 
+    def stop_result(
+        nm_offset: int,
+        source_idx: int,
+        skip: int,
+        nm_id: Optional[int],
+        phase_label: str,
+    ) -> Dict[str, Any]:
+        mark_backfill_state_paused(
+            project_id,
+            JOB_CODE_WB_COMMUNICATIONS_REVIEWS_FULL_SYNC,
+            WB_COMMUNICATIONS_REVIEWS_FULL_SYNC_STATE_DATE,
+            WB_COMMUNICATIONS_REVIEWS_FULL_SYNC_STATE_DATE,
+            run_id,
+            cursor_date=WB_COMMUNICATIONS_REVIEWS_FULL_SYNC_STATE_DATE,
+            cursor_nm_offset=nm_offset,
+            error_message="stopped_by_user",
+            meta_json=_full_sync_meta(source_idx, skip, nm_id),
+        )
+        return {
+            "ok": False,
+            "reason": "stopped",
+            "cursor": {"nm_offset": nm_offset, "source_idx": source_idx, "skip": skip, "nm_id": nm_id},
+            "nm_ids_processed": stats["nm_ids_processed"],
+            "nm_ids_total": len(project_nm_ids),
+            "feedbacks_upserted": stats["feedbacks_upserted"],
+            "project_id": project_id,
+            "domain": "wb_communications",
+            "mode": "reviews_full_sync",
+            "range_status": "paused",
+            "phase_label": phase_label,
+            "saved_state_date": WB_COMMUNICATIONS_REVIEWS_FULL_SYNC_STATE_DATE.isoformat(),
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+        }
+
     current_nm_index = start_nm_index
     current_source_idx = start_source_idx
     current_skip = start_skip
@@ -617,6 +1120,8 @@ async def _ingest_wb_communications_reviews_full_sync(
                 spec = FULL_SYNC_SOURCE_SPECS[source_idx]
                 skip = skip_start if source_idx == source_start else 0
                 while skip <= MAX_FEEDBACK_SKIP:
+                    if should_stop():
+                        return stop_result(nm_index, source_idx, skip, nm_id, "Остановлено пользователем")
                     elapsed = time.monotonic() - started
                     if elapsed >= max_seconds:
                         mark_backfill_state_paused(
@@ -682,6 +1187,8 @@ async def _ingest_wb_communications_reviews_full_sync(
                                 is_archived=bool(spec["is_archived"]),
                                 source_endpoint=str(spec["source_endpoint"]),
                             )
+                    if should_stop():
+                        return stop_result(nm_index, source_idx, skip, nm_id, phase_label)
                     if len(items) < 5000:
                         upsert_backfill_state_running(
                             project_id,
@@ -712,6 +1219,8 @@ async def _ingest_wb_communications_reviews_full_sync(
 
             stats["nm_ids_processed"] = nm_index + 1
             processed_nm_ids_this_run += 1
+            if should_stop():
+                return stop_result(nm_index + 1, 0, 0, project_nm_ids[nm_index + 1] if (nm_index + 1) < len(project_nm_ids) else None, "Остановлено пользователем")
             upsert_backfill_state_running(
                 project_id,
                 JOB_CODE_WB_COMMUNICATIONS_REVIEWS_FULL_SYNC,
@@ -937,10 +1446,12 @@ async def ingest_wb_communications(
     run_id: Optional[int] = None,
     params: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Main ingest: incremental (default) or reviews_backfill via params.mode."""
+    """Main ingest: default incremental, reviews_full_sync, reviews_incremental_all_nm_ids, or reviews_backfill."""
     run_params = params if params is not None else {}
     if (run_params.get("mode") or "").strip().lower() == "reviews_full_sync":
         return await _ingest_wb_communications_reviews_full_sync(project_id, run_id, run_params)
+    if (run_params.get("mode") or "").strip().lower() == "reviews_incremental_all_nm_ids":
+        return await _ingest_wb_communications_reviews_incremental_all_nm_ids(project_id, run_id, run_params)
     if (run_params.get("mode") or "").strip().lower() == "reviews_backfill":
         return await _ingest_wb_communications_reviews_backfill(project_id, run_id, run_params)
 

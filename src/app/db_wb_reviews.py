@@ -9,6 +9,10 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import text
 
 from app.db import engine
+from app.db_stocks import (
+    get_latest_enterprise_stock_by_vendor_code_norm,
+    get_latest_fbo_stock_totals_by_nm_id,
+)
 
 
 def _clean_optional_text(value: Any) -> Optional[str]:
@@ -70,6 +74,9 @@ def get_reviews_summary(
     vendor_code: Optional[str] = None,
     wb_category: Optional[str] = None,
     rating_lte: Optional[float] = None,
+    only_enterprise_gt0: bool = False,
+    only_fbo_gt0: bool = False,
+    only_with_reviews_in_period: bool = False,
 ) -> List[Dict[str, Any]]:
     """Reviews summary by nm_id with product metadata and optional product filters."""
 
@@ -98,6 +105,7 @@ def get_reviews_summary(
         "vendor_code_pattern": f"%{vendor_code.strip()}%" if vendor_code and vendor_code.strip() else None,
         "wb_category": wb_category,
         "rating_lte": rating_lte,
+        "only_with_reviews_in_period": only_with_reviews_in_period,
         "has_period": period_from is not None and period_to is not None,
     }
 
@@ -137,12 +145,17 @@ def get_reviews_summary(
           AND (:vendor_code_pattern IS NULL OR p.vendor_code ILIKE :vendor_code_pattern)
           AND (:wb_category IS NULL OR p.subject_name = :wb_category)
           AND (:rating_lte IS NULL OR ft.avg_rating <= :rating_lte)
+          AND (
+              :only_with_reviews_in_period = FALSE
+              OR :has_period = FALSE
+              OR COALESCE(ft.new_reviews, 0) > 0
+          )
         ORDER BY ft.reviews_count_total DESC, ft.nm_id ASC
     """)
     with engine.connect() as conn:
         rows = conn.execute(sql, params).mappings().all()
 
-    return [
+    items = [
         {
             "nm_id": int(r["nm_id"]),
             "title": r.get("title"),
@@ -155,6 +168,35 @@ def get_reviews_summary(
         }
         for r in rows
     ]
+
+    if not items or not (only_enterprise_gt0 or only_fbo_gt0):
+        return items
+
+    fbo_map: Dict[int, tuple[int, Any]] = {}
+    if only_fbo_gt0:
+        fbo_map = get_latest_fbo_stock_totals_by_nm_id([item["nm_id"] for item in items])
+
+    enterprise_map: Dict[str, int] = {}
+    if only_enterprise_gt0:
+        vendor_codes = [
+            str(item["vendor_code"]).strip()
+            for item in items
+            if item.get("vendor_code") is not None and str(item.get("vendor_code")).strip() != ""
+        ]
+        enterprise_map, _ = get_latest_enterprise_stock_by_vendor_code_norm(project_id, vendor_codes)
+
+    filtered: List[Dict[str, Any]] = []
+    for item in items:
+        if only_fbo_gt0:
+            fbo_qty = fbo_map.get(item["nm_id"], (0, None))[0]
+            if int(fbo_qty or 0) <= 0:
+                continue
+        if only_enterprise_gt0:
+            vendor_code_value = str(item.get("vendor_code") or "").strip()
+            if int(enterprise_map.get(vendor_code_value, 0) or 0) <= 0:
+                continue
+        filtered.append(item)
+    return filtered
 
 
 def list_reviews_by_nm_id(

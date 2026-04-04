@@ -261,6 +261,9 @@ export default function ReviewsPage() {
   const [selectedProduct, setSelectedProduct] = useState<WBProductLookupItem | null>(null)
   const [wbCategory, setWbCategory] = useState('')
   const [ratingLte, setRatingLte] = useState('')
+  const [onlyEnterpriseGt0, setOnlyEnterpriseGt0] = useState(false)
+  const [onlyFboGt0, setOnlyFboGt0] = useState(false)
+  const [onlyWithReviewsInPeriod, setOnlyWithReviewsInPeriod] = useState(false)
   const [categories, setCategories] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -313,6 +316,9 @@ export default function ReviewsPage() {
       vendor_code: vendorCode,
       wb_category: wbCategory || undefined,
       rating_lte: ratingValue,
+      only_enterprise_gt0: onlyEnterpriseGt0,
+      only_fbo_gt0: onlyFboGt0,
+      only_with_reviews_in_period: onlyWithReviewsInPeriod,
     })
       .then((res) => {
         setData(res)
@@ -330,7 +336,7 @@ export default function ReviewsPage() {
         setReviewsByNmId({})
       })
       .finally(() => setLoading(false))
-  }, [projectId, periodFrom, periodTo, productSearch, selectedProduct, wbCategory, ratingLte])
+  }, [projectId, periodFrom, periodTo, productSearch, selectedProduct, wbCategory, ratingLte, onlyEnterpriseGt0, onlyFboGt0, onlyWithReviewsInPeriod])
 
   const loadReviews = useCallback(
     (nmId: number, options?: { offset?: number; append?: boolean }) => {
@@ -433,7 +439,6 @@ export default function ReviewsPage() {
 
       <div className="card mb-5">
         <div className="p-4">
-          <h3 className="m-0 mb-3 text-base font-semibold">Фильтры</h3>
           <div className="unitpnl-grid unitpnl-grid--reviews-row1 grid grid-cols-1 gap-6 items-end">
             <div className="unitpnl-col flex flex-col min-w-0">
               <label className="unitpnl-label block text-sm font-medium mb-1">Дата с</label>
@@ -454,6 +459,16 @@ export default function ReviewsPage() {
               />
             </div>
             <div className="unitpnl-col flex flex-col min-w-0">
+              <label className="unitpnl-label block text-sm font-medium mb-1">Рейтинг до</label>
+              <input
+                type="text"
+                value={ratingLte}
+                onChange={(e) => setRatingLte(e.target.value)}
+                placeholder="Например, 4.2"
+                className="unitpnl-control h-10 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm leading-5 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400"
+              />
+            </div>
+            <div className="unitpnl-col flex flex-col min-w-0">
               <label className="unitpnl-label block text-sm font-medium mb-1">Товар</label>
               <WBProductLookupInput
                 projectId={projectId}
@@ -470,7 +485,23 @@ export default function ReviewsPage() {
                 className="unitpnl-control"
               />
             </div>
-            <div className="unitpnl-col flex flex-col min-w-0">
+            <div className="unitpnl-col unitpnl-actions flex items-end md:justify-end">
+              <button
+                type="button"
+                onClick={load}
+                disabled={loading}
+                className="unitpnl-btn reviews-side-button h-10 px-6 w-full rounded border border-gray-300 bg-white text-sm hover:bg-gray-50 disabled:opacity-50"
+                style={{ margin: 0 }}
+              >
+                {loading ? 'Загрузка…' : 'Обновить'}
+              </button>
+            </div>
+          </div>
+          <div
+            className="unitpnl-grid unitpnl-grid--reviews-row2 grid grid-cols-1 gap-6 items-end"
+            style={{ marginTop: 15 }}
+          >
+            <div className="unitpnl-col flex flex-col min-w-0 reviews-row2-category">
               <label className="unitpnl-label block text-sm font-medium mb-1">Категория WB</label>
               <select
                 value={wbCategory}
@@ -485,37 +516,38 @@ export default function ReviewsPage() {
                 ))}
               </select>
             </div>
-            <div className="unitpnl-col flex flex-col min-w-0">
-              <label className="unitpnl-label block text-sm font-medium mb-1">Рейтинг до</label>
-              <input
-                type="text"
-                value={ratingLte}
-                onChange={(e) => setRatingLte(e.target.value)}
-                placeholder="Например, 4.2"
-                className="unitpnl-control h-10 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm leading-5 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400"
-              />
-            </div>
-            <div className="unitpnl-col unitpnl-actions flex items-end md:justify-end">
-              <div className="unitpnl-actionsRow">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPeriodFrom('')
-                    setPeriodTo('')
-                  }}
-                  disabled={loading || (!periodFrom && !periodTo)}
-                  className="unitpnl-btn h-10 px-4 w-full md:w-auto rounded border border-gray-300 bg-white text-sm hover:bg-gray-50 disabled:opacity-50"
-                >
-                  Сбросить даты
-                </button>
-                <button
-                  type="button"
-                  onClick={load}
-                  disabled={loading}
-                  className="unitpnl-btn h-10 px-6 w-full md:w-auto rounded border border-gray-300 bg-white text-sm hover:bg-gray-50 disabled:opacity-50"
-                >
-                  {loading ? 'Загрузка…' : 'Обновить'}
-                </button>
+            <div className="unitpnl-col reviews-row2-checks">
+              <label className="unitpnl-label block text-sm font-medium mb-1" style={{ visibility: 'hidden' }}>
+                ·
+              </label>
+              <div className="reviews-checkbox-row" style={{ width: '100%' }}>
+                <label className="reviews-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={onlyWithReviewsInPeriod}
+                    onChange={(e) => setOnlyWithReviewsInPeriod(e.target.checked)}
+                    style={{ marginRight: 8 }}
+                  />
+                  Только с отзывами за период
+                </label>
+                <label className="reviews-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={onlyEnterpriseGt0}
+                    onChange={(e) => setOnlyEnterpriseGt0(e.target.checked)}
+                    style={{ marginRight: 8 }}
+                  />
+                  Наличие склад &gt; 0
+                </label>
+                <label className="reviews-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={onlyFboGt0}
+                    onChange={(e) => setOnlyFboGt0(e.target.checked)}
+                    style={{ marginRight: 8 }}
+                  />
+                  Наличие FBO &gt; 0
+                </label>
               </div>
             </div>
           </div>
@@ -847,10 +879,13 @@ export default function ReviewsPage() {
                                     style={{
                                       border: '1px solid #d1d5db',
                                       background: '#fff',
+                                      color: '#1f2937',
                                       borderRadius: 8,
                                       padding: '8px 14px',
                                       fontSize: 13,
-                                      cursor: 'pointer',
+                                      lineHeight: 1.2,
+                                      cursor: reviewsState.loadingMore ? 'not-allowed' : 'pointer',
+                                      opacity: reviewsState.loadingMore ? 0.7 : 1,
                                     }}
                                   >
                                     {reviewsState.loadingMore ? 'Загружаем…' : 'Показать ещё отзывы'}
@@ -908,29 +943,59 @@ export default function ReviewsPage() {
           align-items: end;
           min-width: 0;
         }
-        .unitpnl-actionsRow {
+        .reviews-checkbox-row {
           display: flex;
-          gap: 12px;
+          align-items: center;
+          gap: 20px;
+          height: 40px;
           width: 100%;
-          flex-wrap: wrap;
-          justify-content: flex-end;
+          flex-wrap: nowrap;
+          overflow: visible;
+        }
+        .reviews-checkbox {
+          display: flex;
+          align-items: center;
+          white-space: nowrap;
+          font-size: 14px;
+          line-height: 20px;
+          cursor: pointer;
+          user-select: none;
+          min-width: 0;
+        }
+        .reviews-side-button {
+          height: 40px !important;
+          box-sizing: border-box;
         }
         @media (min-width: 768px) {
           .unitpnl-grid--reviews-row1 {
             grid-template-columns:
               minmax(120px, 140px)
               minmax(120px, 140px)
-              minmax(220px, 1.3fr)
-              minmax(180px, 1fr)
-              minmax(140px, 160px);
+              minmax(160px, 180px)
+              minmax(220px, 1fr)
+              minmax(150px, 160px);
+          }
+          .unitpnl-grid--reviews-row2 {
+            grid-template-columns:
+              minmax(120px, 140px)
+              minmax(120px, 140px)
+              minmax(160px, 180px)
+              minmax(220px, 1fr)
+              minmax(150px, 160px);
+          }
+          .reviews-row2-category {
+            grid-column: 1 / span 3;
+          }
+          .reviews-row2-checks {
+            grid-column: 4 / span 2;
+          }
+          .reviews-side-button {
+            width: 160px !important;
+            min-width: 160px !important;
+            max-width: 160px !important;
           }
           .unitpnl-actions {
-            grid-column: 1 / -1;
             justify-content: flex-end;
-          }
-          .unitpnl-actionsRow {
-            width: auto;
-            flex-wrap: nowrap;
           }
           .unitpnl-btn {
             width: auto;

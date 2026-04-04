@@ -7,6 +7,7 @@ import {
   getProjectProxySettings,
   ProjectProxySettings,
   getWBIngestStatus,
+  markIngestRunTimeout,
   runWBIngest,
   WBIngestStatus,
 } from '../../../../../lib/apiClient'
@@ -171,6 +172,8 @@ export default function ProjectSettingsPage({ params }: { params: { projectId: s
         progress_pct: s.progress_pct,
         progress_text: s.progress_text,
         progress_detail: s.progress_detail,
+        active_run_id: s.active_run_id,
+        active_mode: s.active_mode,
       }))
     )
   }
@@ -259,7 +262,7 @@ export default function ProjectSettingsPage({ params }: { params: { projectId: s
     params?: {
       date_from?: string
       date_to?: string
-      mode?: 'daily' | 'backfill' | 'reviews_full_sync'
+      mode?: 'daily' | 'backfill' | 'reviews_full_sync' | 'reviews_incremental_all_nm_ids'
       max_seconds?: number
       max_batches?: number
       cursor?: { date: string; nm_offset: number }
@@ -315,6 +318,32 @@ export default function ProjectSettingsPage({ params }: { params: { projectId: s
       ))
       
       setToast(`Ошибка (${jobCode}): ${error.detail || error.message}`)
+      setTimeout(() => setToast(null), 5000)
+    }
+  }
+
+  const handleStopIngest = async (status: WBIngestStatus) => {
+    if (!status.active_run_id) return
+    try {
+      await markIngestRunTimeout(projectId, status.active_run_id, {
+        reason_code: 'manual_stop',
+        reason_text:
+          status.job_code === 'wb_communications' && status.active_mode === 'reviews_full_sync'
+            ? 'Остановлено пользователем: полный сбор отзывов'
+            : `Остановлено пользователем: ${status.job_code}`,
+      })
+
+      setToast(
+        status.job_code === 'wb_communications' && status.active_mode === 'reviews_full_sync'
+          ? 'Полный сбор отзывов остановлен. Повторный запуск продолжит с сохранённого места.'
+          : `Ингест ${status.job_code} остановлен`
+      )
+      setTimeout(() => setToast(null), 5000)
+      setTimeout(() => {
+        loadWBIngestStatuses()
+      }, 500)
+    } catch (error: any) {
+      setToast(`Ошибка остановки (${status.job_code}): ${error.detail || error.message}`)
       setTimeout(() => setToast(null), 5000)
     }
   }
@@ -556,6 +585,16 @@ export default function ProjectSettingsPage({ params }: { params: { projectId: s
                                   Примечание: перед загрузкой витринных цен автоматически обновляются «Цены WB» (prices).
                                 </div>
                               )}
+                              {status.job_code === 'wb_communications' && status.active_mode === 'reviews_full_sync' && (
+                                <div style={{ fontSize: '0.85rem', color: '#666', marginTop: '2px' }}>
+                                  Полный сбор всех отзывов. Идёт батчами и продолжается автоматически.
+                                </div>
+                              )}
+                              {status.job_code === 'wb_communications' && status.active_mode === 'reviews_incremental_all_nm_ids' && (
+                                <div style={{ fontSize: '0.85rem', color: '#666', marginTop: '2px' }}>
+                                  Догрузка новых отзывов по всем товарам от watermark или последней даты в базе.
+                                </div>
+                              )}
                               {status.progress_text && (
                                 <div style={{ marginTop: '4px' }}>
                                   <div style={{ fontSize: '0.85rem', color: '#374151' }}>
@@ -619,21 +658,76 @@ export default function ProjectSettingsPage({ params }: { params: { projectId: s
                               </Link>
                             ) : (
                               <>
-                                <button
-                                  onClick={() => handleRunIngest(status.job_code)}
-                                  disabled={!wbEnabled || status.is_running}
-                                  style={{
-                                    padding: '6px 12px',
-                                    backgroundColor: status.is_running ? '#ccc' : '#2563eb',
-                                    color: 'white',
-                                    border: 'none',
-                                    borderRadius: '4px',
-                                    cursor: status.is_running ? 'not-allowed' : 'pointer',
-                                    fontSize: '0.9rem',
-                                  }}
-                                >
-                                  {status.is_running ? 'Выполняется…' : 'Загрузить сейчас'}
-                                </button>
+                                {status.job_code === 'wb_communications' ? (
+                                  <>
+                                    <button
+                                      onClick={() => runIngestWithParams(status.job_code, { mode: 'reviews_full_sync' })}
+                                      disabled={!wbEnabled || status.is_running}
+                                      style={{
+                                        padding: '6px 12px',
+                                        backgroundColor: status.is_running ? '#ccc' : '#2563eb',
+                                        color: 'white',
+                                        border: 'none',
+                                        borderRadius: '4px',
+                                        cursor: status.is_running ? 'not-allowed' : 'pointer',
+                                        fontSize: '0.9rem',
+                                      }}
+                                    >
+                                      {status.is_running && status.active_mode === 'reviews_full_sync'
+                                        ? 'Выполняется…'
+                                        : 'Полный сбор'}
+                                    </button>
+                                    <button
+                                      onClick={() => runIngestWithParams(status.job_code, { mode: 'reviews_incremental_all_nm_ids' })}
+                                      disabled={!wbEnabled || status.is_running}
+                                      style={{
+                                        padding: '6px 12px',
+                                        backgroundColor: status.is_running ? '#e5e7eb' : '#fff',
+                                        color: status.is_running ? '#6b7280' : '#1f2937',
+                                        border: '1px solid #d1d5db',
+                                        borderRadius: '4px',
+                                        cursor: status.is_running ? 'not-allowed' : 'pointer',
+                                        fontSize: '0.9rem',
+                                      }}
+                                    >
+                                      {status.is_running && status.active_mode === 'reviews_incremental_all_nm_ids'
+                                        ? 'Догрузка…'
+                                        : 'Догрузить новое'}
+                                    </button>
+                                  </>
+                                ) : (
+                                  <button
+                                    onClick={() => handleRunIngest(status.job_code)}
+                                    disabled={!wbEnabled || status.is_running}
+                                    style={{
+                                      padding: '6px 12px',
+                                      backgroundColor: status.is_running ? '#ccc' : '#2563eb',
+                                      color: 'white',
+                                      border: 'none',
+                                      borderRadius: '4px',
+                                      cursor: status.is_running ? 'not-allowed' : 'pointer',
+                                      fontSize: '0.9rem',
+                                    }}
+                                  >
+                                    {status.is_running ? 'Выполняется…' : 'Загрузить сейчас'}
+                                  </button>
+                                )}
+                                {status.is_running && status.active_run_id != null && (
+                                  <button
+                                    onClick={() => handleStopIngest(status)}
+                                    style={{
+                                      padding: '6px 12px',
+                                      backgroundColor: '#fff',
+                                      color: '#b91c1c',
+                                      border: '1px solid #fca5a5',
+                                      borderRadius: '4px',
+                                      cursor: 'pointer',
+                                      fontSize: '0.9rem',
+                                    }}
+                                  >
+                                    Остановить
+                                  </button>
+                                )}
                                 {(status.job_code === 'wb_search_report_tabular' ||
                                   status.job_code === 'wb_stock_total_daily') && (
                                   <Link

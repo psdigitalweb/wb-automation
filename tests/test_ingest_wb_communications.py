@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from app.ingest_wb_communications import _nm_id, ingest_wb_communications
+from app.ingest_wb_communications import OVERLAP_SEC, _nm_id, ingest_wb_communications
 
 
 def test_nm_id_safe():
@@ -125,3 +125,72 @@ def test_reviews_full_sync_progress_saved_after_nm_batch():
     assert result.get("reason") == "progress_saved"
     assert result.get("cursor") == {"nm_offset": 1, "source_idx": 0, "skip": 0}
     assert len(paused_calls) == 1
+
+
+def test_reviews_incremental_all_nm_ids_early_exit_no_project_nm_ids():
+    """With mode=reviews_incremental_all_nm_ids and no project nm_ids, ingest skips with reason no_project_nm_ids."""
+    with patch("app.utils.get_project_marketplace_token.get_wb_token_for_project", return_value="token"):
+        with patch("app.ingest_wb_communications.get_wb_nm_ids_for_project", return_value=[]):
+            result = asyncio.run(ingest_wb_communications(
+                project_id=1,
+                run_id=1,
+                params={"mode": "reviews_incremental_all_nm_ids"},
+            ))
+    assert result.get("ok") is True
+    assert result.get("skipped") is True
+    assert result.get("reason") == "no_project_nm_ids"
+
+
+def test_reviews_incremental_all_nm_ids_starts_from_latest_loaded_date_and_pauses():
+    """Incremental-all-nm-ids should start from latest loaded review date minus overlap and save progress."""
+    class StubClient:
+        def __init__(self):
+            self.calls = []
+
+        async def list_feedbacks(self, **kwargs):
+            self.calls.append(kwargs)
+            return {"data": {"feedbacks": []}}
+
+    class DummyConn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    client = StubClient()
+    paused_calls = []
+
+    def _paused(*args, **kwargs):
+        paused_calls.append({"args": args, "kwargs": kwargs})
+
+    with patch("app.utils.get_project_marketplace_token.get_wb_token_for_project", return_value="token"):
+        with patch("app.ingest_wb_communications.get_wb_nm_ids_for_project", return_value=[101, 202]):
+            with patch("app.ingest_wb_communications.get_backfill_state", return_value=None):
+                with patch("app.ingest_wb_communications.ensure_backfill_state_created"):
+                    with patch("app.ingest_wb_communications.engine.connect", return_value=DummyConn()):
+                        with patch("app.ingest_wb_communications._load_watermark", return_value=None):
+                            with patch("app.ingest_wb_communications._get_latest_feedback_created_ts", return_value=500000):
+                                with patch("app.ingest_wb_communications.upsert_backfill_state_running"):
+                                    with patch("app.ingest_wb_communications.mark_backfill_state_paused", side_effect=_paused):
+                                        with patch("app.ingest_wb_communications.mark_backfill_state_completed"):
+                                            with patch("app.ingest_wb_communications._get_use_sandbox", return_value=False):
+                                                with patch("app.ingest_wb_communications.WBCommunicationsClient", return_value=client):
+                                                    result = asyncio.run(ingest_wb_communications(
+                                                        project_id=1,
+                                                        run_id=1,
+                                                        params={
+                                                            "mode": "reviews_incremental_all_nm_ids",
+                                                            "max_nm_ids_per_run": 1,
+                                                            "max_seconds": 999,
+                                                        },
+                                                    ))
+    assert result.get("ok") is False
+    assert result.get("reason") == "progress_saved"
+    assert result.get("mode") == "reviews_incremental_all_nm_ids"
+    assert result.get("cursor") == {"nm_offset": 1, "source_idx": 0, "skip": 0}
+    assert len(paused_calls) == 1
+    assert len(client.calls) == 2
+    assert client.calls[0]["nm_id"] == 101
+    assert client.calls[0]["date_from"] == 500000 - OVERLAP_SEC
+    assert client.calls[0]["date_to"] == result.get("date_to_ts")

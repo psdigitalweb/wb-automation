@@ -70,6 +70,8 @@ class WBIngestStatusResponse(BaseModel):
     progress_pct: Optional[float] = None
     progress_text: Optional[str] = None
     progress_detail: Optional[str] = None
+    active_run_id: Optional[int] = None
+    active_mode: Optional[str] = None
 
 
 class WBIngestRunRequest(BaseModel):
