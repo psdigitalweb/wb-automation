@@ -240,6 +240,34 @@ def get_user_projects(user_id: int) -> List[dict]:
         raise
 
 
+def list_all_projects() -> List[dict]:
+    """List all projects ordered by recent updates.
+
+    Used for superuser project visibility when membership rows are absent.
+    """
+    with engine.connect() as conn:
+        result = conn.execute(
+            text(
+                """
+                SELECT id, name, description, created_by, created_at, updated_at
+                FROM projects
+                ORDER BY updated_at DESC
+                """
+            )
+        )
+        projects = []
+        for row in result.mappings().all():
+            projects.append({
+                "id": row["id"],
+                "name": row["name"],
+                "description": row["description"],
+                "created_by": row["created_by"],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            })
+        return projects
+
+
 def get_project_member(project_id: int, user_id: int) -> Optional[dict]:
     """Get project member by project_id and user_id."""
     with engine.connect() as conn:
@@ -425,6 +453,5 @@ def delete_project(project_id: int) -> bool:
             {"project_id": project_id}
         )
         return result.rowcount > 0
-
 
 

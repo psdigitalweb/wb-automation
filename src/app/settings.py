@@ -1,9 +1,15 @@
+"""Environment-backed application settings."""
+
+from __future__ import annotations
+
 import os
+from typing import Dict
+
 from dotenv import load_dotenv
 
-# Use override=True to ensure .env file values take precedence over existing env vars
-# This is important when .env is mounted as volume and may have updated values
+
 load_dotenv(override=True)
+
 
 def _get_env_int(name: str, default: int) -> int:
     raw = os.getenv(name)
@@ -14,6 +20,17 @@ def _get_env_int(name: str, default: int) -> int:
     except Exception:
         return default
 
+
+def _get_env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return float(raw)
+    except Exception:
+        return default
+
+
 POSTGRES_DB = os.getenv("POSTGRES_DB", "wb")
 POSTGRES_USER = os.getenv("POSTGRES_USER", "wb")
 POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "wbpassword")
@@ -23,7 +40,6 @@ POSTGRES_PORT = os.getenv("POSTGRES_PORT", "5432")
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT = os.getenv("REDIS_PORT", "6379")
 
-# Service-level WB token for marketplace-wide operations (e.g. tariffs)
 WB_SERVICE_TOKEN = os.getenv("WB_SERVICE_TOKEN") or os.getenv("WB_TOKEN", "MOCK")
 WB_TOKEN = os.getenv("WB_TOKEN", "MOCK")
 WB_VALIDATE_TOKEN = os.getenv("WB_VALIDATE_TOKEN", "true").lower() in ("true", "1", "yes")
@@ -35,38 +51,48 @@ SQLALCHEMY_DATABASE_URL = (
 )
 
 REDIS_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/0"
-
-# Directory for storing uploaded Internal Data files (local filesystem).
 INTERNAL_DATA_DIR = os.getenv("INTERNAL_DATA_DIR", "/data/internal_data")
-
-# Ingest: if no heartbeat for longer than TTL, run is considered stuck.
 INGEST_STUCK_TTL_SECONDS_DEFAULT = _get_env_int("INGEST_STUCK_TTL_SECONDS_DEFAULT", 1800)
 
-# Frontend prices (catalog.wb.ru): rate-limit and runtime guards
 FRONTEND_PRICES_MAX_RUNTIME_SECONDS = _get_env_int("FRONTEND_PRICES_MAX_RUNTIME_SECONDS", 1200)
 FRONTEND_PRICES_MAX_TOTAL_RETRY_WAIT_SECONDS = _get_env_int("FRONTEND_PRICES_MAX_TOTAL_RETRY_WAIT_SECONDS", 300)
 FRONTEND_PRICES_MAX_RETRY_SLEEP_SECONDS = _get_env_int("FRONTEND_PRICES_MAX_RETRY_SLEEP_SECONDS", 120)
 FRONTEND_PRICES_RATE_LIMIT_BACKOFF_MINUTES = _get_env_int("FRONTEND_PRICES_RATE_LIMIT_BACKOFF_MINUTES", 15)
-# HTTP timeout (seconds). With proxy, responses are often slower — set 60–90 locally if you see ReadTimeout.
 FRONTEND_PRICES_HTTP_TIMEOUT = _get_env_int("FRONTEND_PRICES_HTTP_TIMEOUT", 30)
-# With rotating proxy: min retries per request before giving up (each attempt = new IP). Default 10.
 FRONTEND_PRICES_HTTP_MIN_RETRIES = _get_env_int("FRONTEND_PRICES_HTTP_MIN_RETRIES", 10)
-# Random jitter (seconds) added to timeout per attempt to avoid killing requests too early. Default 10.
 FRONTEND_PRICES_HTTP_TIMEOUT_JITTER = _get_env_int("FRONTEND_PRICES_HTTP_TIMEOUT_JITTER", 10)
-def _get_env_float(name: str, default: float) -> float:
-    raw = os.getenv(name)
-    if raw is None or raw == "":
-        return default
-    try:
-        return float(raw)
-    except Exception:
-        return default
-# Min share of expected_total we must have saved to consider run success (0.0–1.0). Default 0.8 = 80%.
-FRONTEND_PRICES_MIN_COVERAGE_RATIO = _get_env_float("FRONTEND_PRICES_MIN_COVERAGE_RATIO", 0.80)# Local dev: allow unauthenticated access to actual-v2-preview (default False, do not enable in prod)
+FRONTEND_PRICES_MIN_COVERAGE_RATIO = _get_env_float("FRONTEND_PRICES_MIN_COVERAGE_RATIO", 0.80)
 ALLOW_UNAUTH_LOCAL = os.getenv("ALLOW_UNAUTH_LOCAL", "false").lower() in ("true", "1", "yes")
 
-# WB Analytics API
 WB_ANALYTICS_BASE_URL = os.getenv("WB_ANALYTICS_BASE_URL", "https://seller-analytics-api.wildberries.ru")
 WB_ANALYTICS_REQUEST_INTERVAL_SEC = _get_env_int("WB_ANALYTICS_REQUEST_INTERVAL_SEC", 20)
 WB_ANALYTICS_MAX_RETRIES = _get_env_int("WB_ANALYTICS_MAX_RETRIES", 3)
 WB_ANALYTICS_TIMEOUT_SEC = _get_env_int("WB_ANALYTICS_TIMEOUT_SEC", 60)
+
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+OPENROUTER_CHAT_MODEL = os.getenv("OPENROUTER_CHAT_MODEL", "openai/gpt-4.1-mini")
+OPENROUTER_EMBEDDING_MODEL = os.getenv("OPENROUTER_EMBEDDING_MODEL", "openai/text-embedding-3-small")
+
+
+def _build_seo_scoring_default_weights() -> Dict[str, float]:
+    defaults = {
+        "semantic_similarity": 0.35,
+        "product_type_match": 0.20,
+        "attribute_match": 0.15,
+        "use_case_match": 0.10,
+        "behavior_score": 0.10,
+        "frequency_score": 0.10,
+        "product_type_mismatch": 0.25,
+        "attribute_mismatch": 0.10,
+        "cluster_mismatch": 0.15,
+        "competition_penalty": 0.10,
+    }
+    return {
+        key: _get_env_float(f"SEO_SCORE_WEIGHT_{key.upper()}", value)
+        for key, value in defaults.items()
+    }
+
+
+SEO_SCORING_DEFAULT_WEIGHTS = _build_seo_scoring_default_weights()
+SEO_SCORING_WEIGHTS_VERSION = os.getenv("SEO_SCORING_WEIGHTS_VERSION", "v1_default")

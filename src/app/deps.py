@@ -171,6 +171,15 @@ async def get_project_membership(
     Returns project member info with role.
     Raises 404 if project doesn't exist or user is not a member.
     """
+    if current_user.get("is_superuser"):
+        return {
+            "id": None,
+            "project_id": project_id,
+            "user_id": current_user["id"],
+            "role": ProjectRole.OWNER,
+            "is_superuser": True,
+        }
+
     member = get_project_member(project_id, current_user["id"])
     if not member:
         raise HTTPException(
@@ -251,6 +260,15 @@ async def require_project_role(
     Returns project member info with role.
     Raises 403 if user doesn't have required role.
     """
+    if current_user.get("is_superuser"):
+        return {
+            "id": None,
+            "project_id": project_id,
+            "user_id": current_user["id"],
+            "role": ProjectRole.OWNER,
+            "is_superuser": True,
+        }
+
     member = get_project_member(project_id, current_user["id"])
     if not member:
         raise HTTPException(
@@ -294,4 +312,3 @@ async def require_project_member(
         project_id,
         current_user
     )
-

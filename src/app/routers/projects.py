@@ -9,6 +9,7 @@ from app.db_projects import (
     create_project,
     get_project_by_id,
     get_user_projects,
+    list_all_projects,
     get_project_members,
     get_project_member,
     update_project,
@@ -43,6 +44,27 @@ logger = logging.getLogger(__name__)
 
 # Note: Schema should be created by Alembic migrations, not at runtime.
 # ensure_schema() is NOT called here to avoid import-time DB operations.
+
+
+def _load_projects_for_user(current_user: dict) -> List[dict]:
+    """Load projects visible to the current user.
+
+    Superusers should not depend on explicit membership rows to see projects in
+    the operator UI. When a superuser has no memberships, fall back to the full
+    project list with a synthetic owner role so the UI remains usable.
+    """
+
+    projects = get_user_projects(current_user["id"])
+    if projects or not current_user.get("is_superuser"):
+        return projects
+
+    return [
+        {
+            **project,
+            "role": ProjectRole.OWNER,
+        }
+        for project in list_all_projects()
+    ]
 
 
 @router.post("", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
@@ -89,7 +111,7 @@ async def get_user_projects_endpoint(
         pass
     # #endregion
     try:
-        projects = get_user_projects(current_user["id"])
+        projects = _load_projects_for_user(current_user)
         result = [
             ProjectWithRole(
                 id=p["id"],
@@ -358,5 +380,4 @@ async def get_project_data_availability_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to compute data availability",
         )
-
 
