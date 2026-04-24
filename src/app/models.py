@@ -771,6 +771,33 @@ class SeoCategoryProfile(SeoProjectCategoryScopedMixin, TimestampMixin, Base):
     source_note = Column(Text, nullable=True)
 
 
+class SeoCategoryProfileDeriveRun(SeoProjectCategoryScopedMixin, TimestampMixin, Base):
+    """Observability row for one category-profile derive attempt."""
+
+    __tablename__ = "seo_category_profile_derive_runs"
+    __table_args__ = (
+        UniqueConstraint("run_id", name="uq_seo_category_profile_derive_runs_run_id"),
+        Index("ix_seo_category_profile_derive_runs_scope", "project_id", "category_id", "created_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_id = Column(String(36), nullable=False)
+    started_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    finished_at = Column(DateTime(timezone=True), nullable=True)
+    status = Column(String(32), nullable=False, server_default="running")
+    method = Column(String(64), nullable=False, server_default="skeleton_v0")
+    llm_model = Column(String(128), nullable=True)
+    prompt_version = Column(String(64), nullable=True)
+    evidence_hash = Column(String(128), nullable=True)
+    profile_version = Column(String(64), nullable=True)
+    profile_id = Column(Integer, ForeignKey("seo_category_profiles.id", ondelete="SET NULL"), nullable=True, index=True)
+    self_check_json = Column(JSON, nullable=False, default=dict)
+    eval_baseline_json = Column(JSON, nullable=True)
+    eval_new_json = Column(JSON, nullable=True)
+    diff_summary = Column(JSON, nullable=True)
+    error_message = Column(Text, nullable=True)
+
+
 class SeoEvalLabel(SeoProjectCategoryScopedMixin, TimestampMixin, Base):
     """Gold-standard expected bucket for a (category, query[, nm_id]) row.
 
