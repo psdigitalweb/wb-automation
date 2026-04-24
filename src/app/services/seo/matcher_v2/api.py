@@ -46,7 +46,11 @@ from app.schemas.seo_query_meaning_matcher import (
     MeaningAwareMatcherResponse,
 )
 from app.services.seo.atoms.v1.matcher_v1 import ATOMS_MATCHER_V1_VERSION
-from app.services.seo.category_profile import CategoryProfile, load_active_profile
+from app.services.seo.category_profile import (
+    CategoryProfile,
+    ProfileMissingError,
+    load_active_profile,
+)
 from app.services.seo.matcher_v2.persistence import (
     create_matcher_run,
     finalize_matcher_run,
@@ -76,11 +80,14 @@ from app.services.seo.query_meaning_matcher.matcher import (
     CategoryBootstrapBuildingError,
     MissingQueryMeaningLibraryError,
     MissingSkuMeaningAnnotationError,
-    _USER_BUCKET_LABELS,
-    _judgment_overrides_by_query,
+)
+from app.services.seo.query_meaning_matcher.profile_matcher import (
     _query_features,
-    _ranking_by_cluster,
     _sku_features,
+)
+from app.services.seo.query_meaning_matcher.runtime_helpers import (
+    _judgment_overrides_by_query,
+    _ranking_by_cluster,
     _user_reasons,
 )
 from app.services.seo.query_pipeline import normalize_query_text
@@ -180,18 +187,17 @@ def run_matcher_v2(
     provider = embedding_provider or LocalPreviewEmbeddingProvider()
     provider_max_mode = coerce_mode(getattr(provider, "max_mode", None), default=QualityMode.FULL)
 
-    # Iteration 2 (WS-C): consume the versioned category profile when one is
-    # active. When no profile is seeded for the category yet, the matcher
-    # falls back to the legacy in-code dictionaries that were the seed source
-    # in the first place — preserving current-path behavior on uncovered
-    # categories. The profile's version string is recorded on every
-    # ``SeoMatcherRun`` so the eval / compare / promote layers can quote it.
+    # Step 9: matcher_v2 runs only against categories with an active,
+    # validated CategoryProfile. There is no silent legacy fallback here.
     category_profile: CategoryProfile | None = load_active_profile(
         session, project_id=project_id, category_id=category_id
     )
-    category_profile_version = (
-        category_profile.version if category_profile is not None else "default_iter1"
-    )
+    if category_profile is None:
+        raise ProfileMissingError(
+            "Active CategoryProfile is required for "
+            f"project_id={project_id} category_id={category_id}"
+        )
+    category_profile_version = category_profile.version
 
     sku_annotation = _get_sku_annotation(
         session, project_id=project_id, category_id=category_id, nm_id=nm_id
@@ -221,7 +227,7 @@ def run_matcher_v2(
         )
 
     sku_meaning = dict(sku_annotation.meaning_payload or {})
-    sku_features = _sku_features(sku_meaning)
+    sku_features = _sku_features(sku_meaning, profile=category_profile)
 
     sku_atoms_row_id = _latest_atoms_row_id(
         session,
@@ -308,7 +314,7 @@ def run_matcher_v2(
 
     for row in query_rows:
         query_display = query_display_for(row)
-        query_features = _query_features(row)
+        query_features = _query_features(row, profile=category_profile)
         query_embedding = ensure_meaning_embedding(
             session,
             project_id=project_id,
@@ -364,7 +370,7 @@ def run_matcher_v2(
                     matched_meanings=[],
                     conflicts=conflicts,
                     reasons=reasons,
-                    user_bucket_label=_USER_BUCKET_LABELS.get(bucket, bucket),
+                    user_bucket_label=category_profile.user_bucket_labels.get(bucket, bucket),
                     user_reasons=_user_reasons(
                         bucket=bucket,
                         matched_atoms=[],
@@ -439,7 +445,9 @@ def run_matcher_v2(
                 matched_meanings=sorted(set(soft.matched_terms)),
                 conflicts=list(decision.conflict_atoms),
                 reasons=reasons,
-                user_bucket_label=_USER_BUCKET_LABELS.get(decision.bucket, decision.bucket),
+                    user_bucket_label=category_profile.user_bucket_labels.get(
+                        decision.bucket, decision.bucket
+                    ),
                 user_reasons=_user_reasons(
                     bucket=decision.bucket,
                     matched_atoms=decision.matched_atoms,
@@ -455,7 +463,7 @@ def run_matcher_v2(
         )
 
     items = sort_items(items)
-    buckets = partition_buckets(items, limit=limit)
+    buckets = partition_buckets(items, limit=limit, category_profile=category_profile)
 
     # Quality-mode inference
     evidence_signals: dict[str, bool] = {
@@ -485,8 +493,8 @@ def run_matcher_v2(
         # Iteration 2 (WS-C): record the active category profile so eval /
         # compare layers can correlate runs with the exact profile version.
         "category_profile_version": category_profile_version,
-        "category_profile_id": category_profile.profile_id if category_profile is not None else None,
-        "category_profile_active": category_profile is not None,
+        "category_profile_id": category_profile.profile_id,
+        "category_profile_active": True,
     }
     finalize_matcher_run(
         session,

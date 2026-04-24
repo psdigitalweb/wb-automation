@@ -26,9 +26,11 @@ from app.models import SeoQueryMeaning, SeoSkuQueryJudgment
 # ``category_profile`` kwarg so the profile's ``conflict_rules`` can override
 # per-category hard-constraint behavior in the future without new literals
 # inside ``matcher_v2`` (CI guard: ``tests/seo/test_matcher_v2_no_category_literals.py``).
-from app.services.seo.query_meaning_matcher.matcher import (
+from app.services.seo.query_meaning_matcher.profile_matcher import (
     _FeatureSet,
     _hard_conflicts,
+)
+from app.services.seo.query_meaning_matcher.runtime_helpers import (
     _manual_bucket_override,
     _query_display,
 )
@@ -54,19 +56,16 @@ def evaluate_eligibility(
     query_features: _FeatureSet,
     query_row: SeoQueryMeaning,
     judgment: SeoSkuQueryJudgment | None,
-    category_profile: "CategoryProfile | None" = None,
+    category_profile: "CategoryProfile",
 ) -> EligibilityVerdict:
     """Run eligibility for one query meaning.
 
-    ``category_profile`` is threaded through so a future change can swap the
-    legacy ``_hard_conflicts`` helper for a profile-driven implementation
-    without touching call sites. For iteration 2 the argument is accepted but
-    not yet consumed — the 812 profile's ``conflict_rules`` are already
-    byte-identical to the legacy helper, so behavior is preserved by design.
+    ``category_profile`` is required because matcher_v2 runs only against an
+    active profile in Step 9. Hard conflicts are resolved from
+    ``CategoryProfile.hard_conflicts`` via the profile-driven matcher helpers.
     """
 
-    del category_profile  # reserved for iteration 3 — intentionally unused
-    conflicts = _hard_conflicts(sku_features, query_features)
+    conflicts = _hard_conflicts(sku_features, query_features, profile=category_profile)
     manual_bucket, manual_reasons, manual_conflicts = _manual_bucket_override(query_row, judgment)
     judgment_id = int(judgment.id) if judgment is not None else None
 

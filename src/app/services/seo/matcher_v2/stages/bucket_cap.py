@@ -12,10 +12,8 @@ from dataclasses import dataclass, field
 from typing import Any, TYPE_CHECKING
 
 from app.models import SeoQueryMeaning
-from app.services.seo.query_meaning_matcher.matcher import (
-    _apply_atoms_gate,
-    _bucket_for,
-)
+from app.services.seo.category_profile_rules import get_bucket_cutoff
+from app.services.seo.query_meaning_matcher.runtime_helpers import _apply_atoms_gate
 
 if TYPE_CHECKING:
     from app.services.seo.category_profile import CategoryProfile
@@ -49,27 +47,57 @@ def decide_bucket(
     ranking_value: float | None,
     sku_atoms: Any | None,
     query_atoms_payload: dict[str, Any] | None,
-    category_profile: "CategoryProfile | None" = None,
+    category_profile: "CategoryProfile",
 ) -> BucketDecision:
     """Bucket + atoms-gate application for a single eligible query.
 
-    ``category_profile`` is threaded through so future iterations can read
-    ``profile.bucket_cutoffs`` in place of the legacy constants without
-    introducing new category-specific literals at this layer.
+    Step 9 reads bucket cutoffs from the active CategoryProfile instead of the
+    legacy matcher constants.
     """
-
-    del category_profile  # reserved for iteration 3 — intentionally unused
-    bucket = _bucket_for(
-        score=score,
-        genericness=genericness,
-        conflicts=conflicts,
-        semantic_similarity=semantic_similarity,
-        expressive_overlap=expressive_overlap,
-        audience_overlap=audience_overlap,
-        occasion_overlap=occasion_overlap,
-        use_case_overlap=use_case_overlap,
-        attribute_overlap=attribute_overlap,
+    primary_cutoff = get_bucket_cutoff(category_profile.scoring, "primary")
+    secondary_cutoff = get_bucket_cutoff(category_profile.scoring, "secondary")
+    broad_cutoff = get_bucket_cutoff(category_profile.scoring, "broad")
+    has_specific_meaning_match = bool(
+        expressive_overlap
+        or audience_overlap
+        or occasion_overlap
+        or use_case_overlap
+        or attribute_overlap
     )
+
+    if conflicts or (score < min(secondary_cutoff, 0.28) and semantic_similarity < 0.42):
+        bucket = "rejected"
+    elif genericness == "generic" and not has_specific_meaning_match and score < primary_cutoff:
+        bucket = "broad"
+    elif (
+        genericness == "broad"
+        and not has_specific_meaning_match
+        and semantic_similarity < 0.78
+    ):
+        bucket = "broad"
+    elif (
+        occasion_overlap
+        and not expressive_overlap
+        and not audience_overlap
+        and not use_case_overlap
+        and not attribute_overlap
+    ):
+        bucket = "secondary"
+    elif score >= primary_cutoff and (
+        expressive_overlap
+        or audience_overlap
+        or occasion_overlap
+        or use_case_overlap
+        or attribute_overlap
+        or semantic_similarity >= 0.72
+    ):
+        bucket = "primary"
+    elif score >= secondary_cutoff:
+        bucket = "secondary"
+    elif score >= broad_cutoff:
+        bucket = "broad"
+    else:
+        bucket = "rejected"
 
     capped_bucket, capped_score, matched, missing, conflict, debug_reasons = _apply_atoms_gate(
         bucket=bucket,

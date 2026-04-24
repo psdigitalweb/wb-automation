@@ -34,6 +34,7 @@ from app.schemas.seo_matcher_v2 import (
     MatcherV2RunResponse,
 )
 from app.services.seo.matcher_v2 import run_matcher_v2
+from app.services.seo.category_profile import ProfileMissingError
 from app.services.seo.query_meaning_matcher.embeddings import MeaningEmbeddingError
 from app.services.seo.query_meaning_matcher.matcher import (
     CategoryBootstrapBuildingError,
@@ -88,6 +89,8 @@ async def post_matcher_v2_run_endpoint(
     except CategoryBootstrapBuildingError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except MissingSkuMeaningAnnotationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ProfileMissingError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except MeaningEmbeddingError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc

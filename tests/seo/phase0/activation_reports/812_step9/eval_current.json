@@ -1,0 +1,53 @@
+{
+  "run_id": 42,
+  "verdict": "preview_only",
+  "labels_used": 149,
+  "labels_missing": 42,
+  "metrics": {
+    "labels_scored": 149.0,
+    "labels_missing": 42.0,
+    "accuracy": 0.2349,
+    "primary_precision": 0.2987,
+    "primary_recall": 0.5,
+    "bad_primary_rate": 0.3766,
+    "hard_conflict_primary_count": 0.0,
+    "primary_predicted": 77.0,
+    "primary_expected": 46.0,
+    "buckets": {
+      "primary": 77,
+      "secondary": 32,
+      "broad": 32,
+      "rejected": 8
+    }
+  },
+  "thresholds": {
+    "accuracy_min": 0.85,
+    "bad_primary_rate_max": 0.05,
+    "hard_conflict_primary_count_max": 0.0
+  },
+  "matcher_run_ids": [
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29
+  ],
+  "nm_ids": [
+    291861306,
+    277132340,
+    292541341,
+    346647412,
+    677255519,
+    677255521,
+    678529108,
+    678529109
+  ],
+  "notes": [
+    "This eval was computed after matcher_v2 started consuming the active CategoryProfile.",
+    "Profile version recorded on runtime matcher runs: v1.812.skeleton.243953b2."
+  ]
+}
+

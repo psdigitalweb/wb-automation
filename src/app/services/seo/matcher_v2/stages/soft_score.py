@@ -11,11 +11,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from app.services.seo.query_meaning_matcher.matcher import (
+from app.services.seo.query_meaning_matcher.profile_matcher import (
     _FeatureSet,
+    _product_type_score,
+)
+from app.services.seo.query_meaning_matcher.runtime_helpers import (
     _frequency_boost,
     _overlap_score,
-    _product_type_score,
 )
 
 if TYPE_CHECKING:
@@ -48,55 +50,54 @@ def compute_soft_score(
     genericness: str,
     ranking_value: float | None,
     has_conflicts: bool,
-    category_profile: "CategoryProfile | None" = None,
+    category_profile: "CategoryProfile",
 ) -> SoftScoreResult:
     """Run the soft-scoring stage for a single query meaning.
 
-    The computation is intentionally identical to the original matcher. The
-    caller is still responsible for applying conflict / manual penalties
-    before bucketing (see ``stages/bucket_cap.py``). ``category_profile``
-    is threaded through so future iterations can read
-    ``profile.payload['scoring_weights']`` in place of the legacy constants
-    without adding new category-specific literals to this module (guarded by
-    ``tests/seo/test_matcher_v2_no_category_literals.py``).
+    The caller is still responsible for applying conflict / manual penalties
+    before bucketing (see ``stages/bucket_cap.py``). Step 9 reads overlap and
+    product-type weights from the active CategoryProfile.
     """
-
-    del category_profile  # reserved for iteration 3 — intentionally unused
     reasons: list[str] = []
     matched: list[str] = []
+    weights = category_profile.scoring.weights
 
-    product_score, product_reasons = _product_type_score(sku_features, query_features)
+    product_score, product_reasons = _product_type_score(
+        sku_features,
+        query_features,
+        profile=category_profile,
+    )
     reasons.extend(product_reasons)
 
     expressive_score, expressive_overlap, expressive_reasons = _overlap_score(
         "expressive",
         sku_features.expressive_terms,
         query_features.expressive_terms,
-        0.22,
+        float(weights.get("expressive_overlap", 0.22)),
     )
     use_case_score, use_case_overlap, use_case_reasons = _overlap_score(
         "use_case",
         sku_features.use_case_terms,
         query_features.use_case_terms,
-        0.14,
+        float(weights.get("use_case_overlap", 0.14)),
     )
     attribute_score, attribute_overlap, attribute_reasons = _overlap_score(
         "attribute",
         sku_features.attribute_terms,
         query_features.attribute_terms,
-        0.08,
+        float(weights.get("attribute_overlap", 0.08)),
     )
     audience_score, audience_overlap, audience_reasons = _overlap_score(
         "audience",
         sku_features.audience_terms,
         query_features.audience_terms,
-        0.12,
+        float(weights.get("audience_overlap", 0.12)),
     )
     occasion_score, occasion_overlap, occasion_reasons = _overlap_score(
         "occasion",
         sku_features.occasion_terms,
         query_features.occasion_terms,
-        0.05,
+        float(weights.get("occasion_overlap", 0.05)),
     )
     reasons.extend(
         expressive_reasons
@@ -113,9 +114,23 @@ def compute_soft_score(
         + occasion_overlap
     )
 
-    specificity_bonus = 0.08 if genericness == "specific" else 0.0
-    genericness_penalty = 0.18 if genericness == "generic" else (0.09 if genericness == "broad" else 0.0)
-    conflict_penalty = 0.55 if has_conflicts else 0.0
+    specificity_bonus = (
+        float(weights.get("specificity_bonus", 0.08))
+        if genericness == "specific"
+        else 0.0
+    )
+    genericness_penalty = (
+        float(weights.get("genericness_generic_penalty", 0.18))
+        if genericness == "generic"
+        else (
+            float(weights.get("genericness_broad_penalty", 0.09))
+            if genericness == "broad"
+            else 0.0
+        )
+    )
+    conflict_penalty = (
+        float(weights.get("conflict_penalty", 0.55)) if has_conflicts else 0.0
+    )
     frequency = _frequency_boost(ranking_value, allow=not has_conflicts and genericness == "specific")
 
     raw_score = (
