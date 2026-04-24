@@ -1,0 +1,1 @@
+Verified DB restorepoint exists at restorepoints/2026-04-24_phase0_step8_verified_before_profile_activation/. restorepoints/ is intentionally not committed.

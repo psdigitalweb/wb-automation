@@ -1,0 +1,4 @@
+alembic_before: 20260424_seo_iter2_category_profile_eval_promotion (head)
+alembic_after: 20260424_2200_seo_category_profile_derive_runs (head)
+derive_runs_table_exists: 1
+note: runtime api container required copying existing Step 3/4/7 files from the working tree before upgrade/persist/activate because the container image lagged behind the branch state.
