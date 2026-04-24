@@ -16,6 +16,7 @@ from app.services.seo.atoms.v1.guards import apply_query_guards, apply_sku_guard
 from app.services.seo.atoms.v1.llm_extractors import extract_query_atoms, extract_sku_atoms
 from app.services.seo.atoms.v1.schemas import MeaningAtom, QueryAtoms, SkuAtoms
 from app.services.seo.atoms.v1.vision import extract_vision_sku_atoms
+from app.services.seo.category_profile import CategoryProfile, load_active_profile
 from app.services.seo.query_meaning_matcher.canonical import listify, stable_hash
 
 
@@ -169,7 +170,7 @@ def _upsert_atoms_record(
     return row
 
 
-def _query_atoms_from_meaning(row: SeoQueryMeaning) -> QueryAtoms:
+def _query_atoms_from_meaning(row: SeoQueryMeaning, *, profile: CategoryProfile | None = None) -> QueryAtoms:
     payload = row.meaning_payload if isinstance(row.meaning_payload, Mapping) else {}
     functional = payload.get("functional") if isinstance(payload.get("functional"), Mapping) else {}
     expressive = payload.get("expressive") if isinstance(payload.get("expressive"), Mapping) else {}
@@ -215,7 +216,7 @@ def _query_atoms_from_meaning(row: SeoQueryMeaning) -> QueryAtoms:
             atoms.required_atoms,
             MeaningAtom(type="attribute", field="constraint", value=value, importance="hard", source="query_meaning", confidence=0.75),
         )
-    return apply_query_guards(atoms, [query_text, *examples])
+    return apply_query_guards(atoms, [query_text, *examples], profile=profile)
 
 
 def build_query_atoms_for_category(
@@ -227,6 +228,7 @@ def build_query_atoms_for_category(
     force_refresh: bool = False,
     use_llm: bool = False,
 ) -> dict[str, Any]:
+    profile = load_active_profile(session, project_id=project_id, category_id=category_id)
     stmt = (
         select(SeoQueryMeaning)
         .where(
@@ -275,11 +277,12 @@ def build_query_atoms_for_category(
                         "genericness": row.genericness,
                         "constraints": row.constraints or [],
                     },
+                    profile=profile,
                     cache_dir=cache_dir,
                     force_refresh=force_refresh,
                 )
             else:
-                atoms = _query_atoms_from_meaning(row)
+                atoms = _query_atoms_from_meaning(row, profile=profile)
             _upsert_atoms_record(
                 session,
                 project_id=project_id,
@@ -313,6 +316,7 @@ def _fallback_sku_atoms(
     *,
     evidence_payload: Mapping[str, Any],
     meaning_payload: Mapping[str, Any],
+    profile: CategoryProfile | None = None,
 ) -> SkuAtoms:
     product = evidence_payload.get("product") if isinstance(evidence_payload.get("product"), Mapping) else {}
     functional = meaning_payload.get("functional") if isinstance(meaning_payload.get("functional"), Mapping) else {}
@@ -325,7 +329,7 @@ def _fallback_sku_atoms(
         confidence={"fallback": 0.55},
         evidence_refs=["sku_meaning", "product_data"],
     )
-    return apply_sku_guards(atoms, evidence=evidence_payload, meaning_payload=meaning_payload)
+    return apply_sku_guards(atoms, evidence=evidence_payload, meaning_payload=meaning_payload, profile=profile)
 
 
 def ensure_sku_atoms(
@@ -339,6 +343,7 @@ def ensure_sku_atoms(
     force_refresh: bool = False,
     include_vision: bool = True,
 ) -> dict[str, Any]:
+    profile = load_active_profile(session, project_id=project_id, category_id=category_id)
     meaning_payload = dict(annotation.meaning_payload or {}) if annotation is not None else {}
     annotation_id = int(annotation.id) if annotation is not None else None
     input_hash = stable_hash(
@@ -365,12 +370,17 @@ def ensure_sku_atoms(
             sku_atoms = extract_sku_atoms(
                 evidence_payload,
                 meaning_payload=meaning_payload,
+                profile=profile,
                 cache_dir=_cache_dir() / "sku_atoms",
                 force_refresh=force_refresh,
             )
             source_version = ATOMS_SOURCE_VERSION
         except Exception:
-            sku_atoms = _fallback_sku_atoms(evidence_payload=evidence_payload, meaning_payload=meaning_payload)
+            sku_atoms = _fallback_sku_atoms(
+                evidence_payload=evidence_payload,
+                meaning_payload=meaning_payload,
+                profile=profile,
+            )
             source_version = SKU_ATOMS_SOURCE_VERSION
         _upsert_atoms_record(
             session,

@@ -14,6 +14,7 @@ from app.services.seo.atoms.v1.schemas import (
     QueryAtoms,
     SkuAtoms,
 )
+from app.services.seo.category_profile import CategoryProfile
 from app.services.seo.providers.base import ChatMessage, ChatProvider
 from app.services.seo.providers.openrouter import OpenRouterProvider
 from app.services.seo.query_meaning_matcher.canonical import listify, stable_hash
@@ -388,6 +389,7 @@ def _sku_prompt(payload: Mapping[str, Any]) -> str:
 def extract_query_atoms(
     cluster_payload: Mapping[str, Any],
     *,
+    profile: CategoryProfile | None = None,
     provider: ChatProvider | None = None,
     cache_dir: Path | None = None,
     force_refresh: bool = False,
@@ -405,7 +407,7 @@ def extract_query_atoms(
     if not force_refresh:
         cached = _read_cached_atoms(cache_dir, cache_key, kind="query")
         if isinstance(cached, QueryAtoms):
-            guarded = apply_query_guards(cached, [query])
+            guarded = apply_query_guards(cached, [query], profile=profile)
             return normalize_query_atoms_v02(guarded, primary_query=query)
 
     messages = [
@@ -414,7 +416,7 @@ def extract_query_atoms(
     ]
     response = _provider_or_default(provider).generate_chat(messages, temperature=0.1, max_tokens=1800)
     atoms = parse_query_atoms_response(response.content, query=query, cluster_key=cluster_key or None)
-    atoms = apply_query_guards(atoms, [query])
+    atoms = apply_query_guards(atoms, [query], profile=profile)
     atoms = normalize_query_atoms_v02(atoms, primary_query=query)
     _write_cached_atoms(
         cache_dir,
@@ -432,6 +434,7 @@ def extract_sku_atoms(
     evidence_payload: Mapping[str, Any],
     *,
     meaning_payload: Mapping[str, Any] | None = None,
+    profile: CategoryProfile | None = None,
     provider: ChatProvider | None = None,
     cache_dir: Path | None = None,
     force_refresh: bool = False,
@@ -450,7 +453,7 @@ def extract_sku_atoms(
     if not force_refresh:
         cached = _read_cached_atoms(cache_dir, cache_key, kind="sku")
         if isinstance(cached, SkuAtoms):
-            return apply_sku_guards(cached, evidence=evidence_payload, meaning_payload=meaning_payload)
+            return apply_sku_guards(cached, evidence=evidence_payload, meaning_payload=meaning_payload, profile=profile)
 
     prompt_payload = dict(evidence_payload)
     prompt_payload["current_sku_meaning"] = dict(meaning_payload or {})
@@ -465,7 +468,7 @@ def extract_sku_atoms(
         category_id=int(category_id) if category_id is not None else None,
         nm_id=int(nm_id) if nm_id is not None else None,
     )
-    atoms = apply_sku_guards(atoms, evidence=evidence_payload, meaning_payload=meaning_payload)
+    atoms = apply_sku_guards(atoms, evidence=evidence_payload, meaning_payload=meaning_payload, profile=profile)
     _write_cached_atoms(
         cache_dir,
         cache_key,

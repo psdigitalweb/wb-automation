@@ -10,6 +10,7 @@ import re
 from typing import Any, Iterable, Mapping
 
 from app.services.seo.atoms.v1.schemas import MeaningAtom, QueryAtoms, SkuAtoms
+from app.services.seo.category_profile import CategoryProfile
 from app.services.seo.query_meaning_matcher.canonical import listify
 from app.services.seo.visual_motifs import canonicalize_motif_value, extract_visual_motifs
 
@@ -247,17 +248,168 @@ def _add_excluded(query: QueryAtoms, *, field: str, value: Any) -> None:
     )
 
 
-def apply_query_guards(query: QueryAtoms, query_texts: Iterable[str]) -> QueryAtoms:
+def _mapping_items(value: Any) -> tuple[Mapping[str, Any], ...]:
+    if isinstance(value, tuple):
+        return tuple(item for item in value if isinstance(item, Mapping))
+    if isinstance(value, list):
+        return tuple(item for item in value if isinstance(item, Mapping))
+    return ()
+
+
+def _contains_guard_marker(text: str, marker: Any) -> bool:
+    marker_text = normalize_text(marker).strip()
+    if not marker_text:
+        return False
+    return marker_text in text
+
+
+def _add_required_from_guard(query: QueryAtoms, atom: Mapping[str, Any]) -> None:
+    atom_type = str(atom.get("type") or "attribute")
+    field = str(atom.get("field") or atom_type)
+    operator = str(atom.get("operator") or "equals")
+    _add_required(query, atom_type=atom_type, field=field, value=atom.get("value"), operator=operator)
+
+
+def _apply_profile_query_guards(query: QueryAtoms, *, primary_text: str, profile: CategoryProfile | None) -> None:
+    if profile is None:
+        return
+
+    query_guards = profile.query_guards
+    for rule in _mapping_items(query_guards.get("product_type_detection")):
+        if not _contains_guard_marker(primary_text, rule.get("when_contains")):
+            continue
+        unless_set = bool(rule.get("unless_set"))
+        if not (unless_set and query.product_type):
+            new_product_type = str(rule.get("set_product_type") or "").strip()
+            if new_product_type:
+                query.product_type = new_product_type
+        for atom in _mapping_items(rule.get("add_required")):
+            _add_required_from_guard(query, atom)
+
+    for rule in _mapping_items(query_guards.get("required_atoms")):
+        if _contains_guard_marker(primary_text, rule.get("when_contains")):
+            atom = rule.get("atom")
+            if isinstance(atom, Mapping):
+                _add_required_from_guard(query, atom)
+
+    for rule in _mapping_items(query_guards.get("excluded_atoms")):
+        if _contains_guard_marker(primary_text, rule.get("when_contains")):
+            atom = rule.get("exclude")
+            if isinstance(atom, Mapping):
+                _add_excluded(query, field=str(atom.get("field") or ""), value=atom.get("value"))
+
+
+def _is_empty_characteristic_value(value_text: str) -> bool:
+    return value_text.strip() in {"", "нет", "без", "none", "n/a", "null"}
+
+
+def _parse_guard_target_value(*, target: Mapping[str, Any], raw_value: Any, value_text: str) -> Any | None:
+    parser = normalize_text(target.get("parser"))
+    if parser == "int_first":
+        found = re.search(r"\d{1,4}", value_text)
+        return int(found.group(0)) if found else None
+    if parser == "boolean_keyword":
+        truthy = {"1", "true", "yes", "y", "да", "есть", "+"}
+        falsey = {"0", "false", "no", "n", "нет", "без"}
+        words = tokens(value_text)
+        if words & truthy:
+            return target.get("value_true", target.get("value", True))
+        if words & falsey:
+            return target.get("value_false", target.get("value", False))
+        return None
+    if "value_if_any" in target:
+        return None if _is_empty_characteristic_value(value_text) else target.get("value_if_any")
+    if "value" in target:
+        return target.get("value")
+    if parser == "as_is":
+        return raw_value
+    return raw_value
+
+
+def _add_sku_target_atom(
+    sku: SkuAtoms,
+    *,
+    target: Mapping[str, Any],
+    raw_value: Any,
+    source: str,
+) -> None:
+    atom_type = str(target.get("type") or "attribute")
+    field = str(target.get("field") or atom_type)
+    value_text = normalize_text(raw_value)
+    parsed_value = _parse_guard_target_value(target=target, raw_value=raw_value, value_text=value_text)
+    if parsed_value is None:
+        return
+
+    if atom_type == "visual" and field == "motif":
+        _add_sku_positive(sku, atom_type=atom_type, field=field, value=parsed_value, source=source)
+        return
+    if atom_type in {"recipient", "occasion", "expressive"}:
+        _add_sku_positive(sku, atom_type=atom_type, field=field, value=parsed_value, source=source)
+        return
+    _add_sku_fact(sku, atom_type=atom_type, field=field, value=parsed_value, source=source)
+
+
+def _apply_profile_sku_characteristics(
+    sku: SkuAtoms,
+    *,
+    profile: CategoryProfile | None,
+    characteristics: Any,
+) -> None:
+    if profile is None:
+        return
+
+    mappings = _mapping_items(profile.sku_guards.get("characteristic_mappings"))
+    for name, raw_value in _iter_characteristics(characteristics):
+        name_norm = normalize_text(name)
+        values = _flatten_values(raw_value)
+        for rule in mappings:
+            if not _contains_guard_marker(name_norm, rule.get("name_contains")):
+                continue
+            for value in values:
+                value_text = normalize_text(value)
+                target = rule.get("target")
+                if isinstance(target, Mapping):
+                    _add_sku_target_atom(sku, target=target, raw_value=value, source="product_characteristics")
+                for keyword_rule in _mapping_items(rule.get("target_keywords")):
+                    if _contains_guard_marker(value_text, keyword_rule.get("when_value_contains")):
+                        keyword_target = keyword_rule.get("target")
+                        if isinstance(keyword_target, Mapping):
+                            _add_sku_target_atom(sku, target=keyword_target, raw_value=value, source="product_characteristics")
+
+
+def _apply_profile_sku_functional_tokens(
+    sku: SkuAtoms,
+    *,
+    profile: CategoryProfile | None,
+    meaning_payload: Mapping[str, Any],
+) -> None:
+    if profile is None:
+        return
+
+    functional = meaning_payload.get("functional") if isinstance(meaning_payload.get("functional"), Mapping) else {}
+    mappings = _mapping_items(profile.sku_guards.get("functional_token_mappings"))
+    for value in listify(functional.get("attributes")) + listify(functional.get("use_cases")):
+        value_text = normalize_text(value)
+        for rule in mappings:
+            if _contains_guard_marker(value_text, rule.get("when_contains")):
+                target = rule.get("target")
+                if isinstance(target, Mapping):
+                    _add_sku_target_atom(sku, target=target, raw_value=value, source="sku_meaning")
+
+
+def apply_query_guards(
+    query: QueryAtoms,
+    query_texts: Iterable[str],
+    *,
+    profile: CategoryProfile | None = None,
+) -> QueryAtoms:
+    """Apply deterministic query-atom guards using global and profile-driven rules."""
+
     result = query.model_copy(deep=True)
     texts = [str(item or "") for item in query_texts if str(item or "").strip()]
     primary_text = normalize_text(texts[0] if texts else "")
 
-    if "термокруж" in primary_text or re.search(r"\bтермос", primary_text):
-        result.product_type = result.product_type or "термокружка"
-        _add_required(result, atom_type="product_type", field="product_type", value="термокружка")
-        _add_required(result, atom_type="compatibility", field="thermal", value=True)
-    elif "круж" in primary_text and not result.product_type:
-        result.product_type = "кружка"
+    _apply_profile_query_guards(result, primary_text=primary_text, profile=profile)
 
     for match in _VOLUME_RE.finditer(primary_text):
         _add_required(result, atom_type="numeric", field="volume_ml", value=int(match.group("value")), operator="close_to")
@@ -269,23 +421,12 @@ def apply_query_guards(query: QueryAtoms, query_texts: Iterable[str]) -> QueryAt
     if "набор" in primary_text or "комплект" in primary_text:
         _add_required(result, atom_type="attribute", field="quantity", value="set")
 
-    if "без рисун" in primary_text or "без принт" in primary_text:
-        _add_excluded(result, field="design", value="print")
-    if "без крыш" in primary_text:
-        _add_excluded(result, field="feature", value="lid")
     if "прозрач" in primary_text:
         _add_required(result, atom_type="visual", field="transparency", value="transparent")
     for motif in extract_visual_motifs(primary_text):
         _add_required(result, atom_type="visual", field="motif", value=motif)
         if result.genericness in {"generic", "broad"}:
             result.genericness = "specific"
-
-    if "кофемаш" in primary_text:
-        _add_required(result, atom_type="compatibility", field="compatibility", value="coffee_machine")
-    if "в машину" in primary_text or "для машины" in primary_text or "авто" in primary_text:
-        _add_required(result, atom_type="use_case", field="context", value="car")
-    if "пивн" in primary_text:
-        _add_required(result, atom_type="use_case", field="use_case", value="beer")
 
     for canonical in _recipient_values_from_text(primary_text):
         _add_required(result, atom_type="recipient", field="recipient", value=canonical)
@@ -353,7 +494,15 @@ def _flatten_values(value: Any) -> list[Any]:
     return [value]
 
 
-def apply_sku_guards(sku: SkuAtoms, *, evidence: Mapping[str, Any] | None = None, meaning_payload: Mapping[str, Any] | None = None) -> SkuAtoms:
+def apply_sku_guards(
+    sku: SkuAtoms,
+    *,
+    evidence: Mapping[str, Any] | None = None,
+    meaning_payload: Mapping[str, Any] | None = None,
+    profile: CategoryProfile | None = None,
+) -> SkuAtoms:
+    """Apply deterministic SKU-atom guards using global and profile-driven rules."""
+
     result = sku.model_copy(deep=True)
     evidence = evidence or {}
     meaning_payload = meaning_payload or {}
@@ -367,46 +516,8 @@ def apply_sku_guards(sku: SkuAtoms, *, evidence: Mapping[str, Any] | None = None
         result.product_type = product_type
         _add_sku_fact(result, atom_type="product_type", field="product_type", value=product_type, source="sku_meaning")
 
-    for name, raw_value in _iter_characteristics(characteristics):
-        name_norm = normalize_text(name)
-        values = _flatten_values(raw_value)
-        for value in values:
-            value_text = normalize_text(value)
-            if "объем" in name_norm:
-                found = _VOLUME_RE.search(f"{value_text} мл") or re.search(r"\d{2,4}", value_text)
-                if found:
-                    numeric = int(found.group("value") if "value" in found.groupdict() else found.group(0))
-                    _add_sku_fact(result, atom_type="numeric", field="volume_ml", value=numeric)
-            if "цвет" in name_norm:
-                _add_sku_fact(result, atom_type="attribute", field="color", value=value)
-            if "материал" in name_norm:
-                _add_sku_fact(result, atom_type="attribute", field="material", value=value)
-            if "количество" in name_norm:
-                found = re.search(r"\d{1,2}", value_text)
-                if found:
-                    _add_sku_fact(result, atom_type="numeric", field="quantity", value=int(found.group(0)))
-            if "рисунок" in name_norm or "декоратив" in name_norm:
-                if value_text and value_text not in {"нет", "без", "none"}:
-                    _add_sku_fact(result, atom_type="visual", field="design", value="print")
-                    _add_sku_positive(result, atom_type="visual", field="motif", value=value, source="product_characteristics")
-            if "особенности" in name_norm:
-                if "свч" in value_text:
-                    _add_sku_fact(result, atom_type="compatibility", field="compatibility", value="microwave")
-                if "посудом" in value_text:
-                    _add_sku_fact(result, atom_type="compatibility", field="compatibility", value="dishwasher")
-            if "назначение подарка" in name_norm:
-                _add_sku_positive(result, atom_type="recipient", field="recipient", value=value, source="product_characteristics")
-            if name_norm == "повод" or "повод" in name_norm:
-                _add_sku_positive(result, atom_type="occasion", field="occasion", value=value, source="product_characteristics")
-
-    for value in listify(functional.get("attributes")) + listify(functional.get("use_cases")):
-        value_norm = normalize_text(value)
-        if "термокруж" in value_norm:
-            _add_sku_fact(result, atom_type="compatibility", field="thermal", value=True, source="sku_meaning")
-        if "посудом" in value_norm:
-            _add_sku_fact(result, atom_type="compatibility", field="compatibility", value="dishwasher", source="sku_meaning")
-        if "свч" in value_norm:
-            _add_sku_fact(result, atom_type="compatibility", field="compatibility", value="microwave", source="sku_meaning")
+    _apply_profile_sku_characteristics(result, profile=profile, characteristics=characteristics)
+    _apply_profile_sku_functional_tokens(result, profile=profile, meaning_payload=meaning_payload)
 
     for value in listify(expressive.get("vibes")) + listify(expressive.get("styles")):
         _add_sku_positive(result, atom_type="expressive", field="expressive", value=value)
