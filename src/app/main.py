@@ -38,6 +38,7 @@ from app.routers.seo_sku_meaning import router as seo_sku_meaning_router
 from app.routers.seo_matcher_v2 import router as seo_matcher_v2_router
 from app.routers.seo_query_meaning_matcher import router as seo_query_meaning_matcher_router
 from app.routers.seo_category_bootstrap import router as seo_category_bootstrap_router
+from app.routers.seo_category_profile import router as seo_category_profile_router
 from app.routers.seo_generation import router as seo_generation_router
 from app.routers.seo_products import router as seo_products_router
 from app.routers.seo_eval import router as seo_eval_router
@@ -115,6 +116,7 @@ app.include_router(seo_sku_meaning_router)
 app.include_router(seo_query_meaning_matcher_router)
 app.include_router(seo_matcher_v2_router)
 app.include_router(seo_category_bootstrap_router)
+app.include_router(seo_category_profile_router)
 app.include_router(seo_products_router)
 app.include_router(seo_generation_router)
 app.include_router(seo_eval_router)

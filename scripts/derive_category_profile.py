@@ -1,4 +1,4 @@
-"""CLI entrypoint for Phase 0 Step 3 category-profile skeleton derive."""
+"""CLI entrypoint for Phase 0 Step 7 category-profile derive tooling."""
 
 from __future__ import annotations
 
@@ -18,14 +18,24 @@ from app.services.seo.category_profile_derive import derive_category_profile  # 
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Derive a category profile skeleton for one category.")
+    parser = argparse.ArgumentParser(description="Derive a category profile for one category.")
     parser.add_argument("--project", type=int, required=True, help="Project ID.")
     parser.add_argument("--category", type=int, required=True, help="WB category ID.")
-    parser.add_argument("--dry-run", action="store_true", help="Build payload without writing DB rows or snapshots.")
-    parser.add_argument(
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Build payload without writing DB rows or snapshots (default).",
+    )
+    mode_group.add_argument(
+        "--persist",
+        action="store_true",
+        help="Persist a new inactive profile row plus derive-run metadata.",
+    )
+    mode_group.add_argument(
         "--activate",
         action="store_true",
-        help="Reserved for later steps. Step 3 keeps activation disabled.",
+        help="Reserved flag. Step 7 keeps activation in a separate CLI for safety.",
     )
     parser.add_argument(
         "--out",
@@ -35,17 +45,25 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    if args.activate:
+        parser.error(
+            "Activation via derive CLI is disabled in Phase 0 Step 7. "
+            "Use `python -m scripts.activate_category_profile --profile-id <id>` instead."
+        )
+
+    dry_run = not bool(args.persist)
+
     session = SessionLocal()
     try:
         result = derive_category_profile(
             project_id=args.project,
             category_id=args.category,
             session=session,
-            activate=bool(args.activate),
-            dry_run=bool(args.dry_run),
+            activate=False,
+            dry_run=dry_run,
             out_path=args.out,
         )
-        if args.dry_run:
+        if dry_run:
             session.rollback()
         else:
             session.commit()
@@ -63,7 +81,8 @@ def main() -> int:
                 "snapshot_path": str(result.snapshot_path),
                 "self_check_status": result.self_check.status,
                 "status": result.status,
-                "dry_run": bool(args.dry_run),
+                "dry_run": dry_run,
+                "persisted_inactive": not dry_run,
             },
             ensure_ascii=False,
         )
