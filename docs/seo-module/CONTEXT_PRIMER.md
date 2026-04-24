@@ -58,15 +58,17 @@ D:/Work/EcomCore/
 │  │  ├─ category_profile.py                      # loader CategoryProfile (см. SPEC)
 │  │  ├─ category_bootstrap.py                    # сборка корпуса из CSV
 │  │  ├─ query_meaning_matcher/                   # легаси матчер (matcher_v1)
-│  │  │  └─ matcher.py                            # ← содержит hardcoded 812-литералы (Phase 0 чистит)
+│  │  │  ├─ matcher.py                            # ← literal-free facade, active path reads CategoryProfile
+│  │  │  ├─ profile_matcher.py                    # ← profile-driven query matcher implementation
+│  │  │  └─ _legacy/matcher.py                    # ← deprecated legacy matcher, isolated
 │  │  ├─ matcher_v2/                              # ⭐ новый матчер
 │  │  │  ├─ api.py                                # entry point
 │  │  │  └─ stages/
-│  │  │     ├─ eligibility.py                     # ← содержит `del category_profile`
-│  │  │     ├─ soft_score.py                      # ← содержит `del category_profile`
-│  │  │     └─ bucket_cap.py                      # ← содержит `del category_profile`
+│  │  │     ├─ eligibility.py                     # ← consumes active CategoryProfile
+│  │  │     ├─ soft_score.py                      # ← consumes active CategoryProfile
+│  │  │     └─ bucket_cap.py                      # ← consumes active CategoryProfile
 │  │  ├─ atoms/v1/
-│  │  │  ├─ guards.py                             # ← содержит hardcoded 812-литералы
+│  │  │  ├─ guards.py                             # ← profile-driven guards
 │  │  │  └─ schemas.py
 │  │  ├─ meaning_atoms/                           # producer атомов
 │  │  ├─ expressive_llm/                          # LLM-обогащение (отзывы, vibes)
@@ -99,7 +101,7 @@ D:/Work/EcomCore/
 
 ---
 
-## 3. Текущее состояние системы (2026-04-24)
+## 3. Текущее состояние системы (2026-04-24, после Phase 0)
 
 ### 3.1. Что есть в БД
 
@@ -109,11 +111,12 @@ D:/Work/EcomCore/
   - 183 `seo_query_clusters`.
   - `seo_category_meaning_axes` активная (source: LLM+deterministic).
   - 191 `seo_eval_labels` (ground truth).
-  - ~10 `seo_matcher_runs` для labeled SKU (бόльшая часть прогнана в процессе отладки eval).
+  - свежий Step 10 matcher/eval прогон для 8 labeled SKU: run ids `63..70`, eval run id `75`.
   - ~8 SKU с `seo_sku_meaning_annotations` + meaning atoms.
+  - активный `SeoCategoryProfile`: `id=1`, `version=v1.812.skeleton.243953b2`, `schema_version=category_profile_v1`, `self_check.status=passed`.
 - **Категория 821 (тарелки, бегло упоминалась в транскрипте)**: был пример axes с полным набором экономических метрик, но не активно работали. В Phase 0 **не трогаем**.
-- **Таблица `seo_category_profiles`**: **пустая**. Нет ни одного профиля.
-- **Таблица `seo_category_profile_derive_runs`**: **не существует**, создаётся в Phase 0 Step 3.
+- **Таблица `seo_category_profiles`**: существует; для `(project_id=1, category_id=812)` ровно один активный профиль.
+- **Таблица `seo_category_profile_derive_runs`**: существует; используется для observability derive/activation tooling.
 
 #### 3.1.1. Реальные ключи `sample_source_payload` (категория 812, проверено в БД 2026-04-24)
 
@@ -152,8 +155,11 @@ D:/Work/EcomCore/
 
 - Импорт CSV через UI (`/app/project/1/seo/categories/{cid}` → Обновить).
 - Bootstrap pipeline: normalize → cluster → meaning → axes → atoms → embeddings.
-- `POST /api/seo/matcher/v2/run` для 812 SKU — создаёт `SeoMatcherRun` с `bucket` per query.
+- `POST /api/seo/matcher/v2/run` для 812 SKU — создаёт `SeoMatcherRun` с `bucket` per query и пишет `category_profile_version` / `category_profile_active` в `metrics`.
+- `matcher_v2` требует активный `SeoCategoryProfile`; нет активного профиля → понятная ошибка `ProfileMissingError`, а не hidden legacy fallback.
 - `POST /api/seo/eval/matcher/run` для 812 — accuracy считается по 191 labels.
+- Active guards и `query_meaning_matcher/matcher.py` profile-driven/literal-free; legacy matcher изолирован в `query_meaning_matcher/_legacy/matcher.py`.
+- Phase 0 Step 10 regression gate passed for 812: baseline accuracy `0.1678`, current accuracy `0.2349`, drift `+0.0671`, minimum acceptable `0.1378`.
 - UI iter2: QualityBadge, ApprovalStateBadge, CategoryTierBadge, HowToUsePanel, compare-page с фильтрами и поиском.
 - Generation preview (research-preview), human-review, promote (все behind eligibility-gate).
 
@@ -161,13 +167,12 @@ D:/Work/EcomCore/
 
 | Что | Почему |
 |---|---|
-| `matcher_v2` для любой категории кроме 812 | Нет профиля → падает в legacy-fallback с кружечными литералами |
+| `matcher_v2` для категории без активного профиля | После Phase 0 это ожидаемый fail-fast: нужно сначала derive/self-check/activate профиль |
 | `eval` без ручного перечисления `nm_ids` | Эндпоинт требует явные `nm_ids`; без них возвращает 0 labels |
-| `derive_category_profile` | Функции не существует (будет создана в Phase 0 Step 3) |
-| Авто-apply `SeoCategoryProfile` в матчере | Три стадии делают `del category_profile`, см. `services/seo/matcher_v2/stages/*.py:{68, 64, 61}` |
-| Profile-driven guards | `atoms/v1/guards.py` читает in-code константы (_RECIPIENTS, _EXPRESSIVE, …) |
+| Strict eval labels для категорий кроме 812 | Пока нет ground-truth labels; Phase 1 использует qualitative validation |
 | Operator happy-path UI | Текущие экраны — микс iter1/iter2 + отладка, нет чистого пути «от CSV до брифа» |
 | Экспорт брифа | Phase 4, не реализовано |
+| Optional full SEO test suite | Известный unrelated failure: `tests/seo/test_matcher_retention.py::test_keeps_referenced_runs` |
 
 ### 3.4. Docker / environment
 
@@ -264,9 +269,9 @@ Phase 0 переводит всю категорийную логику в `SeoC
 
 В ходе обсуждения 2026-04-24 было предложено выпилить meaning_atoms. **Решение: оставляем.** Генерация атомов уже автоматизирована через bootstrap и SKU-analysis. Проблема только в том, что producer читает hardcoded правила вместо профиля — это Phase 0 Step 5.
 
-### 5.6. Категории-агностика — цель, не текущее состояние
+### 5.6. Категории-агностика — Phase 0 backend state
 
-Система **проектировалась** category-agnostic (через `SeoCategoryProfile`), но фактически работает только на 812, потому что: (а) профили не сохранены, (б) `del category_profile` в стадиях, (в) hardcoded литералы в guards/matcher. Phase 0 закрывает этот разрыв.
+После Phase 0 backend-путь стал category-agnostic для категорий с активным `SeoCategoryProfile`: `matcher_v2` читает профиль, active guards/matcher literal-free, legacy изолирован. Практически валидирована пока только категория 812; Phase 1 должна проверить вторую категорию.
 
 ### 5.7. Reviews уже участвуют в axes
 
@@ -372,12 +377,18 @@ alembic revision --autogenerate -m "phase0: seo_category_profile_derive_runs"
 # baseline snapshot
 python scripts/phase0/capture_baseline.py --project 1 --category 812 --out tests/seo/phase0/baselines/812_pre_phase0/
 
-# derive
+# derive/profile lifecycle
 python scripts/derive_category_profile.py --project 1 --category 812 --dry-run
-python scripts/derive_category_profile.py --project 1 --category 812 --activate
+python scripts/derive_category_profile.py --project 1 --category 812 --persist
+python scripts/activate_category_profile.py --profile-id 1
 
-# eval regression check
-python scripts/phase0/compare_eval_to_baseline.py --baseline <a> --current <b> --max-drift 0.03
+# run matcher_v2 for all labeled 812 SKU
+python scripts/run_matcher_v2_for_labeled_812.py --project-id 1
+
+# regression reports
+tests/seo/phase0/baselines/812_pre_phase0/
+tests/seo/phase0/activation_reports/812_step10/eval_comparison.json
+tests/seo/phase0/activation_reports/812_step10/eval_current.json
 ```
 
 ### 8.5. База данных (Postgres)
@@ -426,23 +437,23 @@ SELECT id, version, is_active FROM seo_category_profiles WHERE category_id = 812
 
 ### 11.1. Кажется, что в коде логика привязана к 812 (слова «кружка», «термокружка»)
 
-Да, это так. Это — **проблема**, которую решает Phase 0. Не чини локально — следуй `PHASE_0_EXECUTION_PLAN.md`.
+В active runtime path после Phase 0 таких литералов быть не должно. Они допустимы в профиле 812, тестах, baseline/reports и isolated legacy. Если найдены в active `src/app/services/seo/**` вне `_legacy`, это regression.
 
 ### 11.2. Кажется, что `del category_profile` — ошибка
 
-Это и есть ошибка, но её удаление — **только** в Phase 0 Step 6 с одновременным рефакторингом стадий. Иначе сломаются тесты.
+После Phase 0 это regression. Step 10 зафиксировал `del category_profile = 0`.
 
 ### 11.3. Кажется, что legacy-matcher надо просто удалить
 
-Нельзя до Phase 0 Step 6. Он используется: (а) `expressive_llm` (косвенно через imports), (б) фолбэк для категорий без профиля. В Step 6 перемещается в `_legacy/`.
+Legacy matcher не удалён полностью: он изолирован под `query_meaning_matcher/_legacy/` и помечен deprecated. Не использовать его как hidden fallback для `matcher_v2`.
 
 ### 11.4. Кажется, что `SeoCategoryProfile` должен иметь больше полей
 
 Спецификация `v1` — минимум, достаточный для Phase 0. Расширение — через `v1.1` (backward-compat) или `v2` (breaking). См. `CATEGORY_PROFILE_SPEC §8`.
 
-### 11.5. Кажется, что можно параллелить Phase 0 шаги ради скорости
+### 11.5. Кажется, что можно начинать Phase 1 до docs/acceptance
 
-Строго по зависимостям из `PHASE_0_EXECUTION_PLAN §4.5`. Большинство шагов последовательны. Забегание вперёд = потерянное время на merge conflicts.
+Нельзя. Phase 1 стартует только от completed Phase 0: Step 10 acceptance gate + Step 11 docs/retro.
 
 ### 11.6. Кажется, что self_check слишком строгий
 
@@ -463,3 +474,4 @@ SELECT id, version, is_active FROM seo_category_profiles WHERE category_id = 812
 ## 13. Changelog
 
 - **2026-04-24 v1** — initial. Первичный primer перед стартом Phase 0.
+- **2026-04-24 v1.1** — Phase 0 closed: active profile 812, profile-driven matcher/guards, Step 10 regression gate, Phase 1 starting state.

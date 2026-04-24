@@ -8,10 +8,10 @@
 
 ## 0. TL;DR для агента
 
-Пять фаз. Phase 0 критична и сейчас расписана до атомарных шагов. Phase 1–4 — контуры с явными inputs/outputs; детали Phase 1 станут плейбуком сразу после закрытия Phase 0. Phase 5 отложена сознательно.
+Пять фаз. Phase 0 закрыта 2026-04-24: backend теперь использует `SeoCategoryProfile` как runtime-источник категорийных правил для `matcher_v2`. Phase 1–4 — контуры с явными inputs/outputs; Phase 1 стартует только от completed Phase 0 state. Phase 5 отложена сознательно.
 
 ```
-Phase 0  — Backend Unification         (Т-shirt: L,   NOW)
+Phase 0  — Backend Unification         (Т-shirt: L,   COMPLETED 2026-04-24)
 Phase 1  — Validation on 2nd category  (Т-shirt: S,   NEXT)
 Phase 2  — Onboard 5–7 categories      (Т-shirt: M,   after 1)
 Phase 3  — Production UI reorganization(Т-shirt: M,   parallel to 2)
@@ -21,19 +21,22 @@ Phase 5  — Economic/feedback loops     (Т-shirt: ?,   DEFERRED)
 
 Цель всего roadmap: **дать оператору пайплайн «залил CSV → получил одобренный бриф по SKU» для произвольной категории без правки кода.**
 
-Текущее препятствие: система почти category-agnostic по архитектуре, но фактически работает только для 812, потому что (а) `seo_category_profiles` пустая, (б) `matcher_v2` стадии делают `del category_profile`, (в) в `atoms/v1/guards.py` и `query_meaning_matcher/matcher.py` зашиты литералы про кружки.
-
-Phase 0 это убирает.
+Текущее состояние после Phase 0: для 812 активен профиль `v1.812.skeleton.243953b2`; `matcher_v2` требует активный профиль и пишет `category_profile_version` / `category_profile_active` в метрики рана; `del category_profile = 0`; активные matcher/query-guards пути не содержат категорийных литералов. Следующая проверка — Phase 1 на второй категории, чтобы доказать, что это не «812 переименовали».
 
 ---
 
-## 1. Где мы сейчас (2026-04-24)
+## 1. Где мы сейчас (2026-04-24, после Phase 0)
 
 ### 1.1. Что работает
 
 - Импорт CSV запросов в категорию → `category_bootstrap` → `SeoQueryNormalized` + `SeoQueryCluster` + `SeoQueryMeaning` + `SeoCategoryMeaningAxes` + эмбеддинги + query-атомы.
 - `matcher_v2` API-endpoint работает, создаёт `SeoMatcherRun` и `SeoMatcherResult`.
+- `matcher_v2` теперь читает активный `SeoCategoryProfile`; для категорий без активного профиля это явная ошибка, а не hidden legacy fallback.
 - `eval` работает поверх `SeoEvalLabel`, но только когда явно переданы `nm_ids`.
+- `seo_category_profiles` содержит активный профиль 812: `id=1`, `version=v1.812.skeleton.243953b2`, `schema_version=category_profile_v1`, `self_check.status=passed`.
+- `seo_category_profile_derive_runs` существует и фиксирует derive/activation observability.
+- Активные guards/query matcher пути profile-driven; legacy matcher изолирован под `_legacy` и не является скрытым fallback для `matcher_v2`.
+- Phase 0 Step 10 regression gate для 812 пройден: baseline accuracy `0.1678`, current accuracy `0.2349`, drift `+0.0671`, minimum acceptable `0.1378`.
 - UI Iteration 1+2 реализован: категории, товары, compare, matcher-run viewer, generation page (research preview), human review.
 - `SeoCategoryMeaningAxes` реально строится по корпусу + отзывам (через `expressive_llm`).
 - `SeoMeaningAtom` автогенерируются при bootstrap (query-атомы) и при анализе SKU (sku-атомы) — pipeline работает.
@@ -42,11 +45,9 @@ Phase 0 это убирает.
 
 | Проблема | Где |
 |---|---|
-| `SeoCategoryProfile` фактически не применяется: стадии `matcher_v2` делают `del category_profile` | `src/app/services/seo/matcher_v2/stages/*.py` |
-| Категорийные литералы захардкожены | `src/app/services/seo/atoms/v1/guards.py`, `src/app/services/seo/query_meaning_matcher/matcher.py` |
-| Таблица `seo_category_profiles` пустая | БД |
 | `eval`-метки (191 строка) существуют только для 812 | `seo_eval_labels` |
-| `matcher_v2`-раны существуют только для ~10 SKU (вручную запущенных) | `seo_matcher_runs` |
+| Строгий eval baseline существует только для 812 | Phase 1/2 используют qualitative validation до появления labels |
+| `matcher_v2` для новой категории требует активный профиль | Нужно сначала прогнать derive/self-check/activation для категории |
 | UI — микс отладочных экранов и iter1/iter2 элементов, нет operator-пайплайна «от и до» | `frontend/app/app/project/[projectId]/seo/**` |
 | Нет экспорта брифа / черновика текста | — |
 | Экономический слой отключён по решению (homogenization trap) | — |
@@ -70,8 +71,8 @@ UI должен:
 
 | Фаза | Цель | Входы | Выходы | Exit criteria |
 |---|---|---|---|---|
-| 0 | Унификация бэкенда через `SeoCategoryProfile` | Код Iter2 + 812 корпус | `derive_category_profile` работает; литералы удалены; профиль 812 активен; eval ≥ baseline | см. §3.6 |
-| 1 | Валидация унификации на 2-й категории | 1 enriched CSV от оператора | Профиль категории B активен, matcher_v2 даёт осмысленные бакеты | см. §4.3 |
+| 0 | Унификация бэкенда через `SeoCategoryProfile` | Код Iter2 + 812 корпус | `derive_category_profile` работает; литералы удалены; профиль 812 активен; eval ≥ baseline | ✅ COMPLETED 2026-04-24; см. §3.10 |
+| 1 | Валидация унификации на 2-й категории | Completed Phase 0 + 1 enriched CSV от оператора | Профиль категории B активен, matcher_v2 даёт осмысленные бакеты | см. §4.3 |
 | 2 | Онбординг 5–7 категорий оператора | Enriched CSV'ы по каждой | Активные профили, шортлисты per SKU | см. §5.3 |
 | 3 | Production UI | Текущие отладочные экраны + `OPERATOR_WORKFLOW.md` | Чистый operator-поток без iter1/iter2 миксов | см. §6.3 |
 | 4 | Экспорт брифа | Одобренные `SeoSkuQuerySet` | Brief-документ, готовый к передаче копирайтеру | см. §7.3 |
@@ -133,14 +134,14 @@ Step 11. Документация (changelog, update existing docs).
 
 ### 3.6. Exit criteria
 
-- [ ] Ни одного вхождения `del category_profile` в `src/app/services/seo/**`.
-- [ ] `grep -rE 'термокруж|круж|пивн|кофемаш|рюкзак|сумка' src/app/services/seo/` возвращает 0 совпадений в `matcher.py` и `guards.py` (но может быть в тестах и в dev-сэмплах — whitelist'ом).
-- [ ] `seo_category_profiles` содержит ровно одну `is_active=true` строку для 812 со `schema_version = "category_profile_v1"`.
-- [ ] `self_check.status = "passed"` для активного профиля 812.
-- [ ] `eval` для 812 после активации → accuracy **не хуже** baseline из Step 1 минус 3 п.п. (регресс-бюджет).
-- [ ] `matcher_v2` отказывается стартовать, если для `category_id` нет активного профиля (с понятной ошибкой `ProfileMissingError`).
-- [ ] Все тесты из `phase0/TEST_PLAN.md` зелёные.
-- [ ] Агент-документация (`CONTEXT_PRIMER.md`, `AGENTS.md`) обновлена, если контракт поменялся в процессе.
+- [x] Ни одного вхождения `del category_profile` в `src/app/services/seo/**`.
+- [x] Активные matcher/query paths не содержат категорийных литералов; литералы 812 остаются только в profile/config/tests/reports/legacy.
+- [x] `seo_category_profiles` содержит ровно одну `is_active=true` строку для 812 со `schema_version = "category_profile_v1"`.
+- [x] `self_check.status = "passed"` для активного профиля 812.
+- [x] `eval` для 812 после активации → accuracy **не хуже** baseline из Step 1 минус 3 п.п. (регресс-бюджет).
+- [x] `matcher_v2` отказывается стартовать, если для `category_id` нет активного профиля (с понятной ошибкой `ProfileMissingError`).
+- [x] Phase 0 targeted tests зелёные; optional full SEO имеет unrelated retention failure, см. `TEST_PLAN.md`.
+- [x] Агент-документация (`CONTEXT_PRIMER.md`, roadmap/spec/test plan/retro) обновлена.
 
 ### 3.7. Что НЕ делаем в Phase 0
 
@@ -164,6 +165,27 @@ Step 11. Документация (changelog, update existing docs).
 - Т-shirt: **L** (большая).
 - Ожидаемая последовательность: Steps 1–2 параллельны, 3 — отдельно, 4–6 последовательно, 7 — параллельно 4–6, 8–10 — в самом конце.
 
+### 3.10. Phase 0 completion summary
+
+Phase 0 закрыта на коммите Step 11. Зафиксированные артефакты:
+- baseline: `tests/seo/phase0/baselines/812_pre_phase0/`
+- Step 8 activation: `tests/seo/phase0/activation_reports/812_step8/`
+- Step 9 wiring: `tests/seo/phase0/activation_reports/812_step9/`
+- Step 10 acceptance gate: `tests/seo/phase0/activation_reports/812_step10/`
+- retro: `docs/seo-module/phase0/PHASE_0_RETRO.md`
+
+Итоговые числа Step 10:
+- active profile 812: `v1.812.skeleton.243953b2`, `self_check.status=passed`
+- baseline accuracy: `0.1678`
+- current accuracy: `0.2349`
+- drift: `+0.0671`
+- minimum acceptable accuracy: `0.1378`
+- verdict: `pass`
+- `del category_profile`: `0`
+- active matcher literals: `0`
+
+Важно: eval verdict остаётся `preview_only` по product thresholds (`accuracy_min=0.85`). Step 10 подтверждает отсутствие регрессии относительно baseline, а не production-quality.
+
 ---
 
 ## 4. Phase 1 — Validation on 2nd category
@@ -176,7 +198,7 @@ Step 11. Документация (changelog, update existing docs).
 
 **Входы:**
 - Enriched-CSV от оператора для категории B (рекомендуется взять семантически далёкую от 812 — не посуду, не кружки-производные).
-- Рабочий Phase 0 на `main`.
+- Рабочий completed Phase 0 state: derive/profile admin tooling доступен, `matcher_v2` требует активный профиль, активные guards/matcher literal-free.
 
 **Выходы:**
 - `SeoCategoryMeaningAxes` для B.

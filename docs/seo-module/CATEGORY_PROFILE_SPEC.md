@@ -10,6 +10,14 @@
 
 `SeoCategoryProfile` — это **единственный источник категорийных правил** для `matcher_v2` и для генерации `meaning_atoms`. Всё, что сейчас зашито литералами в `atoms/v1/guards.py` и `query_meaning_matcher/matcher.py` (строки «термокруж», «круж», «пивн», «кофемаш» и т. п.), должно переехать в этот профиль.
 
+**Implementation status (Phase 0 closed, 2026-04-24):**
+- schema `category_profile_v1` реализована без изменения контракта;
+- `seo_category_profiles` и `seo_category_profile_derive_runs` доступны;
+- для `(project_id=1, category_id=812)` активен профиль `v1.812.skeleton.243953b2` (`self_check.status=passed`);
+- loader/wrapper и activation safety реализованы;
+- `matcher_v2` потребляет активный профиль и fail-fast'ит без него;
+- active `atoms/v1/guards.py` и `query_meaning_matcher/matcher.py` profile-driven/literal-free; legacy изолирован под `_legacy`.
+
 Профиль:
 - **хранится** в таблице `seo_category_profiles` (JSONB payload);
 - **читается** через `app.services.seo.category_profile.load_active_profile(...)`;
@@ -25,16 +33,16 @@
 
 ## 1. Зачем этот профиль существует
 
-### 1.1. Текущая проблема
+### 1.1. Историческая проблема до Phase 0
 
-В коде на момент написания документа (см. транскрипт аудита за 2026-04-24):
+В коде на момент первичного написания документа (см. транскрипт аудита за 2026-04-24) была следующая проблема, закрытая в Phase 0:
 
 - `matcher_v2` **декларативно** принимает `category_profile` в каждую стадию (`eligibility.py`, `soft_score.py`, `bucket_cap.py`), но **фактически** в каждой стадии есть строка `del category_profile`, после чего исполняется ветка из `services/seo/query_meaning_matcher/matcher.py`.
 - Эта «легаси»-ветка содержит литералы, применимые только к кружкам: `"термокруж"`, `"круж"`, `"пив"`, `"кофемаш"`, `"в машину"`, `"рюкзак"`, и т. п.
 - `atoms/v1/guards.py` делает то же самое при построении `QueryAtoms`/`SkuAtoms`.
 - `seo_category_profiles` пустая; версия профиля у всех ранов = `default_iter1` (sentinel, означающий «профиль не применён»).
 
-Итог: система формально «category-agnostic», фактически — работает только на категории 812 (кружки). На любой другой категории eligibility/scoring/bucketing выдадут мусор или ровно то же самое «кружечное» поведение.
+Итог до Phase 0: система формально «category-agnostic», фактически — работала только на категории 812 (кружки). После Phase 0 active runtime path требует профиль и не использует hidden legacy fallback.
 
 ### 1.2. Целевое состояние
 
@@ -43,6 +51,8 @@
 - Профиль — **обязательное условие** запуска `matcher_v2` на категории. Нет активного профиля → `matcher_v2` отказывается стартовать с понятной ошибкой (никакого скрытого fallback на легаси).
 - Все категорийные литералы удалены из `guards.py` и `matcher.py` и заменены на чтение полей профиля.
 - Добавление новой категории == прогнать `derive_category_profile(category_id)` + пройти self-check + активировать. Без правки кода.
+
+Этот целевой контракт реализован для Phase 0 baseline на 812 и должен быть валидирован на второй категории в Phase 1.
 
 ### 1.3. Что профиль **не** решает
 
@@ -981,3 +991,4 @@ Phase 0 — только `v1`. Любые последующие `v1.x` доба
 ## 14. Changelog этого документа
 
 - **2026-04-24** — v1.0 (initial). Зафиксирован контракт для Phase 0.
+- **2026-04-24** — v1.1 status update. Phase 0 implementation закрыта без изменения схемы: active 812 profile, derive-runs table, loader/wrapper, activation safety и `matcher_v2` profile wiring зафиксированы.

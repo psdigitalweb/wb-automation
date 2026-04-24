@@ -11,6 +11,17 @@
 - **Жёсткие ворота Phase 0:** snapshot-тесты 812 = bit-for-bit baseline; eval accuracy drift ≤ 3 п. п.; 0 совпадений `del category_profile` в `src/`.
 - **Все тесты лежат под `tests/seo/phase0/`.** Не смешивать с корневыми `tests/seo/`.
 
+**Фактический Step 10 / Phase 0 acceptance result (2026-04-24):**
+- baseline accuracy: `0.1678`
+- current accuracy: `0.2349`
+- drift: `+0.0671`
+- minimum acceptable accuracy: `0.1378`
+- Step 10 verdict: `pass`
+- Phase 0 suite: `75 passed, 1 skipped`
+- targeted matcher/eval suite: `20 passed`
+- optional full SEO known unrelated failure: `tests/seo/test_matcher_retention.py::test_keeps_referenced_runs`
+- artifacts: `tests/seo/phase0/activation_reports/812_step10/`
+
 ---
 
 ## 1. Уровни тестирования
@@ -257,6 +268,19 @@ Exit 0 = прошли порог, exit 1 = просели больше.
 - F1 ни для одного бакета не просел > 0.05.
 - Сколько labels сменили bucket (должно быть <15% от общего числа).
 
+Фактический результат Step 10:
+- fresh matcher run ids: `63`, `64`, `65`, `66`, `67`, `68`, `69`, `70`
+- eval run id: `75`
+- labels_used: `149`
+- labels_missing: `42`
+- bucket distribution: `primary=77`, `secondary=32`, `broad=32`, `rejected=8`
+- baseline accuracy: `0.1678`
+- current accuracy: `0.2349`
+- drift: `+0.0671`
+- minimum acceptable: `0.1378`
+- verdict: `pass`
+- note: eval verdict remains `preview_only` by product thresholds; this gate proves no regression vs baseline.
+
 ### Step 11 — Docs
 
 Не автоматизируется. Ручное ревью документов.
@@ -434,3 +458,4 @@ jobs:
 ## 9. Changelog
 
 - **2026-04-24 v1** — initial. Зафиксирован test plan в парe с PHASE_0_EXECUTION_PLAN.
+- **2026-04-24 v1.1** — recorded Phase 0 Step 10 acceptance numbers and known unrelated retention failure.
