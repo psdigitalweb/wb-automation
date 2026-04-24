@@ -1,0 +1,9 @@
+{
+  "baseline_accuracy": 0.1678,
+  "current_accuracy": 0.2349,
+  "drift": 0.0671,
+  "max_allowed_negative_drift": 0.03,
+  "minimum_acceptable_accuracy": 0.1378,
+  "verdict": "pass",
+  "note": "Step 10 validates matcher_v2 after CategoryProfile wiring"
+}

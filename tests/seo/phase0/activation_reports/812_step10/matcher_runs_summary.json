@@ -1,0 +1,138 @@
+{
+    "runs": [
+        {
+            "nm_id": 291861306,
+            "run_id": 63,
+            "created_at": "2026-04-24T18:06:19.910327+00:00",
+            "label_rows": 39,
+            "quality_mode": "preview",
+            "bucket_distribution": {
+                "broad": 9855,
+                "primary": 157,
+                "rejected": 3295,
+                "secondary": 44
+            },
+            "category_profile_active": true,
+            "category_profile_version": "v1.812.skeleton.243953b2"
+        },
+        {
+            "nm_id": 277132340,
+            "run_id": 64,
+            "created_at": "2026-04-24T18:09:25.002458+00:00",
+            "label_rows": 39,
+            "quality_mode": "preview",
+            "bucket_distribution": {
+                "broad": 620,
+                "primary": 676,
+                "rejected": 1353,
+                "secondary": 10702
+            },
+            "category_profile_active": true,
+            "category_profile_version": "v1.812.skeleton.243953b2"
+        },
+        {
+            "nm_id": 292541341,
+            "run_id": 65,
+            "created_at": "2026-04-24T18:11:38.870647+00:00",
+            "label_rows": 31,
+            "quality_mode": "preview",
+            "bucket_distribution": {
+                "broad": 615,
+                "primary": 800,
+                "rejected": 1353,
+                "secondary": 10583
+            },
+            "category_profile_active": true,
+            "category_profile_version": "v1.812.skeleton.243953b2"
+        },
+        {
+            "nm_id": 346647412,
+            "run_id": 66,
+            "created_at": "2026-04-24T18:14:11.404046+00:00",
+            "label_rows": 20,
+            "quality_mode": "preview",
+            "bucket_distribution": {
+                "primary": 1375,
+                "rejected": 1353,
+                "secondary": 10623
+            },
+            "category_profile_active": true,
+            "category_profile_version": "v1.812.skeleton.243953b2"
+        },
+        {
+            "nm_id": 677255519,
+            "run_id": 67,
+            "created_at": "2026-04-24T18:16:47.858991+00:00",
+            "label_rows": 18,
+            "quality_mode": "preview",
+            "bucket_distribution": {
+                "broad": 620,
+                "primary": 901,
+                "rejected": 1353,
+                "secondary": 10477
+            },
+            "category_profile_active": true,
+            "category_profile_version": "v1.812.skeleton.243953b2"
+        },
+        {
+            "nm_id": 677255521,
+            "run_id": 68,
+            "created_at": "2026-04-24T18:19:26.668029+00:00",
+            "label_rows": 18,
+            "quality_mode": "preview",
+            "bucket_distribution": {
+                "broad": 619,
+                "primary": 738,
+                "rejected": 1353,
+                "secondary": 10641
+            },
+            "category_profile_active": true,
+            "category_profile_version": "v1.812.skeleton.243953b2"
+        },
+        {
+            "nm_id": 678529108,
+            "run_id": 69,
+            "created_at": "2026-04-24T18:21:48.185996+00:00",
+            "label_rows": 15,
+            "quality_mode": "preview",
+            "bucket_distribution": {
+                "broad": 615,
+                "primary": 741,
+                "rejected": 1353,
+                "secondary": 10642
+            },
+            "category_profile_active": true,
+            "category_profile_version": "v1.812.skeleton.243953b2"
+        },
+        {
+            "nm_id": 678529109,
+            "run_id": 70,
+            "created_at": "2026-04-24T18:23:13.897507+00:00",
+            "label_rows": 11,
+            "quality_mode": "preview",
+            "bucket_distribution": {
+                "broad": 610,
+                "primary": 1005,
+                "rejected": 1353,
+                "secondary": 10383
+            },
+            "category_profile_active": true,
+            "category_profile_version": "v1.812.skeleton.243953b2"
+        }
+    ],
+    "run_ids": [
+        63,
+        64,
+        65,
+        66,
+        67,
+        68,
+        69,
+        70
+    ],
+    "total_sku": 8,
+    "project_id": 1,
+    "category_id": 812,
+    "label_set_id": 1,
+    "generated_at_utc": "2026-04-24T18:26:22.276799+00:00"
+}

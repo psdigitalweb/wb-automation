@@ -1,0 +1,52 @@
+{
+  "eval_run_id": 75,
+  "project_id": 1,
+  "category_id": 812,
+  "label_set_id": 1,
+  "verdict": "preview_only",
+  "metrics": {
+    "labels_scored": 149.0,
+    "labels_missing": 42.0,
+    "accuracy": 0.2349,
+    "primary_precision": 0.2987,
+    "primary_recall": 0.5,
+    "bad_primary_rate": 0.3766,
+    "hard_conflict_primary_count": 0.0,
+    "primary_predicted": 77.0,
+    "primary_expected": 46.0,
+    "buckets": {
+      "broad": 32,
+      "primary": 77,
+      "secondary": 32,
+      "rejected": 8
+    }
+  },
+  "thresholds": {
+    "accuracy_min": 0.85,
+    "bad_primary_rate_max": 0.05,
+    "hard_conflict_primary_count_max": 0.0
+  },
+  "matcher_run_ids": [
+    64,
+    63,
+    65,
+    66,
+    67,
+    68,
+    69,
+    70
+  ],
+  "nm_ids": [
+    277132340,
+    291861306,
+    292541341,
+    346647412,
+    677255519,
+    677255521,
+    678529108,
+    678529109
+  ],
+  "labels_used": 149,
+  "labels_missing": 42,
+  "eligibility_tier_after": "preview_only"
+}
