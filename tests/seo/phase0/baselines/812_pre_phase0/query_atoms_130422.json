@@ -1,0 +1,39 @@
+{
+  "atoms": {
+    "buyer_intent": "",
+    "cluster_key": null,
+    "confidence": {},
+    "evidence_refs": [],
+    "excluded_atoms": [],
+    "genericness": "specific",
+    "negative_fit_atoms": [],
+    "preferred_atoms": [],
+    "product_type": "кружка",
+    "query": null,
+    "required_atoms": [
+      {
+        "confidence": 0.95,
+        "field": "quantity",
+        "importance": "hard",
+        "operator": "equals",
+        "source": "deterministic_guard",
+        "type": "numeric",
+        "value": 6
+      },
+      {
+        "confidence": 0.95,
+        "field": "quantity",
+        "importance": "hard",
+        "operator": "equals",
+        "source": "deterministic_guard",
+        "type": "attribute",
+        "value": "set"
+      }
+    ],
+    "schema_version": "meaning_atoms_v0",
+    "source_query_examples": []
+  },
+  "normalized_query_text": "кружки набор 6 штук",
+  "query_id": 130422,
+  "ranking_value_used": 122244.0
+}

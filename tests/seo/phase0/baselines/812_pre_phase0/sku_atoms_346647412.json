@@ -1,0 +1,360 @@
+{
+  "annotation_id": 12,
+  "atoms": {
+    "category_id": 812,
+    "confidence": {},
+    "evidence_refs": [
+      "baseline_capture"
+    ],
+    "facts": [
+      {
+        "confidence": 0.95,
+        "field": "product_type",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "product_type",
+        "value": "кружка"
+      },
+      {
+        "confidence": 0.95,
+        "field": "compatibility",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "compatibility",
+        "value": "microwave"
+      },
+      {
+        "confidence": 0.95,
+        "field": "compatibility",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "compatibility",
+        "value": "dishwasher"
+      }
+    ],
+    "negative_fit_atoms": [
+      {
+        "confidence": 0.8,
+        "field": "negative",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "attribute",
+        "value": "не подходит для использования с горячими маслами или спиртными напитками"
+      },
+      {
+        "confidence": 0.8,
+        "field": "negative",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "attribute",
+        "value": "не является термосом или термокружкой"
+      },
+      {
+        "confidence": 0.8,
+        "field": "negative",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "attribute",
+        "value": "не предназначена для промышленного использования"
+      },
+      {
+        "confidence": 0.8,
+        "field": "negative",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "attribute",
+        "value": "не подходит для детей младше 3 лет без присмотра из-за хрупкости"
+      }
+    ],
+    "nm_id": 346647412,
+    "positive_atoms": [
+      {
+        "confidence": 0.85,
+        "field": "expressive",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "expressive",
+        "value": "Милота и уют"
+      },
+      {
+        "confidence": 0.85,
+        "field": "expressive",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "expressive",
+        "value": "Подарочная привлекательность"
+      },
+      {
+        "confidence": 0.85,
+        "field": "expressive",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "expressive",
+        "value": "Радость и удовлетворение от покупки"
+      },
+      {
+        "confidence": 0.85,
+        "field": "expressive",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "expressive",
+        "value": "Красота и эстетика"
+      },
+      {
+        "confidence": 0.85,
+        "field": "expressive",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "expressive",
+        "value": "Удобство и комфорт использования"
+      },
+      {
+        "confidence": 0.85,
+        "field": "expressive",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "expressive",
+        "value": "стиль K-pop"
+      },
+      {
+        "confidence": 0.85,
+        "field": "expressive",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "expressive",
+        "value": "современный дизайн"
+      },
+      {
+        "confidence": 0.85,
+        "field": "occasion",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "occasion",
+        "value": "день рождения"
+      },
+      {
+        "confidence": 0.85,
+        "field": "occasion",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "occasion",
+        "value": "8 марта"
+      },
+      {
+        "confidence": 0.85,
+        "field": "occasion",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "occasion",
+        "value": "новый год"
+      },
+      {
+        "confidence": 0.85,
+        "field": "occasion",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "occasion",
+        "value": "домашние подарки"
+      },
+      {
+        "confidence": 0.85,
+        "field": "occasion",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "occasion",
+        "value": "универсальный подарок"
+      },
+      {
+        "confidence": 0.85,
+        "field": "recipient",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "recipient",
+        "value": "поклонники K-pop"
+      },
+      {
+        "confidence": 0.85,
+        "field": "recipient",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "recipient",
+        "value": "любители стильных аксессуаров"
+      },
+      {
+        "confidence": 0.85,
+        "field": "recipient",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "recipient",
+        "value": "дети"
+      },
+      {
+        "confidence": 0.85,
+        "field": "recipient",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "recipient",
+        "value": "подруги"
+      },
+      {
+        "confidence": 0.85,
+        "field": "recipient",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "recipient",
+        "value": "любимые"
+      },
+      {
+        "confidence": 0.85,
+        "field": "recipient",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "recipient",
+        "value": "домашние пользователи"
+      },
+      {
+        "confidence": 0.85,
+        "field": "recipient",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "recipient",
+        "value": "офисные работники"
+      },
+      {
+        "confidence": 0.85,
+        "field": "recipient",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "recipient",
+        "value": "водители"
+      }
+    ],
+    "product_identity": "",
+    "product_type": "кружка",
+    "project_id": 1,
+    "schema_version": "meaning_atoms_v0"
+  },
+  "meaning_payload": {
+    "audience": [
+      "поклонники K-pop",
+      "любители стильных аксессуаров",
+      "дети",
+      "подруги",
+      "любимые",
+      "домашние пользователи",
+      "офисные работники",
+      "водители"
+    ],
+    "confidence": {
+      "audience": 0.8,
+      "expressive": 0.85,
+      "functional": 0.9
+    },
+    "evidence_refs": [
+      "product.description",
+      "product.characteristics",
+      "category_prior",
+      "product_projection"
+    ],
+    "expressive": {
+      "emotions": [
+        "вдохновение",
+        "радость",
+        "удовлетворение"
+      ],
+      "gift_contexts": [
+        "день рождения",
+        "8 марта",
+        "новый год",
+        "домашние подарки",
+        "универсальный подарок"
+      ],
+      "styles": [
+        "стиль K-pop",
+        "современный дизайн"
+      ],
+      "vibes": [
+        "Милота и уют",
+        "Подарочная привлекательность",
+        "Радость и удовлетворение от покупки",
+        "Красота и эстетика",
+        "Удобство и комфорт использования"
+      ]
+    },
+    "functional": {
+      "attributes": [
+        "керамическая",
+        "объем 325 мл",
+        "высота 9 см",
+        "диаметр 9.5 см",
+        "принт с двух сторон",
+        "стойкий к выцветанию принт",
+        "прочная",
+        "безопасная для здоровья",
+        "не впитывает запахи",
+        "подходит для подарка",
+        "упакована в картонную коробку с воздушно пузырчатым пакетом",
+        "хрупкое",
+        "цвет белый",
+        "стиль K-pop",
+        "универсальный подарок",
+        "подходит для детей, подруг и любимых"
+      ],
+      "product_type": "кружка",
+      "use_cases": [
+        "для чая",
+        "для кофе",
+        "для какао",
+        "для подарка",
+        "для повседневного использования",
+        "для использования в СВЧ",
+        "для использования в посудомоечной машине",
+        "для дома",
+        "для офиса",
+        "для машины"
+      ]
+    },
+    "negative_constraints": [
+      "не подходит для использования с горячими маслами или спиртными напитками",
+      "не является термосом или термокружкой",
+      "не предназначена для промышленного использования",
+      "не подходит для детей младше 3 лет без присмотра из-за хрупкости"
+    ],
+    "review_status": "draft",
+    "schema_version": "sku_meaning_v0"
+  },
+  "nm_id": 346647412,
+  "schema_version": "sku_meaning_v0",
+  "source_metadata": {
+    "cached": false,
+    "source": "llm_draft_for_atoms_eval"
+  },
+  "status": "draft"
+}
