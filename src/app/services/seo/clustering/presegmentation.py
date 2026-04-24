@@ -1,9 +1,16 @@
-"""Rule-based pre-segmentation hook placeholder."""
+"""[FROZEN iter-1] Rule-based pre-segmentation hook placeholder.
+
+See ``app.services.seo.clustering.__init__`` for the deprecation banner.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Iterable
+
+from app.services.seo._freeze import guard_frozen_module
+
+guard_frozen_module(__name__)
 
 
 @dataclass(frozen=True)

@@ -96,12 +96,14 @@ function SelectBase({
   value,
   onChange,
   disabled,
+  required,
   children,
   className,
 }: {
   value: string
   onChange: (e: React.ChangeEvent<HTMLSelectElement>) => void
   disabled?: boolean
+  required?: boolean
   children: React.ReactNode
   className?: string
 }) {
@@ -110,6 +112,7 @@ function SelectBase({
       value={value}
       onChange={onChange}
       disabled={disabled}
+      required={required}
       className={[s.select, className].filter(Boolean).join(' ')}
     >
       {children}
@@ -1685,7 +1688,7 @@ export default function AdditionalCostsPage() {
                           <td>{day.work_date}</td>
                           <td>{day.marketplace_code || 'Общий'}</td>
                           <td>{day.rates.length}</td>
-                          <td>{day.rates.reduce((sum, r) => sum + r.employees_count, 0)}</td>
+                          <td>{day.rates.reduce((sum, r) => sum + (Number(r.employees_count) || 0), 0)}</td>
                           <td>{parseFloat(day.total_amount).toFixed(2)}</td>
                           <td>{day.notes || '—'}</td>
                           <td onClick={(e) => e.stopPropagation()}>
@@ -1911,15 +1914,13 @@ export default function AdditionalCostsPage() {
                                 История
                               </button>
                             )}
-                            {membership?.role === 'admin' || membership?.role === 'owner' ? (
-                              <button
-                                type="button"
-                                onClick={() => handlePackagingTariffDelete(tariff.id)}
-                                style={{ padding: '4px 8px', fontSize: '12px', color: '#dc3545' }}
-                              >
-                                Удалить
-                              </button>
-                            ) : null}
+                            <button
+                              type="button"
+                              onClick={() => handlePackagingTariffDelete(tariff.id)}
+                              style={{ padding: '4px 8px', fontSize: '12px', color: '#dc3545' }}
+                            >
+                              Удалить
+                            </button>
                           </td>
                         </tr>
                       ))}

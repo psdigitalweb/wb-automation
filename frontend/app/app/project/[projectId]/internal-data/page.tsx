@@ -161,7 +161,7 @@ export default function InternalDataPage() {
               setPage(1)
             }}
           />
-          <span>Только товары в наличии (stock > 0)</span>
+          <span>Только товары в наличии (stock {'>'} 0)</span>
         </label>
         <span style={{ color: '#666', fontSize: 14 }}>
           Всего: {total} товаров

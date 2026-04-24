@@ -46,8 +46,8 @@ async function refreshAccessToken(): Promise<string | null> {
   if (!refreshToken) return null
 
   try {
-    const apiBase = getApiBase()
-    const res = await fetch(`${apiBase}/api/v1/auth/refresh`, {
+    const refreshUrl = buildFullUrl('/api/v1/auth/refresh')
+    const res = await fetch(refreshUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ refresh_token: refreshToken }),
@@ -65,29 +65,54 @@ async function refreshAccessToken(): Promise<string | null> {
   }
 }
 
+function shouldUseDirectBackend(url: string): boolean {
+  if (typeof window === 'undefined') {
+    return false
+  }
+
+  const hostname = window.location.hostname || 'localhost'
+  const port = window.location.port || ''
+  const isLocalDevHost =
+    hostname === 'localhost' ||
+    hostname === '127.0.0.1' ||
+    hostname === '0.0.0.0'
+  if (!isLocalDevHost) {
+    return false
+  }
+
+  const isSlowEndpoint =
+    url.includes('/wildberries/search-report/keywords') ||
+    url.includes('/wildberries/search-report/search-texts')
+  const isSeoDebugEndpoint =
+    url.includes('/seo/query-pipeline/debug') ||
+    url.includes('/seo/sku-meaning') ||
+    url.includes('/seo/query-meaning-library') ||
+    url.includes('/seo/meaning-aware-matcher') ||
+    url.includes('/seo/category-bootstrap') ||
+    url.includes('/seo/products') ||
+    url.includes('/seo/eval-datasets/export') ||
+    url.includes('/wildberries/seo/query-import') ||
+    url.includes('/wildberries/products/lookup') ||
+    url.includes('/marketplaces/wildberries/products/subjects') ||
+    /^\/api\/v1\/projects(?:\/\d+)?$/.test(url)
+  const isAuthEndpoint = url.startsWith('/api/v1/auth/')
+
+  return isSlowEndpoint || isSeoDebugEndpoint || isAuthEndpoint
+}
+
 function buildFullUrl(url: string): string {
   const apiBase = getApiBase()
   if (url.startsWith('http')) return url
   if (apiBase) return `${apiBase}${url}`
 
-    // Default: same-origin /api/... via Next.js rewrites.
-    // In local dev, Next.js proxy may reset long-running upstream requests,
-    // so a direct call to backend:8000 is helpful there. On prod we must keep
-    // same-origin /api to avoid mixed-origin/network failures in the browser.
-    if (typeof window !== 'undefined') {
-      const isSlowEndpoint =
-        url.includes('/wildberries/search-report/keywords') ||
-        url.includes('/wildberries/search-report/search-texts')
-      const hostname = window.location.hostname || 'localhost'
-      const isLocalDevHost =
-        hostname === 'localhost' ||
-        hostname === '127.0.0.1' ||
-        hostname === '0.0.0.0'
-      if (isSlowEndpoint && isLocalDevHost) {
-        const protocol = window.location.protocol || 'http:'
-        return `${protocol}//${hostname}:8000${url}`
-      }
-    }
+  // Default: same-origin /api/... via Next.js rewrites.
+  // In local dev on the Next dev server, some proxy paths are unstable,
+  // so use backend:8000 directly for targeted endpoints only.
+  if (shouldUseDirectBackend(url)) {
+    const pageHost = window.location.hostname || 'localhost'
+    const backendHost = pageHost === 'localhost' || pageHost === '0.0.0.0' ? '127.0.0.1' : pageHost
+    return `http://${backendHost}:8000${url}`
+  }
 
   return url
 }
@@ -1109,6 +1134,869 @@ export async function getWBProductLookup(
   return res.data
 }
 
+export async function getSkuMeaningProductLookup(
+  projectId: string,
+  params: { q: string; limit?: number }
+): Promise<WBProductLookupResponse> {
+  const qs = new URLSearchParams()
+  qs.set('q', params.q)
+  if (params.limit != null) qs.set('limit', String(params.limit))
+  const res = await apiGet<WBProductLookupResponse>(
+    `/api/v1/projects/${projectId}/seo/sku-meaning/products/lookup?${qs.toString()}`
+  )
+  return res.data
+}
+
+// --- SEO SKU Meaning Preview / Annotation Tool ---
+export type SkuMeaningStatus = 'draft' | 'verified' | 'needs_more_data' | 'rejected'
+export type SkuQueryJudgmentLabel =
+  | 'highly_relevant'
+  | 'maybe_relevant'
+  | 'too_broad'
+  | 'irrelevant'
+  | 'conflict'
+  | 'dangerous_claim'
+  | 'manual_rejected'
+
+export interface SkuMeaningPayload {
+  schema_version: string
+  functional: Record<string, any>
+  expressive: Record<string, any>
+  audience: string[]
+  negative_constraints: string[]
+  confidence: Record<string, number>
+  evidence_refs: string[]
+  review_status: SkuMeaningStatus
+}
+
+export interface SkuMeaningEvidencePack {
+  schema_version: string
+  project_id: number
+  category_id: number
+  nm_id: number
+  evidence_hash: string
+  product: Record<string, any>
+  reviews: Array<{ ref: string; nm_id: number; rating: number | null; text: string; created_at: string | null }>
+  category_prior: Record<string, any>
+  product_projection: Record<string, any>
+  product_projection_flags: Record<string, any>
+  evidence_refs: Record<string, string>
+  warnings: string[]
+}
+
+export interface SkuMeaningDraftResponse {
+  meaning: SkuMeaningPayload
+  evidence_hash: string
+  cached: boolean
+  model: string | null
+  prompt_version: string
+  artifact_path: string | null
+  raw_response_preview: string | null
+}
+
+export interface SkuMeaningAnnotationResponse {
+  id: number
+  project_id: number
+  category_id: number
+  nm_id: number
+  schema_version: string
+  status: SkuMeaningStatus
+  meaning: SkuMeaningPayload
+  reviewer: string | null
+  evidence_hash: string
+  source_metadata: Record<string, any>
+  draft_model: string | null
+  draft_prompt_version: string | null
+  draft_artifact_path: string | null
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface SkuMeaningCandidateQuery {
+  query_text: string
+  normalized_query_text: string
+  ranking_value_used: string | null
+  bucket: string | null
+  intent_type: string | null
+  pruning_status: string | null
+  query_id: number | null
+  cluster_id: number | null
+  cluster_key: string | null
+  cluster_label_candidate: string | null
+  existing_label: SkuQueryJudgmentLabel | null
+  existing_rationale: string | null
+}
+
+export interface SkuMeaningCandidateQueriesResponse {
+  project_id: number
+  category_id: number
+  nm_id: number
+  items: SkuMeaningCandidateQuery[]
+}
+
+export interface SkuMeaningEvalExportResponse {
+  schema_version: string
+  project_id: number
+  category_id: number | null
+  exported_count: number
+  format: 'jsonl' | 'csv'
+  content: string
+  items: Record<string, any>[]
+}
+
+export type QueryMeaningGenericness = 'specific' | 'broad' | 'generic'
+export type MeaningAwareMatcherBucket = 'primary' | 'secondary' | 'broad' | 'rejected'
+
+export interface QueryMeaningLibraryBuildResponse {
+  project_id: number
+  category_id: number
+  total_clusters: number
+  processed: number
+  created: number
+  updated: number
+  skipped: number
+  errors: number
+  error_items: Array<Record<string, any>>
+}
+
+export interface QueryMeaningLibraryItem {
+  id: number
+  project_id: number
+  category_id: number
+  cluster_id: number | null
+  cluster_key: string
+  schema_version: string
+  source_query_examples: string[]
+  meaning_payload: Record<string, any>
+  canonical_text: string
+  genericness: QueryMeaningGenericness
+  constraints: string[]
+  conflicts_if_missing: string[]
+  llm_model: string | null
+  prompt_version: string
+  input_hash: string
+  status: string
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface QueryMeaningLibraryResponse {
+  project_id: number
+  category_id: number
+  total: number
+  items: QueryMeaningLibraryItem[]
+}
+
+export interface MeaningAwareMatcherItem {
+  query: string
+  cluster_id: number | null
+  cluster_key: string | null
+  query_meaning_id: number
+  bucket: MeaningAwareMatcherBucket
+  score: number
+  semantic_similarity: number
+  ranking_value_used: number | null
+  genericness: QueryMeaningGenericness
+  matched_meanings: string[]
+  conflicts: string[]
+  reasons: string[]
+  user_bucket_label?: string | null
+  user_reasons?: string[]
+  matched_atoms?: string[]
+  missing_atoms?: string[]
+  conflict_atoms?: string[]
+  debug_reasons?: string[]
+}
+
+export interface MeaningAwareMatcherResponse {
+  project_id: number
+  category_id: number
+  nm_id: number
+  sku_annotation_id: number
+  sku_annotation_status: string
+  buckets: Record<MeaningAwareMatcherBucket, MeaningAwareMatcherItem[]>
+  diagnostics: {
+    matcher_version: string
+    query_meanings_total: number
+    scored_total: number
+    missing_library: boolean
+    embedding_model: string | null
+    atoms_version?: string | null
+    atoms_gate_enabled?: boolean
+    notes: string[]
+  }
+}
+
+export type CategoryReadinessStatus =
+  | 'not_started'
+  | 'building'
+  | 'ready_with_fallback'
+  | 'ready_for_matching'
+  | 'failed'
+
+export interface CategoryBootstrapStatusResponse {
+  project_id: number
+  category_id: number
+  readiness_status: CategoryReadinessStatus
+  latest_run_id: number | null
+  run_status: string | null
+  current_step: string | null
+  step_statuses: Record<string, any>
+  queries_count: number
+  clusters_count: number
+  query_meanings_count: number
+  query_atoms_count?: number
+  embeddings_count: number
+  category_axes_status: string
+  last_error: string | null
+  updated_at: string | null
+}
+
+export interface CategoryBootstrapRunResponse {
+  run_id: number
+  project_id: number
+  category_id: number
+  status: string
+  readiness_status: CategoryReadinessStatus
+}
+
+export async function getSkuMeaningEvidence(
+  projectId: string,
+  nmId: number,
+  params?: { category_id?: number }
+): Promise<SkuMeaningEvidencePack> {
+  const qs = new URLSearchParams()
+  if (params?.category_id != null) qs.set('category_id', String(params.category_id))
+  const suffix = qs.toString() ? `?${qs.toString()}` : ''
+  const res = await apiGet<SkuMeaningEvidencePack>(
+    `/api/v1/projects/${projectId}/seo/sku-meaning/${nmId}/evidence${suffix}`
+  )
+  return res.data
+}
+
+export async function postSkuMeaningDraft(
+  projectId: string,
+  nmId: number,
+  params?: { category_id?: number; force_refresh?: boolean }
+): Promise<SkuMeaningDraftResponse> {
+  const qs = new URLSearchParams()
+  if (params?.category_id != null) qs.set('category_id', String(params.category_id))
+  if (params?.force_refresh) qs.set('force_refresh', 'true')
+  const suffix = qs.toString() ? `?${qs.toString()}` : ''
+  const res = await apiPost<SkuMeaningDraftResponse>(
+    `/api/v1/projects/${projectId}/seo/sku-meaning/${nmId}/draft${suffix}`
+  )
+  return res.data
+}
+
+export async function getSkuMeaningAnnotation(
+  projectId: string,
+  nmId: number,
+  params?: { category_id?: number }
+): Promise<{ annotation: SkuMeaningAnnotationResponse | null }> {
+  const qs = new URLSearchParams()
+  if (params?.category_id != null) qs.set('category_id', String(params.category_id))
+  const suffix = qs.toString() ? `?${qs.toString()}` : ''
+  const res = await apiGet<{ annotation: SkuMeaningAnnotationResponse | null }>(
+    `/api/v1/projects/${projectId}/seo/sku-meaning/${nmId}/annotation${suffix}`
+  )
+  return res.data
+}
+
+export async function putSkuMeaningAnnotation(
+  projectId: string,
+  nmId: number,
+  body: {
+    category_id?: number | null
+    meaning: SkuMeaningPayload
+    status: SkuMeaningStatus
+    evidence_hash: string
+    reviewer?: string | null
+    source_metadata?: Record<string, any>
+    draft_model?: string | null
+    draft_prompt_version?: string | null
+    draft_artifact_path?: string | null
+  }
+): Promise<SkuMeaningAnnotationResponse> {
+  const res = await apiPut<SkuMeaningAnnotationResponse>(
+    `/api/v1/projects/${projectId}/seo/sku-meaning/${nmId}/annotation`,
+    body
+  )
+  return res.data
+}
+
+export async function getSkuMeaningCandidateQueries(
+  projectId: string,
+  nmId: number,
+  params: { category_id?: number; limit?: number; search?: string }
+): Promise<SkuMeaningCandidateQueriesResponse> {
+  const qs = new URLSearchParams()
+  if (params.category_id != null) qs.set('category_id', String(params.category_id))
+  if (params.limit != null) qs.set('limit', String(params.limit))
+  if (params.search) qs.set('search', params.search)
+  const suffix = qs.toString() ? `?${qs.toString()}` : ''
+  const res = await apiGet<SkuMeaningCandidateQueriesResponse>(
+    `/api/v1/projects/${projectId}/seo/sku-meaning/${nmId}/candidate-queries${suffix}`
+  )
+  return res.data
+}
+
+export async function putSkuMeaningQueryJudgments(
+  projectId: string,
+  nmId: number,
+  body: {
+    category_id?: number | null
+    annotation_id?: number | null
+    items: Array<{
+      query_text: string
+      normalized_query_text?: string | null
+      query_id?: number | null
+      cluster_id?: number | null
+      cluster_key?: string | null
+      label: SkuQueryJudgmentLabel
+      rationale?: string | null
+      reviewer?: string | null
+      matcher_version?: string | null
+      source?: string
+    }>
+  }
+): Promise<{ items: any[] }> {
+  const res = await apiPut<{ items: any[] }>(
+    `/api/v1/projects/${projectId}/seo/sku-meaning/${nmId}/query-judgments`,
+    body
+  )
+  return res.data
+}
+
+export async function postSkuMeaningEvalExport(
+  projectId: string,
+  body: {
+    category_id?: number | null
+    nm_ids?: number[] | null
+    include_drafts?: boolean
+    format?: 'jsonl' | 'csv'
+  }
+): Promise<SkuMeaningEvalExportResponse> {
+  const res = await apiPost<SkuMeaningEvalExportResponse>(
+    `/api/v1/projects/${projectId}/seo/eval-datasets/export`,
+    body
+  )
+  return res.data
+}
+
+export async function postQueryMeaningLibraryBuild(
+  projectId: string,
+  body: { category_id: number; limit?: number; force_refresh?: boolean; use_llm?: boolean }
+): Promise<QueryMeaningLibraryBuildResponse> {
+  const res = await apiPost<QueryMeaningLibraryBuildResponse>(
+    `/api/v1/projects/${projectId}/seo/query-meaning-library/build`,
+    body
+  )
+  return res.data
+}
+
+export async function getQueryMeaningLibrary(
+  projectId: string,
+  params: { category_id: number; limit?: number; offset?: number; status?: string }
+): Promise<QueryMeaningLibraryResponse> {
+  const qs = new URLSearchParams()
+  qs.set('category_id', String(params.category_id))
+  if (params.limit != null) qs.set('limit', String(params.limit))
+  if (params.offset != null) qs.set('offset', String(params.offset))
+  if (params.status) qs.set('status', params.status)
+  const res = await apiGet<QueryMeaningLibraryResponse>(
+    `/api/v1/projects/${projectId}/seo/query-meaning-library?${qs.toString()}`
+  )
+  return res.data
+}
+
+export async function postMeaningAwareMatcherPreview(
+  projectId: string,
+  body: { category_id: number; nm_id: number; limit?: number; include_rejected?: boolean }
+): Promise<MeaningAwareMatcherResponse> {
+  const res = await apiPost<MeaningAwareMatcherResponse>(
+    `/api/v1/projects/${projectId}/seo/meaning-aware-matcher/preview`,
+    body
+  )
+  return res.data
+}
+
+export async function getCategoryBootstrapStatus(
+  projectId: string,
+  params: { category_id: number }
+): Promise<CategoryBootstrapStatusResponse> {
+  const qs = new URLSearchParams()
+  qs.set('category_id', String(params.category_id))
+  const res = await apiGet<CategoryBootstrapStatusResponse>(
+    `/api/v1/projects/${projectId}/seo/category-bootstrap/status?${qs.toString()}`
+  )
+  return res.data
+}
+
+export async function postCategoryBootstrapRun(
+  projectId: string,
+  body: { category_id: number; force_refresh?: boolean; use_llm?: boolean }
+): Promise<CategoryBootstrapRunResponse> {
+  const res = await apiPost<CategoryBootstrapRunResponse>(
+    `/api/v1/projects/${projectId}/seo/category-bootstrap/run`,
+    body
+  )
+  return res.data
+}
+
+export interface SeoProductListItem {
+  nm_id: number
+  vendor_code: string | null
+  title: string | null
+  brand: string | null
+  category_id: number | null
+  category_name: string | null
+  rating: number | null
+  feedbacks: number | null
+  analysis_status: string
+  category_status: string | null
+  has_sku_meaning: boolean
+  has_sku_atoms: boolean
+  has_vision_atoms: boolean
+}
+
+export interface SeoProductListResponse {
+  project_id: number
+  total: number
+  items: SeoProductListItem[]
+}
+
+export interface SeoReadableBlock {
+  title: string
+  items: string[]
+  empty_text: string | null
+}
+
+export interface SeoProductSummaryResponse {
+  project_id: number
+  nm_id: number
+  category_id: number
+  product: Record<string, any>
+  product_status_label: string
+  category_status_label: string
+  vision_status_label: string
+  blocks: SeoReadableBlock[]
+  diagnostics: Record<string, any>
+  quality_mode?: SeoQualityMode | null
+  degraded_reasons?: SeoQualityReason[]
+}
+
+export interface SeoProductAnalysisRunResponse {
+  project_id: number
+  nm_id: number
+  category_id: number
+  status: string
+  product_status_label: string
+  vision_status_label: string
+  annotation_id: number | null
+  evidence_hash: string | null
+  warnings: string[]
+}
+
+export interface SeoProductAnalysisStatusResponse {
+  project_id: number
+  nm_id: number
+  category_id: number | null
+  status: string
+  product_status_label: string
+  has_sku_meaning: boolean
+  has_sku_atoms: boolean
+  has_vision_atoms: boolean
+}
+
+export interface SeoQuerySelectionItem {
+  id: number | null
+  normalized_query_text: string
+  display_query: string
+  cluster_key: string | null
+  bucket: MeaningAwareMatcherBucket
+  user_bucket_label: string
+  score: number
+  ranking_value_used: number | null
+  selection_state: 'auto_selected' | 'pinned' | 'excluded'
+  user_reasons: string[]
+  matched_atoms: string[]
+  missing_atoms: string[]
+  conflict_atoms: string[]
+}
+
+export interface SeoQuerySetResponse {
+  id: number | null
+  project_id: number
+  category_id: number
+  nm_id: number
+  status: 'draft' | 'confirmed'
+  matcher_version: string | null
+  atoms_version: string | null
+  items: SeoQuerySelectionItem[]
+  matcher?: MeaningAwareMatcherResponse | null
+  quality_mode?: SeoQualityMode | null
+  degraded_reasons?: SeoQualityReason[]
+  matcher_run_id?: number | null
+}
+
+export type SeoGenerationBrandVoice = 'экспертный' | 'тёплый' | 'минималистичный' | 'игривый'
+
+export interface GeneratedCharacteristic {
+  field: string
+  value: string
+}
+
+export interface GeneratedCard {
+  title: string
+  characteristics: GeneratedCharacteristic[]
+  description: string
+  report: Record<string, any>
+}
+
+export interface GenerationValidationIssue {
+  check_name: string
+  severity: 'error' | 'warning'
+  message: string
+  details: Record<string, any>
+}
+
+export interface SeoRelevanceQueryCoverage {
+  query: string
+  bucket: string
+  weight: number
+  found: boolean
+  zones: string[]
+  occurrences: number
+}
+
+export interface SeoRelevanceReport {
+  score: number
+  grade: 'high' | 'medium' | 'low'
+  main_query_text: string | null
+  main_query_in_title: boolean
+  main_query_in_title_start: boolean
+  weighted_coverage: number
+  selected_queries_count: number
+  covered_queries_count: number
+  title_queries_count: number
+  description_queries_count: number
+  overused_queries: string[]
+  missing_primary_queries: string[]
+  query_coverage: SeoRelevanceQueryCoverage[]
+  notes: string[]
+}
+
+export interface SeoRelevanceV2QueryScore {
+  query: string
+  bucket: string
+  weight: number
+  score: number
+  intent_score: number
+  semantic_score: number
+  lexical_score: number
+  zone_score: number
+  naturalness_score: number
+  supported_atoms: string[]
+  unsupported_atoms: string[]
+  conflict_atoms: string[]
+  zones: string[]
+  notes: string[]
+}
+
+export interface SeoRelevanceV2Report {
+  version: 'seo_relevance_v2'
+  score: number
+  grade: 'high' | 'medium' | 'low'
+  main_query_text: string | null
+  intent_fit: number
+  semantic_similarity: number
+  lexical_relevance: number
+  zone_placement: number
+  naturalness: number
+  product_truthfulness: number
+  evaluated_queries_count: number
+  strong_queries_count: number
+  weak_queries: string[]
+  unsupported_intents: string[]
+  query_scores: SeoRelevanceV2QueryScore[]
+  notes: string[]
+}
+
+export type SeoQualityMode = 'full' | 'preview' | 'degraded' | 'fallback'
+
+export interface SeoQualityReason {
+  code: string
+  details?: Record<string, any>
+}
+
+export interface SeoFeatureFlags {
+  generation_preview_enabled: boolean
+  generation_max_attempts: number
+  generation_publishable: boolean
+}
+
+/**
+ * @deprecated Iteration 1 renamed to {@link SeoFeatureFlags} to match the
+ * backend contract at `/api/v1/seo/feature-flags`.
+ */
+export type SeoGenerationConfig = SeoFeatureFlags
+
+export interface SeoGenerationRunResponse {
+  project_id: number
+  category_id: number
+  nm_id: number
+  run_id: number
+  query_set_id: number | null
+  content_version_id: number | null
+  status: 'completed' | 'failed'
+  content_status: string | null
+  provider_name: string | null
+  model_name: string | null
+  attempts: number
+  prompt_version: string
+  validator_version: string
+  generated_card: GeneratedCard | null
+  validation_results: GenerationValidationIssue[]
+  seo_relevance: SeoRelevanceReport | null
+  seo_relevance_v2: SeoRelevanceV2Report | null
+  error_text: string | null
+  quality_mode?: SeoQualityMode | null
+  degraded_reasons?: SeoQualityReason[]
+  mode_used?: string | null
+  publishable?: boolean
+  matcher_run_id?: number | null
+}
+
+export interface SeoGenerationLatestResponse {
+  project_id: number
+  category_id: number
+  nm_id: number
+  content_version_id: number | null
+  generation_run_id: number | null
+  status: string | null
+  title: string | null
+  description: string | null
+  query_snapshot: Record<string, any>
+  score_breakdown: Record<string, any>
+  response_payload: Record<string, any>
+  seo_relevance: SeoRelevanceReport | null
+  seo_relevance_v2: SeoRelevanceV2Report | null
+  error_text: string | null
+  quality_mode?: SeoQualityMode | null
+  degraded_reasons?: SeoQualityReason[]
+  mode_used?: string | null
+  publishable?: boolean
+  matcher_run_id?: number | null
+}
+
+export async function getSeoProducts(
+  projectId: string,
+  params?: { category_id?: number; q?: string; analysis_status?: string; limit?: number; offset?: number }
+): Promise<SeoProductListResponse> {
+  const qs = new URLSearchParams()
+  if (params?.category_id != null) qs.set('category_id', String(params.category_id))
+  if (params?.q) qs.set('q', params.q)
+  if (params?.analysis_status) qs.set('analysis_status', params.analysis_status)
+  if (params?.limit != null) qs.set('limit', String(params.limit))
+  if (params?.offset != null) qs.set('offset', String(params.offset))
+  const suffix = qs.toString() ? `?${qs.toString()}` : ''
+  const res = await apiGet<SeoProductListResponse>(`/api/v1/projects/${projectId}/seo/products${suffix}`)
+  return res.data
+}
+
+export async function getSeoProductSummary(
+  projectId: string,
+  nmId: number,
+  params?: { category_id?: number }
+): Promise<SeoProductSummaryResponse> {
+  const qs = new URLSearchParams()
+  if (params?.category_id != null) qs.set('category_id', String(params.category_id))
+  const suffix = qs.toString() ? `?${qs.toString()}` : ''
+  const res = await apiGet<SeoProductSummaryResponse>(`/api/v1/projects/${projectId}/seo/products/${nmId}/seo-summary${suffix}`)
+  return res.data
+}
+
+export async function postSeoProductAnalysisRun(
+  projectId: string,
+  nmId: number,
+  body: { category_id?: number | null; force_refresh?: boolean; include_vision?: boolean }
+): Promise<SeoProductAnalysisRunResponse> {
+  const res = await apiPost<SeoProductAnalysisRunResponse>(`/api/v1/projects/${projectId}/seo/products/${nmId}/analysis/run`, body)
+  return res.data
+}
+
+export async function getSeoProductAnalysisStatus(
+  projectId: string,
+  nmId: number,
+  params?: { category_id?: number }
+): Promise<SeoProductAnalysisStatusResponse> {
+  const qs = new URLSearchParams()
+  if (params?.category_id != null) qs.set('category_id', String(params.category_id))
+  const suffix = qs.toString() ? `?${qs.toString()}` : ''
+  const res = await apiGet<SeoProductAnalysisStatusResponse>(`/api/v1/projects/${projectId}/seo/products/${nmId}/analysis/status${suffix}`)
+  return res.data
+}
+
+export async function postSeoQuerySelectionRun(
+  projectId: string,
+  nmId: number,
+  body: { category_id: number; limit?: number; include_rejected?: boolean }
+): Promise<SeoQuerySetResponse> {
+  const res = await apiPost<SeoQuerySetResponse>(`/api/v1/projects/${projectId}/seo/products/${nmId}/query-selection/run`, body)
+  return res.data
+}
+
+export async function getSeoQuerySelection(
+  projectId: string,
+  nmId: number,
+  params: { category_id: number }
+): Promise<SeoQuerySetResponse> {
+  const qs = new URLSearchParams()
+  qs.set('category_id', String(params.category_id))
+  const res = await apiGet<SeoQuerySetResponse>(`/api/v1/projects/${projectId}/seo/products/${nmId}/query-selection?${qs.toString()}`)
+  return res.data
+}
+
+export async function putSeoQuerySelection(
+  projectId: string,
+  nmId: number,
+  body: {
+    category_id: number
+    status?: 'draft' | 'confirmed'
+    items: Array<{ normalized_query_text: string; selection_state: 'auto_selected' | 'pinned' | 'excluded' }>
+  }
+): Promise<SeoQuerySetResponse> {
+  const res = await apiPut<SeoQuerySetResponse>(`/api/v1/projects/${projectId}/seo/products/${nmId}/query-selection`, body)
+  return res.data
+}
+
+export async function postSeoGenerationRun(
+  projectId: string,
+  nmId: number,
+  body: {
+    category_id: number
+    query_set_id?: number | null
+    main_query_text?: string | null
+    brand_voice?: SeoGenerationBrandVoice
+    force_refresh?: boolean
+    allow_draft_query_set?: boolean
+  }
+): Promise<SeoGenerationRunResponse> {
+  const res = await apiPost<SeoGenerationRunResponse>(`/api/v1/projects/${projectId}/seo/products/${nmId}/generation/run`, body)
+  return res.data
+}
+
+export async function getSeoGenerationLatest(
+  projectId: string,
+  nmId: number,
+  params: { category_id: number }
+): Promise<SeoGenerationLatestResponse> {
+  const qs = new URLSearchParams()
+  qs.set('category_id', String(params.category_id))
+  const res = await apiGet<SeoGenerationLatestResponse>(`/api/v1/projects/${projectId}/seo/products/${nmId}/generation/latest?${qs.toString()}`)
+  return res.data
+}
+
+export async function postSeoGenerationRecalculateSeoV2(
+  projectId: string,
+  nmId: number,
+  body: { category_id: number }
+): Promise<SeoGenerationLatestResponse> {
+  const res = await apiPost<SeoGenerationLatestResponse>(`/api/v1/projects/${projectId}/seo/products/${nmId}/generation/recalculate-seo-v2`, body)
+  return res.data
+}
+
+export async function getSeoFeatureFlags(): Promise<SeoFeatureFlags> {
+  const res = await apiGet<SeoFeatureFlags>(`/api/v1/seo/feature-flags`)
+  return res.data
+}
+
+/**
+ * @deprecated Iteration 1 renamed to {@link getSeoFeatureFlags}.
+ */
+export const getSeoGenerationConfig = getSeoFeatureFlags
+
+// ---------------------------------------------------------------------------
+// Iteration 1: candidate matcher (matcher_v2) — additive API surface.
+// ---------------------------------------------------------------------------
+
+export interface MatcherV2RunRequest {
+  category_id: number
+  nm_id: number
+  limit?: number
+  include_rejected?: boolean
+}
+
+export interface MatcherV2RunResponse {
+  run_id: number
+  quality_mode: SeoQualityMode
+  degraded_reasons: SeoQualityReason[]
+  response: MeaningAwareMatcherResponse
+}
+
+export interface MatcherV2ResultItem {
+  id: number
+  query_meaning_id: number | null
+  cluster_key: string | null
+  query_display: string
+  normalized_query_text: string
+  bucket: string
+  eligibility_verdict: string
+  score: number
+  score_components: Record<string, number>
+  matched_atoms: string[]
+  missing_atoms: string[]
+  conflict_atoms: string[]
+  reasons: string[]
+  ranking_value_used: number | null
+  semantic_similarity: number | null
+  created_at: string
+}
+
+export interface MatcherV2RunDetailResponse {
+  run_id: number
+  project_id: number
+  category_id: number
+  nm_id: number
+  matcher_version: string
+  policy_version: string
+  category_profile_version: string
+  sku_atoms_id: number | null
+  vision_atoms_id: number | null
+  query_atoms_version: string | null
+  embedding_model: string | null
+  readiness_snapshot: Record<string, any>
+  quality_mode: SeoQualityMode | null
+  degraded_reasons: SeoQualityReason[]
+  metrics: Record<string, any>
+  error: Record<string, any> | null
+  started_at: string
+  completed_at: string | null
+  results: MatcherV2ResultItem[]
+}
+
+export async function postSeoMatcherV2Run(
+  projectId: string,
+  body: MatcherV2RunRequest,
+): Promise<MatcherV2RunResponse> {
+  const res = await apiPost<MatcherV2RunResponse>(
+    `/api/v1/projects/${projectId}/seo/matcher/v2/run`,
+    body,
+  )
+  return res.data
+}
+
+export async function getSeoMatcherV2Run(
+  projectId: string,
+  runId: number,
+): Promise<MatcherV2RunDetailResponse> {
+  const res = await apiGet<MatcherV2RunDetailResponse>(
+    `/api/v1/projects/${projectId}/seo/matcher/v2/runs/${runId}`,
+  )
+  return res.data
+}
+
 export async function getContentAnalyticsSummary(
   projectId: string,
   params: { period_from: string; period_to: string; nm_id?: number }
@@ -1289,7 +2177,7 @@ export async function getFunnelSignals(
   if (params.page != null && params.page >= 1) qs.set('page', String(params.page))
   if (params.page_size != null && params.page_size >= 1) qs.set('page_size', String(params.page_size))
   if (params.sort != null && params.sort !== '') qs.set('sort', params.sort)
-  if (params.order != null && params.order !== '') qs.set('order', params.order)
+  if (params.order != null) qs.set('order', params.order)
   const res = await apiGet<FunnelSignalsResponse>(
     `/api/v1/projects/${projectId}/wildberries/analytics/funnel-signals?${qs.toString()}`
   )
@@ -1569,3 +2457,274 @@ export async function stopHypothesisExperiment(projectId: string, experimentId: 
   const res = await apiPost<HypothesisExperimentListItem>(`/api/v1/projects/${projectId}/hypothesis/experiments/${experimentId}/stop`)
   return res.data
 }
+
+// ---------------------------------------------------------------------------
+// Iteration 2 (WS-E / WS-C / WS-D / compare) — SEO eval, candidate selection,
+// generation promotion, read-only compare layer.
+// ---------------------------------------------------------------------------
+
+export interface SeoEvalRunRequest {
+  category_id: number
+  nm_ids?: number[]
+  matcher_run_ids?: number[]
+  label_set_id?: number
+  notes?: string
+}
+
+export interface SeoEvalRunResponse {
+  eval_run_id: number
+  project_id: number
+  category_id: number
+  label_set_id: number
+  verdict: string
+  metrics: Record<string, any>
+  thresholds: Record<string, number>
+  matcher_run_ids: number[]
+  nm_ids: number[]
+  labels_used: number
+  labels_missing: number
+  eligibility_tier_after: string
+}
+
+export interface SeoEvalRunListItem {
+  eval_run_id: number
+  category_id: number
+  label_set_id: number
+  verdict: string
+  metrics: Record<string, any>
+  thresholds: Record<string, number>
+  matcher_run_ids: number[]
+  nm_ids: number[]
+  notes: string | null
+  created_by: string | null
+  created_at: string
+}
+
+export interface SeoEvalRunListResponse {
+  items: SeoEvalRunListItem[]
+  eligibility_tier: string
+}
+
+export interface SeoEvalLabelStatsResponse {
+  category_id: number
+  label_set_id: number
+  total_labels: number
+  by_bucket: Record<string, number>
+  by_nm_id: Record<string, number>
+}
+
+export async function postSeoMatcherEvalRun(
+  projectId: string,
+  body: SeoEvalRunRequest,
+): Promise<SeoEvalRunResponse> {
+  const res = await apiPost<SeoEvalRunResponse>(
+    `/api/v1/projects/${projectId}/seo/eval/matcher/run`,
+    body,
+  )
+  return res.data
+}
+
+export async function getSeoEvalRuns(
+  projectId: string,
+  params: { category_id: number; limit?: number },
+): Promise<SeoEvalRunListResponse> {
+  const qs = new URLSearchParams()
+  qs.set('category_id', String(params.category_id))
+  if (params.limit) qs.set('limit', String(params.limit))
+  const res = await apiGet<SeoEvalRunListResponse>(
+    `/api/v1/projects/${projectId}/seo/eval/runs?${qs.toString()}`,
+  )
+  return res.data
+}
+
+export async function getSeoEvalLabelStats(
+  projectId: string,
+  params: { category_id: number; label_set_id?: number },
+): Promise<SeoEvalLabelStatsResponse> {
+  const qs = new URLSearchParams()
+  qs.set('category_id', String(params.category_id))
+  if (params.label_set_id) qs.set('label_set_id', String(params.label_set_id))
+  const res = await apiGet<SeoEvalLabelStatsResponse>(
+    `/api/v1/projects/${projectId}/seo/eval/labels/stats?${qs.toString()}`,
+  )
+  return res.data
+}
+
+export interface SeoCandidateProjectRequest {
+  category_id: number
+  nm_id: number
+  matcher_run_id?: number
+}
+
+export interface SeoCandidateProjectResponse {
+  query_set_id: number
+  matcher_run_id: number
+  items_written: number
+  approval_state: string
+  trust_state: string
+  category_profile_version: string | null
+}
+
+export async function postSeoCandidateProject(
+  projectId: string,
+  body: SeoCandidateProjectRequest,
+): Promise<SeoCandidateProjectResponse> {
+  const res = await apiPost<SeoCandidateProjectResponse>(
+    `/api/v1/projects/${projectId}/seo/query-sets/candidate/project`,
+    body,
+  )
+  return res.data
+}
+
+export interface SeoCandidateApprovalRequest {
+  approval_state: 'draft' | 'preview' | 'candidate' | 'approved'
+  operator_override?: boolean
+  has_accepted_human_review?: boolean
+}
+
+export interface SeoCandidateQuerySetResponse {
+  query_set_id: number
+  project_id: number
+  category_id: number
+  nm_id: number
+  approval_state: string
+  trust_state: string
+  category_profile_version: string | null
+}
+
+export async function postSeoCandidateApproval(
+  projectId: string,
+  querySetId: number,
+  body: SeoCandidateApprovalRequest,
+): Promise<SeoCandidateQuerySetResponse> {
+  const res = await apiPost<SeoCandidateQuerySetResponse>(
+    `/api/v1/projects/${projectId}/seo/query-sets/candidate/${querySetId}/approval`,
+    body,
+  )
+  return res.data
+}
+
+export interface SeoGenerationPromoteRequest {
+  target_kind: 'candidate' | 'approved' | 'published'
+}
+
+export interface SeoGenerationPromoteResponse {
+  content_version_id: number
+  previous_content_kind: string
+  new_content_kind: string
+  eligibility_tier: string
+  human_review_id: number | null
+}
+
+export async function postSeoGenerationPromote(
+  projectId: string,
+  contentVersionId: number,
+  body: SeoGenerationPromoteRequest,
+): Promise<SeoGenerationPromoteResponse> {
+  const res = await apiPost<SeoGenerationPromoteResponse>(
+    `/api/v1/projects/${projectId}/seo/generation/content/${contentVersionId}/promote`,
+    body,
+  )
+  return res.data
+}
+
+export interface SeoGenerationHumanReviewRequest {
+  verdict: 'accept' | 'reject' | 'needs_changes'
+  reviewer?: string
+  rubric?: Record<string, any>
+  notes?: string
+}
+
+export interface SeoGenerationHumanReviewResponse {
+  id: number
+  content_version_id: number
+  reviewer: string | null
+  verdict: string
+}
+
+export async function postSeoGenerationHumanReview(
+  projectId: string,
+  contentVersionId: number,
+  body: SeoGenerationHumanReviewRequest,
+): Promise<SeoGenerationHumanReviewResponse> {
+  const res = await apiPost<SeoGenerationHumanReviewResponse>(
+    `/api/v1/projects/${projectId}/seo/generation/content/${contentVersionId}/human-review`,
+    body,
+  )
+  return res.data
+}
+
+export interface SeoMatcherCompareResponse {
+  project_id: number
+  category_id: number
+  nm_id: number
+  current: { meta: Record<string, any>; items: any[] }
+  candidate: { meta: Record<string, any>; items: any[] }
+  diff: {
+    per_query_bucket: any[]
+    bucket_changes: number
+    bucket_change_ratio: number
+    primary_rejected_flips: any[]
+    only_in_current: string[]
+    only_in_candidate: string[]
+    total_queries_compared: number
+  }
+}
+
+export async function getSeoCompareMatcher(
+  projectId: string,
+  params: { category_id: number; nm_id: number },
+): Promise<SeoMatcherCompareResponse> {
+  const qs = new URLSearchParams()
+  qs.set('category_id', String(params.category_id))
+  qs.set('nm_id', String(params.nm_id))
+  const res = await apiGet<SeoMatcherCompareResponse>(
+    `/api/v1/projects/${projectId}/seo/compare/matcher?${qs.toString()}`,
+  )
+  return res.data
+}
+
+export interface SeoGenerationCompareResponse {
+  project_id: number
+  category_id: number
+  nm_id: number
+  by_kind: Record<string, any[]>
+  latest_preview_id: number | null
+  latest_candidate_id: number | null
+  latest_approved_id: number | null
+}
+
+export async function getSeoCompareGeneration(
+  projectId: string,
+  params: { category_id: number; nm_id: number },
+): Promise<SeoGenerationCompareResponse> {
+  const qs = new URLSearchParams()
+  qs.set('category_id', String(params.category_id))
+  qs.set('nm_id', String(params.nm_id))
+  const res = await apiGet<SeoGenerationCompareResponse>(
+    `/api/v1/projects/${projectId}/seo/compare/generation?${qs.toString()}`,
+  )
+  return res.data
+}
+
+export interface SeoCompareVerdictRequest {
+  subject_id: number
+  related_id?: number
+  verdict: 'accept' | 'reject' | 'needs_changes'
+  notes?: string
+  created_by?: string
+}
+
+export async function postSeoCompareVerdict(
+  projectId: string,
+  subjectType: 'matcher' | 'generation',
+  body: SeoCompareVerdictRequest,
+): Promise<{ id: number; subject_type: string; subject_id: number; verdict: string }> {
+  const res = await apiPost<{ id: number; subject_type: string; subject_id: number; verdict: string }>(
+    `/api/v1/projects/${projectId}/seo/compare/${subjectType}/verdict`,
+    body,
+  )
+  return res.data
+}
+
+

@@ -35,7 +35,7 @@ export default function HypothesisLabExperimentsPage() {
   return (
     <div className="container">
       <h1>Hypothesis Lab — Эксперименты</h1>
-      <PortalBackButton href={`/app/project/${projectId}/wildberries`} label="Назад к Wildberries" />
+      <PortalBackButton fallbackHref={`/app/project/${projectId}/wildberries`} label="Назад к Wildberries" />
 
       <div className="card" style={{ marginTop: 20 }}>
         <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>

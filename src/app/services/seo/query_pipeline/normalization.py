@@ -8,19 +8,22 @@ from typing import Mapping, Sequence
 
 
 QUERY_FIELD_CANDIDATES: Sequence[str] = (
+    "поисковый запрос",
     "query",
     "text",
     "keyword",
     "search_query",
     "request",
     "запрос",
-    "поисковый запрос",
     "фраза",
 )
 FREQUENCY_FIELD_CANDIDATES: Sequence[str] = (
+    "количество запросов",
     "frequency",
     "freq",
     "count",
+    "query_count",
+    "search_count",
     "hits",
     "volume",
     "частота",

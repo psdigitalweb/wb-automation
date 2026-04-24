@@ -54,6 +54,8 @@ interface ArticlesBaseSummary {
   counts: {
     with_rrp_price: number
     with_rrp_stock: number
+    with_fbs_stock: number
+    with_fbo_stock: number
     with_wb_stock: number
     with_wb_price: number
     with_front_price: number

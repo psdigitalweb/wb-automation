@@ -1,4 +1,13 @@
-"""Scoring skeleton with explainability persistence helpers."""
+"""[FROZEN iter-1] Scoring skeleton with explainability persistence helpers.
+
+DEPRECATED as of SEO iteration 1 (see
+``docs/seo-module/implementation-plan/10_implementation_decision_lock_v1.md``
+§4.1 E). Production scoring moved to ``app.services.seo.matcher_v2``. The
+legacy ``create_score_run``/``persist_query_score`` helpers are kept
+diagnostic-only: the deterministic preparation/actual scoring scripts
+(under ``scoring.preparation`` / ``scoring.actual``) still use them for
+audit, but no production router/service is allowed to import them.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +19,18 @@ from sqlalchemy.orm import Session
 
 from app import settings
 from app.models import SeoQueryScore, SeoScoreExplanation, SeoScoreRun
+from app.services.seo._freeze import guard_frozen_module
 from app.services.seo.scoring.config import ScoreWeights, get_default_score_weights
+
+guard_frozen_module(
+    __name__,
+    # Diagnostic scorers still call into this module. They are not on the
+    # production path; see P1 scoring move.
+    allowed_caller_prefixes=(
+        "app.services.seo.scoring.preparation",
+        "app.services.seo.scoring.actual",
+    ),
+)
 
 
 PENALTY_COMPONENTS = {"product_type_mismatch", "attribute_mismatch", "cluster_mismatch", "competition_penalty"}

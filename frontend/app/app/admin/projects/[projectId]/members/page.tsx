@@ -2,9 +2,9 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { getUser } from '../../../../../lib/auth'
-import { isSuperuser } from '../../../../../lib/admin'
-import { apiGetData, apiPostData, apiPatchData, apiDeleteData } from '../../../../../lib/apiClient'
+import { getUser } from '../../../../../../lib/auth'
+import { isSuperuser } from '../../../../../../lib/admin'
+import { apiGetData, apiPostData, apiPatchData, apiDeleteData } from '../../../../../../lib/apiClient'
 
 interface AdminProjectMember {
   id: number

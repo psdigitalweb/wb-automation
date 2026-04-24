@@ -31,6 +31,19 @@ from app.routers.ingest import router as ingest_router
 from app.routers.projects import router as projects_router
 from app.routers.marketplaces import router as marketplaces_router
 from app.routers.wildberries_analytics import router as wildberries_analytics_router
+from app.routers.seo_query_import import router as seo_query_import_router
+from app.routers.seo_query_pipeline_debug import router as seo_query_pipeline_debug_router
+from app.routers.seo_meaning_extraction_debug import router as seo_meaning_extraction_debug_router
+from app.routers.seo_sku_meaning import router as seo_sku_meaning_router
+from app.routers.seo_matcher_v2 import router as seo_matcher_v2_router
+from app.routers.seo_query_meaning_matcher import router as seo_query_meaning_matcher_router
+from app.routers.seo_category_bootstrap import router as seo_category_bootstrap_router
+from app.routers.seo_generation import router as seo_generation_router
+from app.routers.seo_products import router as seo_products_router
+from app.routers.seo_eval import router as seo_eval_router
+from app.routers.seo_query_set_candidate import router as seo_query_set_candidate_router
+from app.routers.seo_compare import router as seo_compare_router
+from app.routers.seo_retention import router as seo_retention_router
 from app.routers.hypothesis_mvp import router_experiments, router_hypotheses
 from app.routers.internal_data import router as internal_data_router
 # Project-scoped proxy settings (frontend_prices)
@@ -78,11 +91,7 @@ if _cors_extra:
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",  # Next.js dev server
-        "http://localhost:80",    # Nginx proxy
-        "http://localhost",       # Nginx proxy (без порта)
-    ],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -99,6 +108,19 @@ app.include_router(marketplaces_router)
 
 # WB content analytics & reviews (project-scoped, requires membership)
 app.include_router(wildberries_analytics_router)
+app.include_router(seo_query_import_router)
+app.include_router(seo_query_pipeline_debug_router)
+app.include_router(seo_meaning_extraction_debug_router)
+app.include_router(seo_sku_meaning_router)
+app.include_router(seo_query_meaning_matcher_router)
+app.include_router(seo_matcher_v2_router)
+app.include_router(seo_category_bootstrap_router)
+app.include_router(seo_products_router)
+app.include_router(seo_generation_router)
+app.include_router(seo_eval_router)
+app.include_router(seo_query_set_candidate_router)
+app.include_router(seo_compare_router)
+app.include_router(seo_retention_router)
 
 # Hypotheses library (requires authentication)
 app.include_router(router_hypotheses)

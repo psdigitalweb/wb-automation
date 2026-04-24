@@ -59,7 +59,7 @@ export default function HypothesisLabExperimentDetailPage() {
   }
 
   if (loading) return <div className="container"><p>Загрузка…</p></div>
-  if (error && !exp) return <div className="container"><p style={{ color: 'red' }}>{error}</p><PortalBackButton href={basePath(projectId)} label="Назад" /></div>
+  if (error && !exp) return <div className="container"><p style={{ color: 'red' }}>{error}</p><PortalBackButton fallbackHref={basePath(projectId)} label="Назад" /></div>
   if (!exp) return <div className="container"><p>Эксперимент не найден.</p></div>
 
   const runningRun = exp.runs.find((r) => r.status === 'running')
@@ -68,7 +68,7 @@ export default function HypothesisLabExperimentDetailPage() {
   return (
     <div className="container">
       <h1>Эксперимент #{exp.id}</h1>
-      <PortalBackButton href={basePath(projectId)} label="Назад к списку" />
+      <PortalBackButton fallbackHref={basePath(projectId)} label="Назад к списку" />
 
       <div className="card" style={{ marginTop: 20 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>

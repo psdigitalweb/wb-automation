@@ -42,13 +42,30 @@ class ChatProvider(ABC):
         messages: Sequence[ChatMessage],
         *,
         temperature: float | None = None,
+        top_p: float | None = None,
         max_tokens: int | None = None,
     ) -> ChatResponse:
         """Generate a chat completion."""
 
 
 class EmbeddingProvider(ABC):
-    """Interface for embedding providers."""
+    """Interface for embedding providers.
+
+    Providers declare a ``max_mode`` ceiling (see
+    ``services/seo/quality.py::QualityMode``) that propagates into any
+    matcher / pipeline layer that consumes them. The default is ``FULL``;
+    preview-style deterministic providers override it to ``PREVIEW`` so
+    that no run that used them can be labeled ``full``.
+
+    The attribute is typed as ``str`` at the class level so this module does
+    not need to import ``quality`` (which would introduce a cycle via
+    ``models`` -> ``quality`` in some call paths). Consumers coerce the value
+    back into a ``QualityMode`` when they build their ``QualityState``.
+    """
+
+    #: Hard ceiling on the quality mode of any run that uses this provider.
+    #: Must be one of the string values of ``quality.QualityMode``.
+    max_mode: str = "full"
 
     @abstractmethod
     def embed_texts(self, texts: Sequence[str]) -> EmbeddingResponse:

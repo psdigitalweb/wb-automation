@@ -1,12 +1,19 @@
-"""SKU clustering skeleton with explicit noise-handling placeholders."""
+"""[FROZEN iter-1] SKU clustering skeleton with explicit noise-handling placeholders.
+
+See ``app.services.seo.clustering.__init__`` for the deprecation banner.
+"""
 
 from __future__ import annotations
 
 from typing import Any, Iterable
 
-from app.services.seo.clustering.hdbscan_hook import run_hdbscan_placeholder
-from app.services.seo.clustering.presegmentation import presegment_skus
-from app.services.seo.clustering.representation import build_sku_representation
+from app.services.seo._freeze import guard_frozen_module
+
+guard_frozen_module(__name__)
+
+from app.services.seo.clustering.hdbscan_hook import run_hdbscan_placeholder  # noqa: E402
+from app.services.seo.clustering.presegmentation import presegment_skus  # noqa: E402
+from app.services.seo.clustering.representation import build_sku_representation  # noqa: E402
 
 
 def cluster_skus_placeholder(sku_records: Iterable[dict[str, Any]]) -> dict[str, Any]:

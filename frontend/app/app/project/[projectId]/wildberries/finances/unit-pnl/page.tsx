@@ -912,7 +912,7 @@ export default function WBUnitPnlPage() {
                     {n === PAGE_SIZE_ALL ? 'Все (1000)' : n}
                   </option>
                 ))}
-                {!PAGE_SIZE_OPTIONS.includes(limit) && (
+                {!(PAGE_SIZE_OPTIONS as readonly number[]).includes(limit) && (
                   <option value={limit}>{limit}</option>
                 )}
               </select>

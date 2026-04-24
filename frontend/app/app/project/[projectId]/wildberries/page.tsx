@@ -81,6 +81,27 @@ export default function WildberriesPage() {
             Отчёт по поиску (таблица)
           </Link>
           <Link
+            href={`/app/project/${projectId}/wildberries/seo/query-import`}
+            style={{
+              display: 'inline-block',
+              padding: '12px 20px',
+              backgroundColor: '#0070f3',
+              color: 'white',
+              textDecoration: 'none',
+              borderRadius: 6,
+              fontWeight: 500,
+              transition: 'background-color 0.2s',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = '#0051cc'
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = '#0070f3'
+            }}
+          >
+            SEO Query Import (Debug)
+          </Link>
+          <Link
             href={`/app/project/${projectId}/wildberries/hypothesis-lab/experiments`}
             style={{
               display: 'inline-block',

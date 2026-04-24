@@ -11,6 +11,16 @@ venv/
 dist/
 build/
 node_modules/
+outputs/
+workspace_tmp/
+pytest_tmp/
+tests/pytest_tmp/
+tests/_pytest_tmp/
+tests/_tmp/
+tests/_runtime_tmp/
+tests/_runtime_tmp/**
+tests/_runtime_tmp/.keep
+tmp_profile_*.json
 nginx/acme-challenge/
 nginx/letsencrypt-ecomcore/
 nginx/letsencrypt-reports/

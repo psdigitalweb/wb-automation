@@ -12,6 +12,7 @@ EXPECTED_SEO_TABLES = {
     "seo_queries_raw",
     "seo_queries_normalized",
     "seo_query_clusters",
+    "seo_query_cluster_memberships",
     "seo_query_annotations",
     "seo_query_annotation_versions",
     "seo_sku_cluster_runs",
@@ -53,6 +54,30 @@ def test_foundation_contract_keeps_category_scope_comment_and_placeholder_servic
         table = Base.metadata.tables[table_name]
         if "category_id" in table.c:
             assert table.c.category_id.comment == CATEGORY_SCOPE_COMMENT
+
+    annotation_columns = Base.metadata.tables["seo_query_annotations"].c
+    assert annotation_columns.normalized_query_id.nullable is True
+    assert annotation_columns.normalized_query_text.nullable is False
+    assert annotation_columns.pruning_status.nullable is False
+    assert annotation_columns.pruning_reason_code.nullable is False
+    assert annotation_columns.is_kept_for_pipeline.nullable is False
+    assert annotation_columns.query_type.nullable is False
+    assert annotation_columns.intent_type.nullable is False
+    assert annotation_columns.annotation_reason_code.nullable is False
+
+    cluster_columns = Base.metadata.tables["seo_query_clusters"].c
+    assert cluster_columns.top_query_text.nullable is True
+    assert cluster_columns.head_query_count.nullable is False
+    assert cluster_columns.mid_query_count.nullable is False
+    assert cluster_columns.tail_query_count.nullable is False
+
+    membership_columns = Base.metadata.tables["seo_query_cluster_memberships"].c
+    assert membership_columns.cluster_id.nullable is False
+    assert membership_columns.annotation_id.nullable is False
+    assert membership_columns.normalized_query_text.nullable is False
+    assert membership_columns.query_type.nullable is False
+    assert membership_columns.ranking_value_used.nullable is False
+    assert membership_columns.membership_reason_code.nullable is False
 
     weights = get_default_score_weights().to_dict()
     assert set(weights) == {

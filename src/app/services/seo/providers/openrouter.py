@@ -46,6 +46,7 @@ class OpenRouterProvider(ChatProvider, EmbeddingProvider):
         messages: Sequence[ChatMessage],
         *,
         temperature: float | None = None,
+        top_p: float | None = None,
         max_tokens: int | None = None,
     ) -> ChatResponse:
         payload: dict[str, Any] = {
@@ -54,6 +55,8 @@ class OpenRouterProvider(ChatProvider, EmbeddingProvider):
         }
         if temperature is not None:
             payload["temperature"] = temperature
+        if top_p is not None:
+            payload["top_p"] = top_p
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
         data = self._post("/chat/completions", payload)

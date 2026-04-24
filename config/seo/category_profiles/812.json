@@ -1,0 +1,146 @@
+{
+  "category_id": 812,
+  "version": "812_v1_2026_04_24",
+  "source_note": "Seeded from query_meaning_matcher.matcher module-level dictionaries (_EXPRESSIVE_GROUPS, _AUDIENCE_GROUPS, _MATERIAL_CONSTRAINTS, _USER_BUCKET_LABELS) and the conflict / bucket constants in matcher.py as of iteration 1. Iteration 2 WS-C: profile is the source of truth; legacy helpers continue to back the parity-preserving fallback path while matcher_v2 reads version + payload from this file.",
+  "term_groups": {
+    "expressive": {
+      "милая": [
+        "милота",
+        "милая",
+        "милый",
+        "милые",
+        "милую",
+        "милого",
+        "няшная",
+        "няшный",
+        "няшные"
+      ],
+      "уют": ["уют", "уютная", "уютный"],
+      "эстетика": [
+        "эстет",
+        "эстетичная",
+        "красивая",
+        "красив",
+        "пинтерест",
+        "pinterest",
+        "стильный",
+        "стильная",
+        "стильные"
+      ]
+    },
+    "audience": {
+      "женская": [
+        "женский",
+        "женская",
+        "женские",
+        "женщине",
+        "женщин",
+        "девушка",
+        "девушки",
+        "девочке",
+        "девочка",
+        "девочек"
+      ],
+      "мужская": [
+        "мужской",
+        "мужская",
+        "мужские",
+        "мужчине",
+        "мужчин",
+        "мальчик",
+        "мальчика",
+        "мальчиков"
+      ],
+      "школьники": [
+        "школьник",
+        "школьники",
+        "школьников",
+        "школа",
+        "школы",
+        "школьный",
+        "школьная",
+        "учеба",
+        "учебы"
+      ],
+      "подростки": [
+        "подросток",
+        "подростка",
+        "подростков",
+        "подростковый",
+        "подростковая"
+      ]
+    },
+    "material_constraints": {
+      "material:glass": ["glass", "стекло", "стеклянная", "стеклянный", "стеклянные"],
+      "material:ceramic": [
+        "ceramic",
+        "керамика",
+        "керамическая",
+        "керамический",
+        "керамические"
+      ],
+      "material:porcelain": [
+        "porcelain",
+        "фарфор",
+        "фарфоровая",
+        "фарфоровый",
+        "фарфоровые"
+      ],
+      "material:metal": ["metal", "металл", "металлическая", "металлический"],
+      "material:plastic": ["plastic", "пластик", "пластиковая", "пластиковый"]
+    }
+  },
+  "conflict_rules": {
+    "thermal_required": {
+      "trigger_constraints": ["thermal"],
+      "sku_alt_tokens": ["термокруж"],
+      "message": "requires thermal/термокружка, SKU meaning does not"
+    },
+    "product_type_thermal": {
+      "trigger_query_product_type": "термокружка",
+      "message": "product_type conflict: термокружка vs SKU product type"
+    },
+    "beer_use_case": {
+      "trigger_constraints": ["beer_use_case"],
+      "sku_alt_tokens": ["пив"],
+      "message": "requires beer mug use case"
+    },
+    "set_or_quantity": {
+      "trigger_constraint_prefixes": ["set", "set_quantity:"],
+      "message_format": "requires set/quantity: {constraints}"
+    },
+    "material_mismatch": {
+      "message_format": "material conflict: requires {materials}"
+    },
+    "negative_audience": {
+      "audience_set": ["женская", "мужская", "школьники", "подростки"],
+      "message_format": "blocked by SKU negative constraint: {audiences}"
+    }
+  },
+  "bucket_cutoffs": {
+    "rejected_score_max": 0.28,
+    "rejected_semantic_max": 0.42,
+    "primary_score_min": 0.62,
+    "primary_semantic_min": 0.72,
+    "broad_semantic_max": 0.78
+  },
+  "user_bucket_labels": {
+    "primary": "Лучшие",
+    "secondary": "Подходящие",
+    "broad": "Слишком общие",
+    "rejected": "Не подходят"
+  },
+  "scoring_weights": {
+    "semantic_similarity": 0.34,
+    "expressive": 0.22,
+    "use_case": 0.14,
+    "attribute": 0.08,
+    "audience": 0.12,
+    "occasion": 0.05,
+    "specificity_bonus_specific": 0.08,
+    "genericness_penalty_generic": 0.18,
+    "genericness_penalty_broad": 0.09,
+    "conflict_penalty": 0.55,
+    "frequency_boost_max": 0.08
+  }
+}

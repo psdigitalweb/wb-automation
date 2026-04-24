@@ -35,6 +35,20 @@ class _ParsedCsv:
     frequency_column: str | None
 
 
+_WB_QUERY_EXPORT_HEADERS = ("Поисковый запрос", "Количество запросов")
+
+
+def _suspicious_row_to_preview(row: SuspiciousRow) -> dict[str, Any]:
+    """Convert suspicious row dataclass to JSON-serializable preview payload."""
+
+    return {
+        "row_number": int(row.row_number),
+        "reason": row.reason,
+        "raw_query": row.raw_query,
+        "payload": dict(row.payload or {}),
+    }
+
+
 def _sniff_csv_dialect(sample: str) -> csv.Dialect:
     try:
         return csv.Sniffer().sniff(sample, delimiters=",;\t|")
@@ -42,27 +56,46 @@ def _sniff_csv_dialect(sample: str) -> csv.Dialect:
         return csv.excel
 
 
+def _read_rows_with_dialect(handle, *, dialect: csv.Dialect | type[csv.Dialect] | str) -> _ParsedCsv:
+    reader = csv.DictReader(handle, dialect=dialect)
+    if not reader.fieldnames:
+        raise CsvImportError("CSV must include a header row")
+
+    query_column = resolve_query_column(reader.fieldnames)
+    frequency_column = resolve_frequency_column(reader.fieldnames)
+    rows: list[dict[str, Any]] = []
+    for row in reader:
+        if row is None:
+            continue
+        rows.append(dict(row))
+    return _ParsedCsv(
+        rows=rows,
+        query_column=query_column,
+        frequency_column=frequency_column,
+    )
+
+
+def _looks_like_wb_frequency_export(fieldnames: list[str] | None) -> bool:
+    if not fieldnames:
+        return False
+    normalized = {str(name or "").strip() for name in fieldnames}
+    return all(header in normalized for header in _WB_QUERY_EXPORT_HEADERS)
+
+
 def _read_csv(csv_path: str) -> _ParsedCsv:
     try:
         with open(csv_path, "r", encoding="utf-8-sig", newline="") as handle:
             sample = handle.read(4096)
             handle.seek(0)
+            preview_reader = csv.reader(sample.splitlines(), delimiter=",")
+            preview_header = next(preview_reader, None)
+            if _looks_like_wb_frequency_export(preview_header):
+                handle.seek(0)
+                return _read_rows_with_dialect(handle, dialect="excel")
+
             dialect = _sniff_csv_dialect(sample)
-            reader = csv.DictReader(handle, dialect=dialect)
-            if not reader.fieldnames:
-                raise CsvImportError("CSV must include a header row")
-            query_column = resolve_query_column(reader.fieldnames)
-            frequency_column = resolve_frequency_column(reader.fieldnames)
-            rows: list[dict[str, Any]] = []
-            for row in reader:
-                if row is None:
-                    continue
-                rows.append(dict(row))
-            return _ParsedCsv(
-                rows=rows,
-                query_column=query_column,
-                frequency_column=frequency_column,
-            )
+            handle.seek(0)
+            return _read_rows_with_dialect(handle, dialect=dialect)
     except UnicodeDecodeError as exc:
         raise CsvImportError("CSV must be UTF-8 or UTF-8-SIG encoded") from exc
     except CsvImportError:
@@ -102,6 +135,7 @@ def import_queries_from_csv(
     csv_path: str,
     project_id: int,
     category_id: int,
+    original_filename: str | None = None,
     source_type: str = "csv",
     suspicious_limit: int = 10,
     top_queries_limit: int = 10,
@@ -114,7 +148,7 @@ def import_queries_from_csv(
         category_id=category_id,
         source_type=source_type,
         source_path=os.path.abspath(csv_path),
-        original_filename=os.path.basename(csv_path),
+        original_filename=original_filename or os.path.basename(csv_path),
         status="processing",
         meta={
             "query_column_resolved": parsed_csv.query_column,
@@ -200,6 +234,7 @@ def import_queries_from_csv(
             duplicate_raw_rows_detected += 1
 
         persisted_payload = dict(row_payload)
+        persisted_payload["raw_query"] = raw_query.strip()
         persisted_payload["__resolved_query_column"] = parsed_csv.query_column
         persisted_payload["__resolved_frequency_column"] = parsed_csv.frequency_column
         persisted_payload["__normalized_query"] = normalized_query
@@ -257,6 +292,7 @@ def import_queries_from_csv(
         **(batch.meta or {}),
         "raw_rows_skipped": raw_rows_skipped,
         "duplicate_raw_rows_detected": duplicate_raw_rows_detected,
+        "suspicious_rows_preview": [_suspicious_row_to_preview(item) for item in suspicious_rows],
     }
     session.flush()
 

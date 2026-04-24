@@ -158,7 +158,7 @@ export default function ProjectDashboard() {
   }
 
 
-  const formatDate = (dateStr: string | null) => {
+  const formatDate = (dateStr: string | null | undefined) => {
     if (!dateStr) return 'N/A'
     return new Date(dateStr).toLocaleString('ru-RU')
   }
@@ -182,6 +182,36 @@ export default function ProjectDashboard() {
     <div className="container">
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
         <h1 style={{ marginBottom: 20 }}>{project?.name || 'Loading...'}</h1>
+        <Link
+          href={`/app/project/${projectId}/seo`}
+          title="SEO"
+          aria-label="SEO"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            minHeight: 32,
+            padding: '0 10px',
+            borderRadius: 8,
+            border: '1px solid #d1d5db',
+            background: '#fff',
+            color: '#111827',
+            textDecoration: 'none',
+            fontSize: 13,
+            fontWeight: 600,
+            transition: 'background-color 120ms ease, border-color 120ms ease',
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.backgroundColor = '#f9fafb'
+            e.currentTarget.style.borderColor = '#9ca3af'
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.backgroundColor = '#fff'
+            e.currentTarget.style.borderColor = '#d1d5db'
+          }}
+        >
+          SEO
+        </Link>
         <Link
           href={`/app/project/${projectId}/settings`}
           title="Настройки проекта"

@@ -8,6 +8,7 @@ from app.core.security import decode_token
 from app.db_users import get_user_by_id, get_user_by_username
 from app.db_projects import get_project_member, ProjectRole
 from app.schemas.auth import TokenData
+from app.settings import ALLOW_UNAUTH_LOCAL
 
 security = HTTPBearer()
 security_optional = HTTPBearer(auto_error=False)
@@ -244,6 +245,31 @@ async def allow_client_portal_read(
     optional_user: Optional[dict] = Depends(get_optional_user),
 ) -> dict:
     """Dependency: allow read for client portal (reports.zakka.ru + project 1) without JWT, else require auth."""
+    return _allow_client_portal_read(request, project_id, optional_user)
+
+
+def _is_local_dev_request(request: Request) -> bool:
+    host = (request.headers.get("host") or "").split(":")[0].strip().lower()
+    return host in {"localhost", "127.0.0.1", "0.0.0.0"}
+
+
+async def allow_local_debug_read(
+    request: Request,
+    project_id: int = Path(..., description="Project ID"),
+    optional_user: Optional[dict] = Depends(get_optional_user),
+) -> dict:
+    """Allow local read-only debug access when ALLOW_UNAUTH_LOCAL is enabled.
+
+    This is intentionally narrow and should be used only for internal/debug read-only
+    endpoints that need to work in local development without a JWT.
+    """
+    if ALLOW_UNAUTH_LOCAL and _is_local_dev_request(request):
+        return {
+            "allowed": True,
+            "local_debug": True,
+            "project_id": project_id,
+            "user": optional_user,
+        }
     return _allow_client_portal_read(request, project_id, optional_user)
 
 

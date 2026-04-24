@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from typing import Dict
 
 from dotenv import load_dotenv
@@ -52,6 +53,10 @@ SQLALCHEMY_DATABASE_URL = (
 
 REDIS_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/0"
 INTERNAL_DATA_DIR = os.getenv("INTERNAL_DATA_DIR", "/data/internal_data")
+SEO_QUERY_IMPORT_TMP_DIR = os.getenv(
+    "SEO_QUERY_IMPORT_TMP_DIR",
+    os.path.join(tempfile.gettempdir(), "ecomcore", "seo_query_import"),
+)
 INGEST_STUCK_TTL_SECONDS_DEFAULT = _get_env_int("INGEST_STUCK_TTL_SECONDS_DEFAULT", 1800)
 
 FRONTEND_PRICES_MAX_RUNTIME_SECONDS = _get_env_int("FRONTEND_PRICES_MAX_RUNTIME_SECONDS", 1200)
@@ -73,6 +78,24 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 OPENROUTER_CHAT_MODEL = os.getenv("OPENROUTER_CHAT_MODEL", "openai/gpt-4.1-mini")
 OPENROUTER_EMBEDDING_MODEL = os.getenv("OPENROUTER_EMBEDDING_MODEL", "openai/text-embedding-3-small")
+
+SEO_GENERATION_PROVIDER = os.getenv("SEO_GENERATION_PROVIDER", "openrouter")
+SEO_GENERATION_PRIMARY_MODEL = os.getenv("SEO_GENERATION_PRIMARY_MODEL", "anthropic/claude-haiku-4.5")
+SEO_GENERATION_FALLBACK_MODEL = os.getenv("SEO_GENERATION_FALLBACK_MODEL", "anthropic/claude-sonnet-4.5")
+SEO_GENERATION_TEMPERATURE = _get_env_float("SEO_GENERATION_TEMPERATURE", 0.35)
+SEO_GENERATION_TOP_P = _get_env_float("SEO_GENERATION_TOP_P", 0.9)
+SEO_GENERATION_MAX_TOKENS = _get_env_int("SEO_GENERATION_MAX_TOKENS", 2600)
+# Iteration 1 generation discipline (CD-2 in 10_implementation_decision_lock_v1.md):
+# default attempts lowered from 3 to 1. Retries happen ONLY on validator hard
+# errors; V2-relevance retries were removed.
+SEO_GENERATION_MAX_ATTEMPTS = _get_env_int("SEO_GENERATION_MAX_ATTEMPTS", 1)
+
+# Iteration 1 research-preview flag. When false, frontend hides the
+# generation endpoint and shows a "coming soon" state rather than a fake
+# publishable result. Default OFF per OD-1 package recommendation.
+SEO_GENERATION_PREVIEW_ENABLED = (
+    os.getenv("SEO_GENERATION_PREVIEW_ENABLED", "false").lower() in ("true", "1", "yes")
+)
 
 
 def _build_seo_scoring_default_weights() -> Dict[str, float]:

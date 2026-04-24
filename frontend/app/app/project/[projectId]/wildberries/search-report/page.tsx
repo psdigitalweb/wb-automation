@@ -120,7 +120,7 @@ function formatDateInput(d: Date) {
 export default function WBSearchReportTabularPage() {
   const params = useParams()
   const projectId = params.projectId as string
-  usePageTitle(`WB • Отчёт по поиску`)
+  usePageTitle(`WB • Отчёт по поиску`, projectId)
 
   const defaultDates = useMemo(() => {
     const today = new Date()
@@ -347,7 +347,7 @@ export default function WBSearchReportTabularPage() {
   return (
     <div className="container">
       <div style={{ marginBottom: 12 }}>
-        <PortalBackButton href={`/app/project/${projectId}/wildberries`} />
+        <PortalBackButton fallbackHref={`/app/project/${projectId}/wildberries`} />
       </div>
       <h1 style={{ marginTop: 0, marginBottom: 20 }}>WB • Отчёт по поиску (табличный)</h1>
 

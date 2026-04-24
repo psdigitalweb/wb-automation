@@ -69,7 +69,7 @@ export default function NewHypothesisLabExperimentPage() {
   return (
     <div className="container">
       <h1>Новый эксперимент</h1>
-      <PortalBackButton href={basePath(projectId)} label="Назад к списку" />
+      <PortalBackButton fallbackHref={basePath(projectId)} label="Назад к списку" />
 
       <div className="card" style={{ marginTop: 20, maxWidth: 560 }}>
         <div style={{ marginBottom: 12 }}>

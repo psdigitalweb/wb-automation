@@ -101,6 +101,42 @@ def test_import_queries_without_frequency_column_still_succeeds(tmp_path):
         session.close()
 
 
+def test_import_queries_supports_reference_wb_frequency_export_format(tmp_path):
+    csv_path = tmp_path / "wb_search_export.csv"
+    csv_path.write_text(
+        "Поисковый запрос,Количество запросов\n"
+        "тарелки набор,416666\n"
+        "тарелки,305448\n"
+        "набор тарелок,230298\n",
+        encoding="utf-8",
+    )
+
+    session = _make_session()
+    try:
+        diagnostics = import_queries_from_csv(session, csv_path=str(csv_path), project_id=1, category_id=777)
+        session.commit()
+
+        assert diagnostics.query_column_resolved == "Поисковый запрос"
+        assert diagnostics.frequency_column_resolved == "Количество запросов"
+        assert diagnostics.raw_rows_imported == 3
+        assert diagnostics.normalized_rows_created == 3
+        assert diagnostics.top_normalized_queries[0].normalized_query == "тарелки набор"
+        assert Decimal(str(diagnostics.top_normalized_queries[0].frequency_total)) == Decimal("416666")
+
+        normalized = session.scalars(
+            select(SeoQueryNormalized).order_by(SeoQueryNormalized.normalized_query.asc())
+        ).all()
+        assert len(normalized) == 3
+        assert normalized[0].normalized_query == "набор тарелок"
+        assert Decimal(str(normalized[0].frequency_total)) == Decimal("230298")
+        assert normalized[1].normalized_query == "тарелки"
+        assert Decimal(str(normalized[1].frequency_total)) == Decimal("305448")
+        assert normalized[2].normalized_query == "тарелки набор"
+        assert Decimal(str(normalized[2].frequency_total)) == Decimal("416666")
+    finally:
+        session.close()
+
+
 def test_import_queries_fails_when_query_column_missing(tmp_path):
     csv_path = tmp_path / "bad.csv"
     csv_path.write_text("name;count\nabc;1\n", encoding="utf-8")

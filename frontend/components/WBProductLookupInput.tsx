@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { getWBProductLookup, type WBProductLookupItem } from '@/lib/apiClient'
+import { getWBProductLookup, type WBProductLookupItem, type WBProductLookupResponse } from '@/lib/apiClient'
 
 type Props = {
   projectId: string
@@ -10,6 +10,7 @@ type Props = {
   onSelect: (item: WBProductLookupItem) => void
   placeholder?: string
   className?: string
+  lookupFn?: (projectId: string, params: { q: string; limit?: number }) => Promise<WBProductLookupResponse>
 }
 
 function formatPrimary(item: WBProductLookupItem): string {
@@ -23,6 +24,7 @@ export default function WBProductLookupInput({
   onSelect,
   placeholder,
   className,
+  lookupFn,
 }: Props) {
   const [items, setItems] = useState<WBProductLookupItem[]>([])
   const [open, setOpen] = useState(false)
@@ -43,7 +45,7 @@ export default function WBProductLookupInput({
     const timer = window.setTimeout(async () => {
       try {
         setLoading(true)
-        const res = await getWBProductLookup(projectId, { q: trimmedValue, limit: 8 })
+        const res = await (lookupFn || getWBProductLookup)(projectId, { q: trimmedValue, limit: 8 })
         if (requestId !== requestSeqRef.current) return
         setItems(res.items)
         setOpen(res.items.length > 0)
@@ -59,7 +61,7 @@ export default function WBProductLookupInput({
     return () => {
       window.clearTimeout(timer)
     }
-  }, [projectId, trimmedValue])
+  }, [projectId, trimmedValue, lookupFn])
 
   useEffect(() => {
     return () => {

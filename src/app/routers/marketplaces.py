@@ -60,6 +60,7 @@ from app.deps import (
     get_project_membership,
     require_project_admin,
     allow_client_portal_read,
+    allow_local_debug_read,
 )
 from app.settings import ALLOW_UNAUTH_LOCAL
 from app.db_marketplace_tariffs import get_latest_snapshot
@@ -1361,7 +1362,7 @@ async def get_wb_unit_pnl_details_endpoint(
 )
 async def list_wb_product_subjects(
     project_id: int = Path(..., description="Project ID"),
-    _auth: dict = Depends(allow_client_portal_read),
+    _auth: dict = Depends(allow_local_debug_read),
 ):
     from app.db import engine
     from sqlalchemy import text
