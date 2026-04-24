@@ -1,553 +1,151 @@
-"""Meaning-aware query matcher preview."""
+"""Profile-driven facade for the meaning-aware query matcher."""
 
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
-from typing import Any, Mapping
+import warnings
+from typing import Any
 
-from sqlalchemy import desc, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.models import SeoQueryClusterMembership, SeoQueryMeaning, SeoSkuMeaningAnnotation, SeoSkuQueryJudgment
 from app.schemas.seo_query_meaning_matcher import (
     MEANING_AWARE_MATCHER_VERSION,
     MeaningAwareMatcherDiagnostics,
     MeaningAwareMatcherItem,
     MeaningAwareMatcherResponse,
 )
+from app.services.seo.category_profile import CategoryProfile, load_active_profile
 from app.services.seo.providers.base import EmbeddingProvider
-from app.services.seo.query_meaning_matcher.canonical import (
-    build_sku_canonical_text,
-    listify,
-    normalize_query_meaning_payload,
-    normalized_tokens,
-)
-from app.services.seo.query_meaning_matcher.embeddings import (
-    LocalPreviewEmbeddingProvider,
-    cosine_similarity,
-    ensure_meaning_embedding,
+from app.services.seo.query_meaning_matcher._legacy import matcher as _legacy_matcher
+from app.services.seo.query_meaning_matcher.embeddings import LocalPreviewEmbeddingProvider, cosine_similarity, ensure_meaning_embedding
+from app.services.seo.query_meaning_matcher.profile_matcher import (
+    _FeatureSet,
+    _hard_conflicts as _profile_hard_conflicts,
+    _product_type_score as _profile_product_type_score,
+    _query_features as _profile_query_features,
+    _sku_features as _profile_sku_features,
 )
 from app.services.seo.query_pipeline import normalize_query_text
 from app.services.seo.meaning_atoms import get_atoms_payload, merge_sku_and_vision_atoms
-from app.services.seo.atoms.v1.schemas import QueryAtoms
-from app.services.seo.atoms.v1.matcher_v1 import ATOMS_MATCHER_V1_VERSION, match_atoms_v1
-from app.services.seo.visual_motifs import expand_visual_tokens
 
 
-class MeaningAwareMatcherError(Exception):
-    """Base matcher error."""
+MeaningAwareMatcherError = _legacy_matcher.MeaningAwareMatcherError
+MissingQueryMeaningLibraryError = _legacy_matcher.MissingQueryMeaningLibraryError
+MissingSkuMeaningAnnotationError = _legacy_matcher.MissingSkuMeaningAnnotationError
+CategoryBootstrapBuildingError = _legacy_matcher.CategoryBootstrapBuildingError
+
+_WEAK_OVERLAP_TOKENS = _legacy_matcher._WEAK_OVERLAP_TOKENS
+_MATERIAL_CONSTRAINTS = _legacy_matcher._MATERIAL_CONSTRAINTS
+_EXPRESSIVE_GROUPS = _legacy_matcher._EXPRESSIVE_GROUPS
+_AUDIENCE_GROUPS = _legacy_matcher._AUDIENCE_GROUPS
+_USER_BUCKET_LABELS = _legacy_matcher._USER_BUCKET_LABELS
+
+_first_text = _legacy_matcher._first_text
+_expand_expressive = _legacy_matcher._expand_expressive
+_expand_audience = _legacy_matcher._expand_audience
+_expand_visual_terms = _legacy_matcher._expand_visual_terms
+_material_set = _legacy_matcher._material_set
+_ranking_by_cluster = _legacy_matcher._ranking_by_cluster
+_overlap_score = _legacy_matcher._overlap_score
+_frequency_boost = _legacy_matcher._frequency_boost
+_bucket_for = _legacy_matcher._bucket_for
+_query_display = _legacy_matcher._query_display
+_judgment_overrides_by_query = _legacy_matcher._judgment_overrides_by_query
+_manual_bucket_override = _legacy_matcher._manual_bucket_override
+_user_reasons = _legacy_matcher._user_reasons
+_query_coverage_tags = _legacy_matcher._query_coverage_tags
+_select_bucket_with_coverage = _legacy_matcher._select_bucket_with_coverage
+_apply_atoms_gate = _legacy_matcher._apply_atoms_gate
+_get_sku_annotation = _legacy_matcher._get_sku_annotation
 
 
-class MissingQueryMeaningLibraryError(MeaningAwareMatcherError):
-    """Raised when matcher cannot run because query meanings are absent."""
-
-
-class MissingSkuMeaningAnnotationError(MeaningAwareMatcherError):
-    """Raised when matcher cannot run because SKU meaning annotation is absent."""
-
-
-class CategoryBootstrapBuildingError(MeaningAwareMatcherError):
-    """Raised when category bootstrap is still running."""
-
-
-@dataclass(frozen=True)
-class _FeatureSet:
-    product_type: str
-    tokens: set[str]
-    use_case_terms: set[str]
-    attribute_terms: set[str]
-    expressive_terms: set[str]
-    audience_terms: set[str]
-    occasion_terms: set[str]
-    negative_terms: set[str]
-    negative_audience_terms: set[str]
-    constraints: set[str]
-    materials: set[str]
-    canonical_text: str
-
-
-_WEAK_OVERLAP_TOKENS = {
-    "а",
-    "без",
-    "в",
-    "во",
-    "для",
-    "до",
-    "и",
-    "из",
-    "к",
-    "ко",
-    "на",
-    "не",
-    "о",
-    "об",
-    "от",
-    "по",
-    "под",
-    "при",
-    "про",
-    "с",
-    "со",
-    "у",
-}
-
-_MATERIAL_CONSTRAINTS = {
-    "material:glass": {"glass", "стекло", "стеклянная", "стеклянный", "стеклянные"},
-    "material:ceramic": {"ceramic", "керамика", "керамическая", "керамический", "керамические"},
-    "material:porcelain": {"porcelain", "фарфор", "фарфоровая", "фарфоровый", "фарфоровые"},
-    "material:metal": {"metal", "металл", "металлическая", "металлический"},
-    "material:plastic": {"plastic", "пластик", "пластиковая", "пластиковый"},
-}
-
-
-_EXPRESSIVE_GROUPS = {
-    "милая": {"милота", "милая", "милый", "милые", "милую", "милого", "няшная", "няшный", "няшные"},
-    "уют": {"уют", "уютная", "уютный"},
-    "эстетика": {"эстет", "эстетичная", "красивая", "красив", "пинтерест", "pinterest", "стильный", "стильная", "стильные"},
-}
-
-_AUDIENCE_GROUPS = {
-    "женская": {"женский", "женская", "женские", "женщине", "женщин", "девушка", "девушки", "девочке", "девочка", "девочек"},
-    "мужская": {"мужской", "мужская", "мужские", "мужчине", "мужчин", "мальчик", "мальчика", "мальчиков"},
-    "школьники": {"школьник", "школьники", "школьников", "школа", "школы", "школьный", "школьная", "учеба", "учебы"},
-    "подростки": {"подросток", "подростка", "подростков", "подростковый", "подростковая"},
-}
-
-_USER_BUCKET_LABELS = {
-    "primary": "Лучшие",
-    "secondary": "Подходящие",
-    "broad": "Слишком общие",
-    "rejected": "Не подходят",
-}
-
-
-def _first_text(value: Any) -> str:
-    values = listify(value)
-    return values[0] if values else ""
-
-
-def _expand_expressive(tokens: set[str]) -> set[str]:
-    expanded = set(tokens)
-    for group_name, variants in _EXPRESSIVE_GROUPS.items():
-        if group_name == "милая":
-            matched = bool(tokens & variants) or any(token.startswith("милаш") for token in tokens)
-        else:
-            matched = any(any(token.startswith(variant) for variant in variants) for token in tokens)
-        if matched:
-            expanded.add(group_name)
-    return expanded
-
-
-def _expand_audience(tokens: set[str]) -> set[str]:
-    expanded = set(tokens)
-    for group_name, variants in _AUDIENCE_GROUPS.items():
-        if tokens & variants or any(any(token.startswith(variant) for variant in variants) for token in tokens):
-            expanded.add(group_name)
-    return expanded
-
-
-def _expand_visual_terms(tokens: set[str]) -> set[str]:
-    return expand_visual_tokens(tokens)
-
-
-def _material_set(tokens: set[str], constraints: set[str]) -> set[str]:
-    materials: set[str] = set()
-    for constraint, variants in _MATERIAL_CONSTRAINTS.items():
-        if constraint in constraints or any(token in variants or any(token.startswith(v[:5]) for v in variants if len(v) > 5) for token in tokens):
-            materials.add(constraint)
-    return materials
-
-
-def _sku_features(meaning: Mapping[str, Any]) -> _FeatureSet:
-    functional = meaning.get("functional") if isinstance(meaning.get("functional"), dict) else {}
-    expressive = meaning.get("expressive") if isinstance(meaning.get("expressive"), dict) else {}
-    canonical_text = build_sku_canonical_text(meaning)
-    constraints: set[str] = set()
-    positive_text = " ".join(listify(functional) + listify(expressive) + listify(meaning.get("audience")))
-    all_tokens = normalized_tokens(functional, expressive, meaning.get("audience"))
-    use_case_terms = normalized_tokens(functional.get("use_cases"))
-    attribute_terms = _expand_visual_terms(normalized_tokens(functional.get("attributes")))
-    expressive_terms = _expand_expressive(
-        normalized_tokens(
-            expressive.get("styles"),
-            expressive.get("vibes"),
-            expressive.get("emotions"),
-            expressive.get("gift_contexts"),
-        )
-    )
-    audience_terms = _expand_audience(normalized_tokens(meaning.get("audience"), functional.get("attributes"), functional.get("use_cases")))
-    occasion_terms = normalized_tokens(expressive.get("gift_contexts"))
-    negative_terms = normalized_tokens(meaning.get("negative_constraints"))
-    negative_audience_terms = _expand_audience(negative_terms)
-    if "подар" in positive_text.lower().replace("ё", "е"):
-        occasion_terms.add("подарок")
-    product_type = _first_text(functional.get("product_type")).lower().replace("ё", "е")
-    if not product_type and any(token.startswith("круж") for token in all_tokens):
-        product_type = "кружка"
-    if "термокруж" in positive_text.lower().replace("ё", "е"):
-        constraints.add("thermal")
-    if "набор" in all_tokens or "комплект" in all_tokens:
-        constraints.add("set")
-    return _FeatureSet(
-        product_type=product_type,
-        tokens=all_tokens,
-        use_case_terms=use_case_terms,
-        attribute_terms=attribute_terms,
-        expressive_terms=expressive_terms,
-        audience_terms=audience_terms,
-        occasion_terms=occasion_terms,
-        negative_terms=negative_terms,
-        negative_audience_terms=negative_audience_terms,
-        constraints=constraints,
-        materials=_material_set(all_tokens, constraints),
-        canonical_text=canonical_text,
+def _warn_legacy_matcher_path() -> None:
+    warnings.warn(
+        "legacy query_meaning_matcher path is deprecated; use profile-driven matcher",
+        DeprecationWarning,
+        stacklevel=3,
     )
 
 
-def _query_features(row: SeoQueryMeaning) -> _FeatureSet:
-    payload = normalize_query_meaning_payload(row.meaning_payload or {})
-    functional = payload.functional or {}
-    expressive = payload.expressive or {}
-    canonical_text = str(row.canonical_text or "")
-    constraints = set(str(item).lower().replace("ё", "е") for item in listify(row.constraints or payload.constraints))
-    all_tokens = normalized_tokens(canonical_text, functional, expressive, payload.audience, payload.occasion, constraints)
-    use_case_terms = normalized_tokens(functional.get("use_cases"))
-    attribute_terms = _expand_visual_terms(normalized_tokens(functional.get("attributes"), canonical_text))
-    expressive_terms = _expand_expressive(
-        normalized_tokens(
-            expressive.get("styles"),
-            expressive.get("vibes"),
-            expressive.get("emotions"),
-            expressive.get("gift_contexts"),
-        )
-    )
-    product_type = _first_text(functional.get("product_type")).lower().replace("ё", "е")
-    return _FeatureSet(
-        product_type=product_type,
-        tokens=all_tokens,
-        use_case_terms=use_case_terms,
-        attribute_terms=attribute_terms,
-        expressive_terms=expressive_terms,
-        audience_terms=_expand_audience(normalized_tokens(payload.audience, functional.get("use_cases"), functional.get("attributes"))),
-        occasion_terms=normalized_tokens(payload.occasion, expressive.get("gift_contexts")),
-        negative_terms=set(),
-        negative_audience_terms=set(),
-        constraints=constraints,
-        materials=_material_set(all_tokens, constraints),
-        canonical_text=canonical_text,
-    )
+def _load_profile_or_none(session: Session, *, project_id: int, category_id: int) -> CategoryProfile | None:
+    """Return the active profile when the table exists, else keep the legacy path.
 
+    Step 6 still has to preserve the old matcher tests and ad hoc SQLite setups
+    that do not create ``seo_category_profiles``. Those environments should
+    continue to use the explicit legacy matcher path until Step 7/8 wires
+    profile activation end to end.
+    """
 
-def _ranking_by_cluster(session: Session, *, project_id: int, category_id: int, cluster_ids: list[int]) -> dict[int, float]:
-    if not cluster_ids:
-        return {}
-    rows = session.execute(
-        select(SeoQueryClusterMembership.cluster_id, SeoQueryClusterMembership.ranking_value_used)
-        .where(
-            SeoQueryClusterMembership.project_id == int(project_id),
-            SeoQueryClusterMembership.category_id == int(category_id),
-            SeoQueryClusterMembership.cluster_id.in_(cluster_ids),
-        )
-        .order_by(desc(SeoQueryClusterMembership.ranking_value_used))
-    ).all()
-    result: dict[int, float] = {}
-    for cluster_id, ranking in rows:
-        cid = int(cluster_id)
-        try:
-            value = float(ranking or 0)
-        except Exception:
-            value = 0.0
-        result[cid] = max(result.get(cid, 0.0), value)
-    return result
-
-
-def _hard_conflicts(sku: _FeatureSet, query: _FeatureSet) -> list[str]:
-    conflicts: list[str] = []
-    if "thermal" in query.constraints and "thermal" not in sku.constraints and "термокруж" not in sku.product_type:
-        conflicts.append("requires thermal/термокружка, SKU meaning does not")
-    if query.product_type == "термокружка" and sku.product_type != "термокружка":
-        conflicts.append("product_type conflict: термокружка vs SKU product type")
-    if "beer_use_case" in query.constraints and "beer_use_case" not in sku.constraints and "пив" not in sku.tokens:
-        conflicts.append("requires beer mug use case")
-    set_constraints = [item for item in query.constraints if item == "set" or item.startswith("set_quantity:")]
-    if set_constraints and not any(item == "set" or item.startswith("set_quantity:") for item in sku.constraints):
-        conflicts.append(f"requires set/quantity: {', '.join(set_constraints)}")
-    if query.materials and sku.materials and not (query.materials & sku.materials):
-        conflicts.append(f"material conflict: requires {', '.join(sorted(query.materials))}")
-    negative_audience = (sku.negative_audience_terms & query.audience_terms) & {
-        "женская",
-        "мужская",
-        "школьники",
-        "подростки",
-    }
-    if negative_audience:
-        conflicts.append(f"blocked by SKU negative constraint: {', '.join(sorted(negative_audience))}")
-    return conflicts
-
-
-def _product_type_score(sku: _FeatureSet, query: _FeatureSet) -> tuple[float, list[str]]:
-    if not query.product_type:
-        return 0.0, []
-    if sku.product_type and sku.product_type == query.product_type:
-        return 0.22, [f"product_type matched: {query.product_type}"]
-    if query.product_type == "кружка" and "круж" in sku.product_type:
-        return 0.16, ["product_type compatible: кружка"]
-    if query.product_type == "рюкзак" and "рюкзак" in sku.product_type:
-        return 0.18, ["product_type compatible: рюкзак"]
-    return -0.18, [f"product_type weak/conflicting: {query.product_type}"]
-
-
-def _overlap_score(label: str, left: set[str], right: set[str], weight: float) -> tuple[float, list[str], list[str]]:
-    overlap = sorted((left & right) - _WEAK_OVERLAP_TOKENS)
-    if not overlap:
-        return 0.0, [], []
-    score = min(weight, weight * (0.55 + 0.25 * len(overlap)))
-    return score, overlap, [f"{label} matched: {', '.join(overlap[:5])}"]
-
-
-def _frequency_boost(value: float | None, *, allow: bool) -> float:
-    if not allow or value is None or value <= 0:
-        return 0.0
-    return min(0.08, math.log10(value + 1.0) / 90.0)
-
-
-def _bucket_for(
-    *,
-    score: float,
-    genericness: str,
-    conflicts: list[str],
-    semantic_similarity: float,
-    expressive_overlap: list[str],
-    audience_overlap: list[str],
-    occasion_overlap: list[str],
-    use_case_overlap: list[str],
-    attribute_overlap: list[str],
-) -> str:
-    if conflicts or (score < 0.28 and semantic_similarity < 0.42):
-        return "rejected"
-    has_specific_meaning_match = bool(expressive_overlap or audience_overlap or occasion_overlap or use_case_overlap or attribute_overlap)
-    if genericness == "generic" and not has_specific_meaning_match:
-        return "broad"
-    if genericness == "broad" and not has_specific_meaning_match and semantic_similarity < 0.78:
-        return "broad"
-    if occasion_overlap and not expressive_overlap and not audience_overlap and not use_case_overlap and not attribute_overlap:
-        return "secondary"
-    if score >= 0.62 and (expressive_overlap or audience_overlap or occasion_overlap or use_case_overlap or attribute_overlap or semantic_similarity >= 0.72):
-        return "primary"
-    return "secondary"
-
-
-def _query_display(row: SeoQueryMeaning) -> str:
-    examples = listify(row.source_query_examples)
-    return examples[0] if examples else str(row.cluster_key)
-
-
-def _judgment_overrides_by_query(
-    session: Session,
-    *,
-    annotation_id: int,
-) -> tuple[dict[str, SeoSkuQueryJudgment], dict[str, SeoSkuQueryJudgment]]:
-    rows = session.scalars(
-        select(SeoSkuQueryJudgment).where(SeoSkuQueryJudgment.annotation_id == int(annotation_id))
-    ).all()
-    by_query: dict[str, SeoSkuQueryJudgment] = {}
-    by_cluster_key: dict[str, SeoSkuQueryJudgment] = {}
-    for row in rows:
-        normalized = normalize_query_text(str(row.normalized_query_text or row.query_text or ""))
-        if normalized:
-            by_query[normalized] = row
-        if row.cluster_key:
-            by_cluster_key[str(row.cluster_key)] = row
-    return by_query, by_cluster_key
-
-
-def _manual_bucket_override(row: SeoQueryMeaning, judgment: SeoSkuQueryJudgment | None) -> tuple[str | None, list[str], list[str]]:
-    if judgment is None:
-        return None, [], []
-    label = str(judgment.label or "")
-    reason = f"manual judgment: {label}"
-    if judgment.rationale:
-        reason = f"{reason} ({judgment.rationale})"
-    if label in {"manual_rejected", "irrelevant", "conflict", "dangerous_claim"}:
-        return "rejected", [reason], [reason]
-    if label == "too_broad":
-        return "broad", [reason], []
-    if label in {"highly_relevant", "maybe_relevant"}:
-        return None, [reason], []
-    return None, [reason], []
-
-
-def _user_reasons(*, bucket: str, matched_atoms: list[str], missing_atoms: list[str], conflict_atoms: list[str], fallback_reasons: list[str]) -> list[str]:
-    reasons: list[str] = []
-    if conflict_atoms:
-        reasons.append("Есть обязательное несовпадение с товаром")
-    if missing_atoms:
-        reasons.append("В запросе есть требование, которого нет у товара")
-    if matched_atoms:
-        reasons.append("Совпали признаки товара и запроса")
-    if bucket == "broad":
-        reasons.append("Запрос слишком общий для точной оптимизации")
-    if not reasons:
-        if any("manual judgment" in item for item in fallback_reasons):
-            reasons.append("Учтена ручная правка")
-        elif bucket == "primary":
-            reasons.append("Хорошее смысловое совпадение без конфликтов")
-        elif bucket == "secondary":
-            reasons.append("Запрос подходит, но не самый точный")
-        elif bucket == "rejected":
-            reasons.append("Смысл запроса слабо соответствует товару")
-    return reasons
-
-
-def _query_coverage_tags(item: MeaningAwareMatcherItem) -> list[str]:
-    query = normalize_query_text(item.query)
-    tags: list[str] = []
-
-    def add(tag: str) -> None:
-        if tag not in tags:
-            tags.append(tag)
-
-    if "пинтерест" in query or "pinterest" in query:
-        add("style:pinterest")
-    if "эстет" in query or "красив" in query:
-        add("style:aesthetic")
-    if "мил" in query or "няш" in query:
-        add("style:cute")
-
-    for atom in item.matched_atoms:
-        parts = str(atom or "").split(":")
-        if len(parts) < 2:
-            continue
-        if "motif" in parts:
-            add(f"motif:{parts[-1]}")
-        elif "expressive" in parts:
-            add(f"expressive:{parts[-1]}")
-        elif "recipient" in parts:
-            add(f"recipient:{parts[-1]}")
-        elif "occasion" in parts:
-            add(f"occasion:{parts[-1]}")
-    return tags
-
-
-def _select_bucket_with_coverage(candidates: list[MeaningAwareMatcherItem], limit: int) -> list[MeaningAwareMatcherItem]:
-    if len(candidates) <= limit:
-        return candidates
-    selected: list[MeaningAwareMatcherItem] = []
-    selected_keys: set[tuple[str, int | None, str]] = set()
-    tag_counts: dict[str, int] = {}
-    coverage_budget = min(20, max(8, limit // 2))
-    per_tag_limit = 3
-
-    def key(item: MeaningAwareMatcherItem) -> tuple[str, int | None, str]:
-        return (str(item.cluster_key or ""), item.query_meaning_id, normalize_query_text(item.query))
-
-    def add(item: MeaningAwareMatcherItem) -> bool:
-        item_key = key(item)
-        if item_key in selected_keys:
-            return False
-        selected.append(item)
-        selected_keys.add(item_key)
-        return True
-
-    tag_items: dict[str, list[MeaningAwareMatcherItem]] = {}
-    for item in candidates:
-        for tag in _query_coverage_tags(item):
-            tag_items.setdefault(tag, []).append(item)
-
-    priority_tags = [
-        "style:pinterest",
-        "style:aesthetic",
-        "style:cute",
-        *sorted(tag for tag in tag_items if not tag.startswith("style:")),
-    ]
-    for tag in priority_tags:
-        if len(selected) >= coverage_budget:
-            break
-        for item in tag_items.get(tag, []):
-            if tag_counts.get(tag, 0) >= per_tag_limit or len(selected) >= coverage_budget:
-                break
-            if add(item):
-                tag_counts[tag] = tag_counts.get(tag, 0) + 1
-
-    for item in candidates:
-        if len(selected) >= limit:
-            break
-        add(item)
-    return selected[:limit]
-
-
-def _apply_atoms_gate(
-    *,
-    bucket: str,
-    score: float,
-    row: SeoQueryMeaning,
-    query_display: str,
-    ranking_value: float | None,
-    sku_atoms: Any,
-    query_atoms_payload: dict[str, Any] | None,
-) -> tuple[str, float, list[str], list[str], list[str], list[str]]:
-    if sku_atoms is None or not query_atoms_payload:
-        return bucket, score, [], [], [], ["atoms gate skipped: missing SKU or query atoms"]
     try:
-        query_atoms = QueryAtoms.model_validate(query_atoms_payload)
-        atoms_result = match_atoms_v1(
-            sku_atoms,
-            query_atoms,
-            query_text=query_display,
-            cluster_key=str(row.cluster_key or ""),
-            ranking_value_used=ranking_value,
-        )
-    except Exception as exc:
-        return bucket, score, [], [], [], [f"atoms gate skipped: {type(exc).__name__}: {exc}"]
-
-    gated_bucket = bucket
-    gated_score = score
-    if atoms_result.bucket == "rejected":
-        gated_bucket = "rejected"
-        gated_score = min(score, atoms_result.score, 0.05)
-    elif atoms_result.bucket == "broad":
-        if bucket in {"primary", "secondary"}:
-            gated_bucket = "broad"
-            gated_score = min(score, 0.45)
-    elif atoms_result.bucket == "primary":
-        if bucket in {"secondary", "broad"}:
-            gated_bucket = "primary"
-        gated_score = max(score, atoms_result.score)
-    elif bucket == "primary" and atoms_result.bucket != "primary":
-        gated_bucket = "secondary"
-        gated_score = min(score, max(0.34, atoms_result.score))
-
-    debug_reasons = [f"atoms bucket: {atoms_result.bucket}", *atoms_result.reasons]
-    return (
-        gated_bucket,
-        round(max(0.0, min(1.0, gated_score)), 4),
-        atoms_result.matched_atoms,
-        atoms_result.missing_atoms,
-        atoms_result.conflict_atoms,
-        debug_reasons,
-    )
+        return load_active_profile(session, project_id=project_id, category_id=category_id)
+    except SQLAlchemyError as exc:
+        if "seo_category_profiles" not in str(exc).lower():
+            raise
+        _warn_legacy_matcher_path()
+        return None
 
 
-def _get_sku_annotation(
+def _sku_features(meaning: dict[str, Any], *, profile: CategoryProfile | None = None) -> _FeatureSet:
+    if profile is None:
+        _warn_legacy_matcher_path()
+        return _legacy_matcher._sku_features(meaning)
+    return _profile_sku_features(meaning, profile=profile)
+
+
+def _query_features(row: Any, *, profile: CategoryProfile | None = None) -> _FeatureSet:
+    if profile is None:
+        _warn_legacy_matcher_path()
+        return _legacy_matcher._query_features(row)
+    return _profile_query_features(row, profile=profile)
+
+
+def _hard_conflicts(
+    sku: _FeatureSet,
+    query: _FeatureSet,
+    *,
+    profile: CategoryProfile | None = None,
+) -> list[str]:
+    if profile is None:
+        _warn_legacy_matcher_path()
+        return _legacy_matcher._hard_conflicts(sku, query)
+    return _profile_hard_conflicts(sku, query, profile=profile)
+
+
+def _product_type_score(
+    sku: _FeatureSet,
+    query: _FeatureSet,
+    *,
+    profile: CategoryProfile | None = None,
+) -> tuple[float, list[str]]:
+    if profile is None:
+        _warn_legacy_matcher_path()
+        return _legacy_matcher._product_type_score(sku, query)
+    return _profile_product_type_score(sku, query, profile=profile)
+
+
+def run_legacy_meaning_aware_matcher(
     session: Session,
     *,
     project_id: int,
     category_id: int,
     nm_id: int,
-) -> SeoSkuMeaningAnnotation:
-    row = session.scalars(
-        select(SeoSkuMeaningAnnotation)
-        .where(
-            SeoSkuMeaningAnnotation.project_id == int(project_id),
-            SeoSkuMeaningAnnotation.category_id == int(category_id),
-            SeoSkuMeaningAnnotation.nm_id == int(nm_id),
-        )
-        .order_by(SeoSkuMeaningAnnotation.updated_at.desc())
-    ).first()
-    if row is None:
-        raise MissingSkuMeaningAnnotationError("Save SKU Meaning annotation before running matcher preview")
-    return row
+    limit: int = 120,
+    include_rejected: bool = True,
+    embedding_provider: EmbeddingProvider | None = None,
+) -> MeaningAwareMatcherResponse:
+    """Explicit legacy fallback path used while matcher_v2 is not yet profile-wired."""
+
+    _warn_legacy_matcher_path()
+    return _legacy_matcher.run_meaning_aware_matcher(
+        session,
+        project_id=project_id,
+        category_id=category_id,
+        nm_id=nm_id,
+        limit=limit,
+        include_rejected=include_rejected,
+        embedding_provider=embedding_provider,
+    )
 
 
 def run_meaning_aware_matcher(
@@ -559,7 +157,22 @@ def run_meaning_aware_matcher(
     limit: int = 120,
     include_rejected: bool = True,
     embedding_provider: EmbeddingProvider | None = None,
+    profile: CategoryProfile | None = None,
 ) -> MeaningAwareMatcherResponse:
+    """Run the meaning-aware matcher with profile-driven logic when a profile exists."""
+
+    active_profile = profile or _load_profile_or_none(session, project_id=project_id, category_id=category_id)
+    if active_profile is None:
+        return run_legacy_meaning_aware_matcher(
+            session,
+            project_id=project_id,
+            category_id=category_id,
+            nm_id=nm_id,
+            limit=limit,
+            include_rejected=include_rejected,
+            embedding_provider=embedding_provider,
+        )
+
     resolved_embedding_provider = embedding_provider or LocalPreviewEmbeddingProvider()
     sku_annotation = _get_sku_annotation(session, project_id=project_id, category_id=category_id, nm_id=nm_id)
     from app.services.seo.category_bootstrap import get_readiness_row
@@ -569,10 +182,10 @@ def run_meaning_aware_matcher(
     if readiness_status == "building":
         raise CategoryBootstrapBuildingError("Category bootstrap is still running. Refresh readiness status before matching.")
     query_rows = session.scalars(
-        select(SeoQueryMeaning).where(
-            SeoQueryMeaning.project_id == int(project_id),
-            SeoQueryMeaning.category_id == int(category_id),
-            SeoQueryMeaning.status == "ready",
+        _legacy_matcher.select(_legacy_matcher.SeoQueryMeaning).where(
+            _legacy_matcher.SeoQueryMeaning.project_id == int(project_id),
+            _legacy_matcher.SeoQueryMeaning.category_id == int(category_id),
+            _legacy_matcher.SeoQueryMeaning.status == "ready",
         )
     ).all()
     if not query_rows:
@@ -586,7 +199,7 @@ def run_meaning_aware_matcher(
         )
 
     sku_meaning = dict(sku_annotation.meaning_payload or {})
-    sku_features = _sku_features(sku_meaning)
+    sku_features = _sku_features(sku_meaning, profile=active_profile)
     sku_atoms_payload = get_atoms_payload(
         session,
         project_id=project_id,
@@ -629,7 +242,7 @@ def run_meaning_aware_matcher(
     embedding_model: str | None = str(sku_embedding.model)
     for row in query_rows:
         query_display = _query_display(row)
-        query_features = _query_features(row)
+        query_features = _query_features(row, profile=active_profile)
         query_embedding = ensure_meaning_embedding(
             session,
             project_id=project_id,
@@ -643,10 +256,10 @@ def run_meaning_aware_matcher(
         raw_similarity = cosine_similarity(sku_embedding.embedding or [], query_embedding.embedding or [])
         semantic_similarity = round(max(0.0, min(1.0, (raw_similarity + 1.0) / 2.0)), 4)
 
-        conflicts = _hard_conflicts(sku_features, query_features)
+        conflicts = _hard_conflicts(sku_features, query_features, profile=active_profile)
         reasons: list[str] = []
         matched: list[str] = []
-        product_score, product_reasons = _product_type_score(sku_features, query_features)
+        product_score, product_reasons = _product_type_score(sku_features, query_features, profile=active_profile)
         reasons.extend(product_reasons)
         expressive_score, expressive_overlap, expressive_reasons = _overlap_score(
             "expressive",
@@ -703,7 +316,7 @@ def run_meaning_aware_matcher(
         score = round(max(0.0, min(1.0, score)), 4)
         if conflicts:
             reasons.extend(conflicts)
-        elif not conflicts:
+        else:
             reasons.append("no hard constraints")
         if frequency:
             reasons.append("frequency boosts already relevant candidate")
@@ -802,7 +415,7 @@ def run_meaning_aware_matcher(
             scored_total=len(items),
             missing_library=False,
             embedding_model=embedding_model,
-            atoms_version=ATOMS_MATCHER_V1_VERSION,
+            atoms_version=_legacy_matcher.ATOMS_MATCHER_V1_VERSION,
             atoms_gate_enabled=atoms_gate_enabled,
             notes=[
                 "frequency never creates relevance by itself",
@@ -816,3 +429,32 @@ def run_meaning_aware_matcher(
             ],
         ),
     )
+
+
+__all__ = [
+    "CategoryBootstrapBuildingError",
+    "MeaningAwareMatcherError",
+    "MissingQueryMeaningLibraryError",
+    "MissingSkuMeaningAnnotationError",
+    "_AUDIENCE_GROUPS",
+    "_EXPRESSIVE_GROUPS",
+    "_FeatureSet",
+    "_MATERIAL_CONSTRAINTS",
+    "_USER_BUCKET_LABELS",
+    "_apply_atoms_gate",
+    "_bucket_for",
+    "_frequency_boost",
+    "_hard_conflicts",
+    "_judgment_overrides_by_query",
+    "_manual_bucket_override",
+    "_overlap_score",
+    "_product_type_score",
+    "_query_display",
+    "_query_features",
+    "_ranking_by_cluster",
+    "_select_bucket_with_coverage",
+    "_sku_features",
+    "_user_reasons",
+    "run_legacy_meaning_aware_matcher",
+    "run_meaning_aware_matcher",
+]
