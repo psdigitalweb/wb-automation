@@ -197,17 +197,8 @@ async function fetchWithAuth(
 
   let res: Response
   try {
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/66ddcc6b-d2d0-4156-a371-04fea067f11b',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'apiClient.ts:fetchWithAuth:before_fetch',message:'API request',data:{fullUrl,url},timestamp:Date.now(),runId:'api',hypothesisId:'H1'})}).catch(()=>{});
-    // #endregion
     res = await fetch(fullUrl, fetchOptions)
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/66ddcc6b-d2d0-4156-a371-04fea067f11b',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'apiClient.ts:fetchWithAuth:after_fetch',message:'API response',data:{status:res.status,ok:res.ok,fullUrl},timestamp:Date.now(),runId:'api',hypothesisId:'H4'})}).catch(()=>{});
-    // #endregion
   } catch (fetchError: any) {
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/66ddcc6b-d2d0-4156-a371-04fea067f11b',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'apiClient.ts:fetchWithAuth:fetch_error',message:'Fetch failed',data:{message:fetchError?.message,fullUrl},timestamp:Date.now(),runId:'api',hypothesisId:'H1'})}).catch(()=>{});
-    // #endregion
     throw buildNetworkError(fullUrl, fetchError)
   }
 

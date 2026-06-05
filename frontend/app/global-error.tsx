@@ -14,20 +14,7 @@ export default function GlobalError({
   reset: () => void
 }) {
   useEffect(() => {
-    // #region agent log
-    const payload = {
-      hypothesisId: 'H1',
-      location: 'global-error.tsx',
-      message: 'Root layout or render error',
-      data: {
-        errorMessage: error?.message,
-        digest: error?.digest,
-        stack: error?.stack?.slice(0, 1000),
-      },
-      timestamp: Date.now(),
-    }
-    console.error('[DEBUG]', JSON.stringify(payload))
-    // #endregion
+    console.error(error)
   }, [error])
 
   return (

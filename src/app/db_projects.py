@@ -174,26 +174,8 @@ def get_project_by_id(project_id: int) -> Optional[dict]:
 
 def get_user_projects(user_id: int) -> List[dict]:
     """Get all projects where user is a member."""
-    # #region agent log
-    logger.info(f"get_user_projects entry: user_id={user_id}")
-    try:
-        import json, time
-        with open("d:\\Work\\EcomCore\\.cursor\\debug.log", "a", encoding="utf-8") as _f:
-            _f.write(json.dumps({"sessionId":"debug-session","runId":"db-projects","hypothesisId":"H5","location":"db_projects.py:175","message":"get_user_projects entry","data":{"user_id":user_id},"timestamp":int(time.time()*1000)})+"\n")
-    except Exception as log_err:
-        logger.error(f"Failed to write debug log: {log_err}")
-    # #endregion
     try:
         with engine.connect() as conn:
-            # #region agent log
-            logger.info(f"get_user_projects: executing SQL query for user_id={user_id}")
-            try:
-                import json, time
-                with open("d:\\Work\\EcomCore\\.cursor\\debug.log", "a", encoding="utf-8") as _f:
-                    _f.write(json.dumps({"sessionId":"debug-session","runId":"db-projects","hypothesisId":"H5","location":"db_projects.py:178","message":"Executing SQL query","data":{"user_id":user_id},"timestamp":int(time.time()*1000)})+"\n")
-            except Exception as log_err:
-                logger.error(f"Failed to write debug log: {log_err}")
-            # #endregion
             result = conn.execute(
                 text("""
                     SELECT DISTINCT p.id, p.name, p.description, p.created_by, p.created_at, p.updated_at,
@@ -217,26 +199,9 @@ def get_user_projects(user_id: int) -> List[dict]:
                     "updated_at": row["updated_at"],
                     "role": row["role"],
                 })
-            # #region agent log
-            logger.info(f"get_user_projects: query completed, found {len(projects)} projects")
-            try:
-                import json, time
-                with open("d:\\Work\\EcomCore\\.cursor\\debug.log", "a", encoding="utf-8") as _f:
-                    _f.write(json.dumps({"sessionId":"debug-session","runId":"db-projects","hypothesisId":"H5","location":"db_projects.py:200","message":"get_user_projects exit","data":{"projects_count":len(projects)},"timestamp":int(time.time()*1000)})+"\n")
-            except Exception as log_err:
-                logger.error(f"Failed to write debug log: {log_err}")
-            # #endregion
             return projects
     except Exception as e:
-        # #region agent log
         logger.error(f"get_user_projects error for user_id={user_id}: {e}\n{traceback.format_exc()}")
-        try:
-            import json, time, traceback
-            with open("d:\\Work\\EcomCore\\.cursor\\debug.log", "a", encoding="utf-8") as _f:
-                _f.write(json.dumps({"sessionId":"debug-session","runId":"db-projects","hypothesisId":"H5","location":"db_projects.py:202","message":"get_user_projects error","data":{"error":str(e),"traceback":traceback.format_exc()},"timestamp":int(time.time()*1000)})+"\n")
-        except Exception as log_err:
-            logger.error(f"Failed to write debug log: {log_err}")
-        # #endregion
         raise
 
 
@@ -453,5 +418,4 @@ def delete_project(project_id: int) -> bool:
             {"project_id": project_id}
         )
         return result.rowcount > 0
-
 

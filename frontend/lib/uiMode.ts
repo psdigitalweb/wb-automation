@@ -18,6 +18,5 @@ export function resolveUiMode(search: string = window.location.search): UiMode {
   }
 
   const storedMode = localStorage.getItem(UI_MODE_KEY)
-  return isUiMode(storedMode) ? storedMode : 'v1'
+  return isUiMode(storedMode) ? storedMode : 'v2'
 }
-

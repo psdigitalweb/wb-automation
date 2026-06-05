@@ -102,14 +102,6 @@ async def get_user_projects_endpoint(
     current_user: dict = Depends(get_current_active_user)
 ):
     """Get all projects where current user is a member."""
-    # #region agent log
-    try:
-        import json as _json, time as _time
-        with open("d:\\Work\\EcomCore\\.cursor\\debug.log", "a", encoding="utf-8") as _f:
-            _f.write(_json.dumps({"location":"routers/projects.py:get_user_projects_endpoint:entry","message":"get_user_projects_endpoint entry","data":{"user_id":current_user.get("id")},"timestamp":int(_time.time()*1000),"runId":"projects-get","hypothesisId":"H1"})+"\n")
-    except Exception:
-        pass
-    # #endregion
     try:
         projects = _load_projects_for_user(current_user)
         result = [
@@ -124,28 +116,11 @@ async def get_user_projects_endpoint(
             )
             for p in projects
         ]
-        # #region agent log
-        logger.info(f"get_user_projects_endpoint: serialized {len(result)} projects, returning")
-        try:
-            import json, time
-            with open("d:\\Work\\EcomCore\\.cursor\\debug.log", "a", encoding="utf-8") as _f:
-                _f.write(json.dumps({"sessionId":"debug-session","runId":"projects-get","hypothesisId":"H4","location":"routers/projects.py:92","message":"get_user_projects_endpoint exit","data":{"result_count":len(result)},"timestamp":int(time.time()*1000)})+"\n")
-        except Exception as log_err:
-            logger.error(f"Failed to write debug log: {log_err}")
-        # #endregion
         return result
     except HTTPException:
         raise
     except Exception as e:
-        # #region agent log
         logger.error(f"get_user_projects_endpoint error: {e}\n{traceback.format_exc()}")
-        try:
-            import json, time, traceback
-            with open("d:\\Work\\EcomCore\\.cursor\\debug.log", "a", encoding="utf-8") as _f:
-                _f.write(json.dumps({"location":"routers/projects.py:94","message":"get_user_projects_endpoint error","data":{"error":str(e),"traceback":traceback.format_exc()},"timestamp":int(time.time()*1000),"runId":"projects-get","hypothesisId":"H4"})+"\n")
-        except Exception as log_err:
-            logger.error(f"Failed to write debug log: {log_err}")
-        # #endregion
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"get_user_projects failed: {e!s}",
@@ -380,4 +355,3 @@ async def get_project_data_availability_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to compute data availability",
         )
-
