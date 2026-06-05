@@ -63,3 +63,19 @@ class CategoryBootstrapStatusResponse(BaseModel):
     category_axes_status: str = "not_started"
     last_error: str | None = None
     updated_at: str | None = None
+
+
+class SeoCategoryListItem(BaseModel):
+    category_id: int
+    category_name: str
+    skus_count: int = 0
+    readiness_status: CategoryReadinessStatus = "not_started"
+    queries_count: int = 0
+    clusters_count: int = 0
+    query_meanings_count: int = 0
+    query_atoms_count: int = 0
+    embeddings_count: int = 0
+    category_axes_status: str = "not_started"
+    latest_run_id: int | None = None
+    has_query_corpus: bool = False
+    has_category_profile: bool = False

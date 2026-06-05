@@ -1,322 +1,185 @@
-# AGENTS.md — Rules for AI agents working on EcomCore SEO module
+# AGENTS.md — EcomCore repository instructions
 
-> Статус: **нормативный документ для любого AI-агента, работающего в этом репозитории**.
-> Версия: v1 (2026-04-24).
-> Парные контракты: `docs/seo-module/CONTEXT_PRIMER.md`, `docs/seo-module/ROADMAP.md`, `docs/seo-module/CATEGORY_PROFILE_SPEC.md`, `docs/seo-module/phase0/PHASE_0_EXECUTION_PLAN.md`, `docs/seo-module/phase0/TEST_PLAN.md`, `docs/seo-module/OPERATOR_WORKFLOW.md`.
-
----
-
-## 0. Первое действие любого агента
-
-Перед любым кодом агент **обязан** прочитать в этом порядке:
-
-1. `docs/seo-module/CONTEXT_PRIMER.md` — где мы сейчас и куда идём.
-2. `docs/seo-module/ROADMAP.md` — общая структура фаз.
-3. Документ активной фазы (для Phase 0: `docs/seo-module/phase0/PHASE_0_EXECUTION_PLAN.md`).
-4. `docs/seo-module/CATEGORY_PROFILE_SPEC.md` — если задача касается матчера, гардов или профиля.
-5. `docs/seo-module/OPERATOR_WORKFLOW.md` — если задача касается UI/UX.
-
-Если агент не прочитал эти документы — любое его изменение считается недостоверным.
+> Status: repository-wide rules for AI agents.
+> Version: v2 (2026-05-14).
+> Purpose: keep common engineering rules at the repo root and move module-specific contracts into their own scopes.
 
 ---
 
-## 1. Иерархия источников истины
+## 0. Scope routing
 
-При любом противоречии между источниками побеждает тот, что выше:
+Start every task by deciding which scope it belongs to. Read only the documents needed for that scope.
 
-1. Спецификации (`*SPEC*.md`, `*WORKFLOW*.md` в `docs/seo-module/`).
-2. Execution plan активной фазы.
-3. Код в `src/app/` (если противоречит спеке — **баг кода**, не спеки).
-4. Комментарии в коде.
-5. Интуиция агента.
+### Repository-wide
 
-Если агент видит, что спека ошибочна — он **останавливается и сообщает оператору**. Не чинит код «как правильно, по его мнению» в обход спеки.
+These rules apply to all work in `D:\Work\EcomCore`.
 
----
+Always preserve:
 
-## 2. Жёсткие запреты
+- existing authentication and authorization behavior unless the user explicitly asks to change it;
+- API contracts and database schemas unless the task is specifically about them;
+- user changes already present in the working tree;
+- secrets and local environment files.
 
-### 2.1. Контент
+### SEO module
 
-- ❌ Добавлять категорийные литералы (слова типа `"термокруж"`, `"круж"`, `"рюкзак"`, `"сумка"`, `"тарел"`, `"пивн"`, `"кофемаш"`) в **любой** `.py`-файл под `src/app/services/seo/`, кроме:
-  - файлов в `src/app/services/seo/_legacy/` (они deprecated);
-  - тестовых файлов в `tests/seo/`.
-- ❌ Захардкоживать значения `scoring.weights`, `bucket_cutoffs` в коде — читать из `CategoryProfile`.
-- ❌ Использовать категорийные агрегаты `orders` / `conversion` в scoring или label-generation (homogenization trap, см. `CONTEXT_PRIMER.md §5` и `ROADMAP.md §10.4`).
+SEO-specific workflow is not repository-wide. It applies only when the task touches one of these areas:
 
-### 2.2. Инфраструктура
+- `docs/seo-module/`;
+- `src/app/services/seo/`;
+- `tests/seo/`;
+- backend SEO routers/schemas/models;
+- frontend SEO pages or SEO-specific components.
 
-- ❌ Менять git config.
-- ❌ Force push в `main` / `master`.
-- ❌ Коммитить изменения без явного запроса пользователя.
-- ❌ Пропускать pre-commit hooks (`--no-verify`).
-- ❌ Делать `git rebase -i` / `git add -i` (интерактив не поддерживается).
-- ❌ Мутировать `SeoCategoryProfile` напрямую SQL'ом в рантайме (только через API/CLI из Step 7).
-- ❌ Активировать профиль с `self_check.status != "passed"`.
-- ❌ Удалять строки из `seo_category_profiles` (исторические версии хранятся).
+For SEO work, read `docs/seo-module/AGENTS.md` first, then follow the active SEO phase documents listed there.
 
-### 2.3. Инструменты
+If a task does not touch SEO, do not load SEO Phase 0/Phase 1 instructions and do not block the task on SEO execution plans.
 
-- ❌ Использовать `cat`, `head`, `tail` для чтения файлов — использовать `Read`.
-- ❌ Использовать `sed`, `awk`, `echo >`, heredoc `<<` для правки файлов — использовать `StrReplace` или `Write`.
-- ❌ Использовать `grep` напрямую — использовать `Grep` (rg под капотом).
-- ❌ Читать весь большой файл целиком, если можно искать через `Grep`.
-- ❌ Запускать `find` — использовать `Glob`.
+### Frontend redesign / UI v2
+
+Frontend redesign work applies when the task touches application shell, navigation, layout, visual system, dashboards, or non-SEO frontend screens.
+
+For frontend redesign work, read:
+
+1. `docs/design-system/README.md` if it exists.
+2. The current external design reference folder, if repo docs have not been migrated yet: `D:\Work\Ecomcore design`.
+3. Relevant frontend files under `frontend/app`, `frontend/components`, `frontend/lib`, and `frontend/styles` if present.
+
+Do not migrate SEO pages/components as part of general UI v2 work unless the user explicitly says this is an SEO UI task.
 
 ---
 
-## 3. Обязательные действия
+## 1. Source of truth hierarchy
 
-### 3.1. Перед кодом
+When sources conflict, use this order:
 
-- ✅ Прочитать документы из §0.
-- ✅ Составить TODO-план (через `TodoWrite`), если задача ≥3 шагов.
-- ✅ Сверить задачу с активным Step из `PHASE_0_EXECUTION_PLAN.md` — не забегать вперёд.
+1. User's latest explicit instruction in the current chat.
+2. Scope-specific specs or workflow documents.
+3. Repository-wide `AGENTS.md`.
+4. Existing code behavior.
+5. Code comments.
+6. Agent intuition.
 
-### 3.2. Во время кода
-
-- ✅ Использовать специализированные инструменты (см. §2.3).
-- ✅ После каждого substantive-edit — `ReadLints` по затронутым файлам.
-- ✅ Для каждого нового файла — добавить unit-тест в том же PR.
-- ✅ Следовать commit message format: `[phase<N>-step<M>] <короткая суть>`.
-- ✅ Один Step — один PR. Не объединять Steps.
-
-### 3.3. После кода
-
-- ✅ Запустить tests-to-pass из активного Step (`pytest -x tests/seo/phase<N>/`).
-- ✅ Обновить `CONTEXT_PRIMER.md`, если состояние системы изменилось.
-- ✅ Обновить `RETRO.md` активной фазы с наблюдениями, если шаг нестандартный.
+If a spec appears wrong or conflicts with product behavior in a way that would require a product decision, stop and ask the operator before implementing.
 
 ---
 
-## 4. Как агент коммуницирует с оператором
+## 2. Git hygiene
 
-### 4.1. Когда остановиться и спросить
+- Do not change git config.
+- Do not commit without an explicit user request.
+- Do not force push to `main` or `master`.
+- Do not skip pre-commit hooks with `--no-verify`.
+- Do not use interactive git flows such as `git rebase -i` or `git add -i`.
+- Prefer small, scoped changes.
+- One logical task should map to one branch/PR unless the user asks otherwise.
+- Default branch prefix for new agent branches: `codex/`.
 
-- Спецификация противоречит коду (см. §1).
-- Тест падает по причине, не описанной в `On failure` шага.
-- Требуется изменение схемы `SeoCategoryProfile` или `schema_version`.
-- Требуется включение LLM с нестандартным промптом.
-- Требуется изменение или удаление существующих API-эндпоинтов.
-
-### 4.2. Когда продолжить автономно
-
-- Тест падает по причине, описанной в `On failure` — следовать инструкции.
-- Нужно расширить существующую эвристику derive — расширять без изменения схемы.
-- Нужно обновить тест для нового поведения — обновить, если поведение явно корректно.
-- Нужно починить linter error в свежих изменениях — починить молча.
-
-### 4.3. Формат отчётов
-
-Каждое завершённое действие агент сводит в:
-```
-Статус: <closed | blocked | needs-review>
-Изменённые файлы: <list>
-Тесты: <pass | fail | skipped> (если fail — почему)
-Следующий шаг: <Step N / вопрос оператору>
-```
+If the working tree contains unrelated changes, assume they belong to the user or another agent. Do not revert them. Work around them, and mention any relevant overlap in the final report.
 
 ---
 
-## 5. Контракты безопасности
+## 3. Secrets and data safety
 
-### 5.1. Данные
-
-- ❌ Не логировать PII (имена пользователей, контактные данные из отзывов WB).
-- ❌ Не отправлять отзывы WB в сторонние LLM-сервисы без явного указания оператора.
-- ✅ LLM-промпты для derive/expressive идут через `services/seo/llm/client.py` — единая точка контроля.
-
-### 5.2. Секреты
-
-- ❌ Не коммитить `.env`, `credentials.json`, API-ключи.
-- ❌ Не активировать авто-сохранение секретов в git.
-- ✅ Если видишь секрет в коде — удалить, заменить на `os.environ["X"]`, добавить в `.gitignore`.
-
-### 5.3. Внешние вызовы
-
-- ✅ LLM-вызовы из derive_category_profile должны:
-  - Логироваться в `SeoLlmCallLog` (если таблица есть) или в файл.
-  - Иметь таймаут (не висеть > 60 сек).
-  - Ограничиваться prompt-budget'ом (< 50k tokens на прогон).
-- ❌ Никаких WB API-вызовов из Phase 0 кода — только чтение из кэшей/таблиц.
+- Do not commit `.env`, credentials, API keys, dumps, or generated files containing sensitive data.
+- Do not print secrets or personally identifiable information into logs, comments, docs, or chat.
+- If a task requires external services, prefer existing client modules and configuration patterns.
+- Do not send production data to third-party LLMs unless the user explicitly approves it.
 
 ---
 
-## 6. Тестовая дисциплина
+## 4. Engineering workflow
 
-### 6.1. Перед коммитом
+Before code changes:
 
-- ✅ `pytest -x tests/seo/` — зелёный.
-- ✅ `pytest -x tests/seo/phase<N>/` — зелёный (тесты активной фазы).
-- ✅ `cd frontend && npx tsc --noEmit` — зелёный (если трогал фронт).
-- ✅ `rg "del category_profile" src/` — 0 результатов (начиная с Phase 0 Step 9).
+- Inspect the relevant files and local patterns.
+- For tasks with three or more steps, keep a short task plan.
+- Confirm the task belongs to the right scope from §0.
 
-### 6.2. Snapshot-тесты
+During changes:
 
-- ✅ Если меняешь `guards.py`, `rules/*.py` в Phase 0 Steps 5–6 — snapshot-тесты должны остаться bit-for-bit зелёными для 812.
-- ❌ Не «обновлять» baseline ради зелёного теста. Если baseline нужно обновить — это отдельное согласование с оператором.
+- Prefer the repo's existing architecture and naming.
+- Keep edits limited to the requested behavior.
+- Avoid opportunistic refactors.
+- Add or update tests when behavior changes or a new file introduces meaningful logic.
+- Use typed, explicit code in Python and TypeScript.
 
-### 6.3. Eval regression
+After changes:
 
-- ✅ После Step 8/10 — прогнать `compare_eval_to_baseline.py`, убедиться, что accuracy не просела > 3 п. п.
-
----
-
-## 7. Когда агент не уверен
-
-Алгоритм:
-
-1. Перечитать релевантные секции документов (§0).
-2. `Grep` по коду для поиска аналогичных паттернов.
-3. `SemanticSearch` по репо с конкретным вопросом.
-4. Если всё ещё не ясно → **спросить оператора** через явный вопрос, а не через код «на всякий случай».
-
-**Не галлюцинируй** API-эндпоинты, имена таблиц, поля моделей. Если не помнишь — прочитай (`Read`, `Grep`).
+- Run the narrowest useful checks first.
+- For frontend-only changes, run at least `cd frontend && npx tsc --noEmit` when dependencies are available.
+- For backend Python changes, run the relevant `pytest` target.
+- For SEO changes, follow `docs/seo-module/AGENTS.md`.
 
 ---
 
-## 8. Запрещённые оптимизации
+## 5. Frontend rules
 
-Некоторые «очевидные» идеи в этом проекте запрещены по product-дизайну:
+- Keep auth, redirects, project selection, and API client behavior intact unless the user asks for a product change.
+- Prefer local, composable React components over broad rewrites.
+- Keep page content and shell/navigation migrations separate unless the task explicitly combines them.
+- Namespace new UI v2 CSS to avoid collisions with legacy global classes.
+- Do not introduce a new design language if a design-system reference exists.
+- Do not add a new global state library unless there is a clear need and user approval.
+- For `page.tsx` work, prefer local `_components/` folders for page-specific components.
+- Keep TypeScript strict; avoid `any` unless there is an explicit comment explaining the exception.
 
-| Идея | Почему нельзя | Исключение |
-|---|---|---|
-| Отсортировать бакет `primary` по `orders desc` | Homogenization trap, см. `ROADMAP §10.4` | После Phase 5 и явного решения оператора |
-| Использовать самый частотный запрос категории как «главный» для всех SKU | То же | — |
-| Убрать `Research Preview Banner` «чтобы UI был чище» | Контракт с оператором: preview всегда помечен | — |
-| Соединить `candidate query set` и `approved` в один статус | Iter2 контракт: approval — явный акт | — |
-| Заменить `CategoryProfile` на «полный LLM» (всё решает LLM в рантайме) | Non-determinism, cost, отсутствие ревью | — |
-| Залить meaning-атомы для SKU «чтобы не пустовали» | Атомы без данных = ложный сигнал матчеру | — |
+Frontend redesign source files should generally live under:
+
+- `frontend/components/ui-v2/` for reusable UI v2 shell and primitives;
+- `frontend/lib/` for frontend utilities such as feature flags;
+- `docs/design-system/` for design references, migration plans, and navigation specs.
 
 ---
 
-## 9. Git hygiene
+## 6. Backend rules
 
-### 9.1. Ветки
+- Preserve existing API response shapes unless the task is explicitly an API contract change.
+- Do not mutate production-like data through ad hoc SQL in runtime code.
+- Use migrations for schema changes.
+- Keep external API calls behind service/client modules.
+- Prefer explicit exceptions and typed data structures.
 
-- Рабочая ветка: `phase<N>-<short-suffix>` (например, `phase0-backend-unification`).
-- Один Step — один (или несколько последовательных) коммит, все с префиксом `[phase<N>-step<M>]`.
+---
 
-### 9.2. Коммит-сообщения
+## 7. Design-system files
 
-Формат:
-```
-[phase<N>-step<M>] <verbal summary>
+The design system should be versioned with the repo under `docs/design-system/`.
 
-- Что сделано (bullet).
-- Почему сделано именно так.
-- Какие тесты покрывают.
-- (Если applicable) rollback-инструкция.
+Until the migration is complete, the external folder `D:\Work\Ecomcore design` is an accepted reference source for UI redesign work. If a task depends on a design reference that only exists there, either:
+
+- copy the relevant spec/screenshot into `docs/design-system/` as part of a dedicated docs migration task; or
+- mention the external file path in the final report.
+
+Do not scatter design references across unrelated folders.
+
+---
+
+## 8. Communication format
+
+For implementation tasks, final reports should include:
+
+```text
+Status: closed | blocked | needs-review
+Changed files:
+- <path>
+Tests: pass | fail | skipped
+Next step: <what should happen next>
 ```
 
-См. примеры в `PHASE_0_EXECUTION_PLAN.md`, в конце каждого Step'а.
-
-### 9.3. PR-description
-
-Шаблон:
-```
-## What
-Реализует Step <M> из docs/seo-module/phase<N>/PHASE_<N>_EXECUTION_PLAN.md.
-
-## Why
-<Ссылка на секцию плана>
-
-## Tests
-- pytest -x tests/seo/phase<N>/...
-- snapshot-test: <path>
-- manual smoke: <описание, если есть>
-
-## Checklist
-- [ ] DoD из плана выполнен
-- [ ] tests-to-pass зелёные
-- [ ] Обновлены релевантные докs
-```
-
-### 9.4. Amend / rebase
-
-- `git commit --amend` — **только** в случаях:
-  1. Пользователь явно запросил amend.
-  2. pre-commit hook изменил файлы после успешного коммита.
-  - Коммит ещё не запушен.
-  - Коммит создан в этой сессии (проверить `git log -1 --format='%an %ae'`).
-- Если коммит **failed** или отклонён hook'ом → создать новый коммит, не amend.
+If blocked, include the reason, evidence, and the decision needed from the operator.
 
 ---
 
-## 10. Стиль кода
+## 9. Escalation
 
-### 10.1. Python
+Stop and ask the operator when:
 
-- Type hints везде, где возможно (`Mapping`, `Sequence`, `|`-syntax для Python 3.10+).
-- Docstring у публичных функций с указанием, что они делают и откуда читают контекст.
-- Dataclasses — `@dataclass(frozen=True)` для immutable-вещей (profile views, config views).
-- Обработка ошибок: явные типы исключений (`ProfileMissingError`, `CategoryProfileError`), не `Exception`.
+- a spec conflicts with code and the correct behavior is not obvious;
+- the task requires deleting or changing existing public API endpoints;
+- the task requires a database schema change not mentioned in the request;
+- repeated attempts fail with the same class of error;
+- the implementation would require exposing secrets, PII, or production data;
+- the requested change crosses from one scope into another unexpectedly, especially frontend redesign into SEO or vice versa.
 
-### 10.2. TypeScript / React
-
-- TypeScript strict, `any` запрещён без явной метки `// eslint-disable-next-line`.
-- Каждый `page.tsx` → подпапка `_components/` для локальных компонентов.
-- Состояние формы — локальное (`useState`) или server state (`useQuery`). Не добавлять redux без необходимости.
-- Все бэйджи — через существующие компоненты (`QualityBadge`, `ApprovalStateBadge`, `CategoryTierBadge`). Новые — только с согласования.
-
-### 10.3. Комментарии
-
-- Комментарий отвечает на вопрос «почему», не «что».
-- ❌ `# increment counter` над `counter += 1`.
-- ✅ `# retention cleanup assumes matcher-runs older than 30d are safe to delete; see ROADMAP.md §...`
-
----
-
-## 11. Working directory и окружение
-
-- Рабочая директория по умолчанию: `D:\Work\EcomCore` (Windows / PowerShell).
-- Docker: `infra/docker/docker-compose.yml` — стек (`postgres`, `api`, `frontend`).
-- База данных: Postgres в docker-контейнере `ecomcore-postgres-1`.
-- Миграции: Alembic, `alembic upgrade head` из `src/`.
-- Установка deps: `pip install -r requirements.txt` (backend), `npm install` (frontend).
-
-Если агент работает на другой ОС — поправить пути, но не менять структуру репо.
-
----
-
-## 12. Эскалация
-
-Если агент:
-
-- получил несколько раз подряд ошибку одной природы (≥3 попыток),
-- обнаружил поведение системы, не описанное ни в одном документе,
-- пришёл к выводу, что спека должна быть изменена,
-
-→ **останавливается** и пишет оператору:
-```
-ESCALATION
-Phase: <N>
-Step: <M>
-Issue: <что обнаружено>
-Evidence: <файлы:строки, логи, скрины>
-Options I see:
-  A) <вариант с рисками>
-  B) <вариант с рисками>
-Recommendation: <своё мнение + почему>
-Waiting for your decision.
-```
-
-Агент не начинает реализовывать A или B до ответа оператора.
-
----
-
-## 13. Что агент **никогда** не делает
-
-- ❌ Не импровизирует в обход PHASE_<N>_EXECUTION_PLAN.
-- ❌ Не «улучшает» архитектуру «пока тут переписываем».
-- ❌ Не оставляет файлы с состоянием «частично реализовано» без явного TODO + ссылки на Step.
-- ❌ Не включает профиль в production без прохождения self-check + eval-гейта.
-- ❌ Не логирует секреты / PII / полные отзывы WB в consolequipe-логи.
-- ❌ Не удаляет тесты «потому что они флейкают».
-- ❌ Не обсуждает продуктовую стратегию в коде — это для `ROADMAP.md` и чата с оператором.
-
----
-
-## 14. Changelog
-
-- **2026-04-24 v1** — initial. Правила работы AI-агентов зафиксированы перед стартом Phase 0.
+Do not implement speculative product decisions just to keep moving.

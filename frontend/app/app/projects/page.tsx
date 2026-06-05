@@ -4,6 +4,9 @@ import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { apiGetData, apiPostData } from '../../../lib/apiClient'
+import { resolveUiMode, type UiMode } from '../../../lib/uiMode'
+import { Button } from '../../../components/ui-v2/primitives/Button'
+import styles from './projects.module.css'
 
 interface Project {
   id: number
@@ -17,6 +20,7 @@ interface Project {
 
 export default function ProjectsPage() {
   const router = useRouter()
+  const [uiMode, setUiMode] = useState<UiMode>('v1')
   const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
   const [isCreateFormOpen, setIsCreateFormOpen] = useState(false)
@@ -27,8 +31,11 @@ export default function ProjectsPage() {
     owner: 'владелец',
   }
 
+  const formatDate = (value: string) => new Date(value).toLocaleDateString('ru-RU')
+
   useEffect(() => {
     loadProjects()
+    setUiMode(resolveUiMode())
   }, [])
 
   // Auto-focus on project name input when form opens
@@ -95,243 +102,292 @@ export default function ProjectsPage() {
     router.push(`/app/project/${projectId}/settings`)
   }
 
+  if (uiMode !== 'v2') {
+    return (
+      <div className="container">
+        {isCreateFormOpen && (
+          <div className="card" style={{ marginTop: '0', marginBottom: '32px', padding: '24px' }}>
+            <h3 style={{ marginBottom: '20px', fontSize: '1.5rem', fontWeight: '600', color: '#333' }}>Создать новый проект</h3>
+            <div className="form-group" style={{ marginBottom: '16px' }}>
+              <label style={{ display: 'block', marginBottom: '8px', fontWeight: '500' }}>Название проекта *</label>
+              <input
+                ref={projectNameInputRef}
+                type="text"
+                value={newProjectName}
+                onChange={(e) => setNewProjectName(e.target.value)}
+                placeholder="Введите название проекта"
+                style={{ width: '100%', padding: '10px 12px', border: '1px solid #ddd', borderRadius: '5px', fontSize: '14px' }}
+              />
+            </div>
+            <div className="form-group" style={{ marginBottom: '20px' }}>
+              <label style={{ display: 'block', marginBottom: '8px', fontWeight: '500' }}>Описание</label>
+              <textarea
+                value={newProjectDesc}
+                onChange={(e) => setNewProjectDesc(e.target.value)}
+                placeholder="Введите описание проекта (необязательно)"
+                rows={3}
+                style={{ width: '100%', padding: '10px 12px', border: '1px solid #ddd', borderRadius: '5px', fontSize: '14px', fontFamily: 'inherit', resize: 'vertical' }}
+              />
+            </div>
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+              <button className="btn-secondary" onClick={handleCancelCreate}>Отмена</button>
+              <button className="btn-primary" onClick={handleCreateProject} disabled={!newProjectName.trim()}>Создать</button>
+            </div>
+          </div>
+        )}
+
+        <details
+          style={{
+            marginBottom: '28px',
+            borderRadius: '16px',
+            border: '1px solid #e5e7eb',
+            background: '#ffffff',
+            boxShadow: '0 8px 24px rgba(15, 23, 42, 0.04)',
+            overflow: 'hidden',
+          }}
+        >
+          <summary
+            style={{
+              listStyle: 'none',
+              cursor: 'pointer',
+              padding: '16px 20px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '16px',
+              userSelect: 'none',
+            }}
+          >
+            <span style={{ fontSize: '12px', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#6b7280' }}>
+              Инструменты платформы
+            </span>
+            <span style={{ fontSize: '13px', fontWeight: 600, color: '#2563eb', whiteSpace: 'nowrap' }}>
+              Показать
+            </span>
+          </summary>
+          <div style={{ padding: '0 20px 20px' }}>
+            <Link href="/app/hypotheses" title="Лаборатория гипотез" style={{ display: 'block', textDecoration: 'none', color: 'inherit' }}>
+              <div
+                className="card"
+                style={{
+                  marginBottom: 0,
+                  padding: '18px 20px',
+                  border: '1px solid #e5e7eb',
+                  borderRadius: '16px',
+                  boxShadow: '0 10px 30px rgba(15, 23, 42, 0.06)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '16px',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '16px', minWidth: 0 }}>
+                  <div style={{ width: '4px', alignSelf: 'stretch', minHeight: '44px', borderRadius: '999px', background: 'linear-gradient(180deg, #2563eb 0%, #0ea5e9 100%)', flexShrink: 0 }} />
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: '20px', fontWeight: 600, color: '#111827' }}>Лаборатория гипотез</div>
+                    <div style={{ display: 'inline-flex', alignItems: 'center', marginTop: '8px', padding: '5px 10px', borderRadius: '999px', backgroundColor: '#eff6ff', color: '#1d4ed8', fontSize: '12px', fontWeight: 600 }}>
+                      Общий модуль
+                    </div>
+                  </div>
+                </div>
+                <div style={{ flexShrink: 0, fontSize: '14px', fontWeight: 600, color: '#2563eb', whiteSpace: 'nowrap' }}>Открыть →</div>
+              </div>
+            </Link>
+          </div>
+        </details>
+
+        <h1 style={{ marginBottom: '20px' }}>Мои проекты</h1>
+
+        <div className="card">
+          {!isCreateFormOpen && (
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '20px' }}>
+              <button onClick={() => setIsCreateFormOpen(true)}>+ Новый проект</button>
+            </div>
+          )}
+
+          {loading ? (
+            <p>Загрузка...</p>
+          ) : projects.length === 0 ? (
+            <p>Проектов пока нет. Создайте первый проект!</p>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '20px' }}>
+              {projects.map((project) => (
+                <div key={project.id} className="card" style={{ cursor: 'pointer', padding: '20px' }} onClick={() => handleProjectClick(project.id)}>
+                  <h3>{project.name}</h3>
+                  {project.description && <p style={{ color: '#666', marginTop: '10px' }}>{project.description}</p>}
+                  <div style={{ marginTop: '15px', fontSize: '0.9rem', color: '#999' }}>
+                    <div>Роль: <strong>{roleLabels[project.role] ?? project.role}</strong></div>
+                    <div>Создан: {formatDate(project.created_at)}</div>
+                  </div>
+                  <div style={{ marginTop: '16px', display: 'flex', gap: '10px' }}>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        handleProjectClick(project.id)
+                      }}
+                    >
+                      Открыть
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        handleProjectSettings(project.id)
+                      }}
+                    >
+                      Настройки
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    )
+  }
+
   return (
-    <div className="container">
-      {/* Create Project Form - shown only when isCreateFormOpen is true */}
+    <div className={styles.projectsPage}>
+      <div className={styles.pageHead}>
+        <h1>Проекты</h1>
+        {!isCreateFormOpen ? (
+          <Button className={styles.secondaryButton} variant="secondary" onClick={() => setIsCreateFormOpen(true)}>
+            + Новый проект
+          </Button>
+        ) : null}
+      </div>
+
       {isCreateFormOpen && (
-        <div className="card" style={{ marginTop: '0', marginBottom: '32px', padding: '24px' }}>
-          <h3 style={{ marginBottom: '20px', fontSize: '1.5rem', fontWeight: '600', color: '#333' }}>Создать новый проект</h3>
-          <div className="form-group" style={{ marginBottom: '16px' }}>
-            <label style={{ display: 'block', marginBottom: '8px', fontWeight: '500' }}>Название проекта *</label>
-            <input
-              ref={projectNameInputRef}
-              type="text"
-              value={newProjectName}
-              onChange={(e) => setNewProjectName(e.target.value)}
-              placeholder="Введите название проекта"
-              style={{
-                width: '100%',
-                padding: '10px 12px',
-                border: '1px solid #ddd',
-                borderRadius: '5px',
-                fontSize: '14px'
-              }}
-            />
+        <section className={styles.createCard} aria-label="Создать проект">
+          <div className={styles.cardHeader}>
+            <div>
+              <h2>Создать проект</h2>
+              <p>Новый проект откроется на дашборде сразу после создания.</p>
+            </div>
           </div>
-          <div className="form-group" style={{ marginBottom: '20px' }}>
-            <label style={{ display: 'block', marginBottom: '8px', fontWeight: '500' }}>Описание</label>
-            <textarea
-              value={newProjectDesc}
-              onChange={(e) => setNewProjectDesc(e.target.value)}
-              placeholder="Введите описание проекта (необязательно)"
-              rows={3}
-              style={{
-                width: '100%',
-                padding: '10px 12px',
-                border: '1px solid #ddd',
-                borderRadius: '5px',
-                fontSize: '14px',
-                fontFamily: 'inherit',
-                resize: 'vertical'
-              }}
-            />
+          <div className={styles.formGrid}>
+            <label className={styles.field}>
+              <span>Название проекта *</span>
+              <input
+                ref={projectNameInputRef}
+                type="text"
+                value={newProjectName}
+                onChange={(e) => setNewProjectName(e.target.value)}
+                placeholder="Например, Zakka"
+              />
+            </label>
+            <label className={styles.field}>
+              <span>Описание</span>
+              <textarea
+                value={newProjectDesc}
+                onChange={(e) => setNewProjectDesc(e.target.value)}
+                placeholder="Короткая заметка для команды"
+                rows={3}
+              />
+            </label>
           </div>
-          <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
-            <button
-              className="btn-secondary"
-              onClick={handleCancelCreate}
-            >
+          <div className={styles.formActions}>
+            <Button className={styles.secondaryButton} variant="secondary" onClick={handleCancelCreate}>
               Отмена
-            </button>
-            <button
-              className="btn-primary"
+            </Button>
+            <Button
+              className={styles.primaryButton}
+              variant="primary"
               onClick={handleCreateProject}
               disabled={!newProjectName.trim()}
             >
               Создать
-            </button>
+            </Button>
           </div>
-        </div>
+        </section>
       )}
 
-      <details
-        style={{
-          marginBottom: '28px',
-          borderRadius: '16px',
-          border: '1px solid #e5e7eb',
-          background: '#ffffff',
-          boxShadow: '0 8px 24px rgba(15, 23, 42, 0.04)',
-          overflow: 'hidden',
-        }}
-      >
-        <summary
-          style={{
-            listStyle: 'none',
-            cursor: 'pointer',
-            padding: '16px 20px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: '16px',
-            userSelect: 'none',
-          }}
-        >
-          <span
-            style={{
-              fontSize: '12px',
-              fontWeight: 700,
-              letterSpacing: '0.08em',
-              textTransform: 'uppercase',
-              color: '#6b7280',
-            }}
-          >
-            Инструменты платформы
-          </span>
-          <span
-            style={{
-              fontSize: '13px',
-              fontWeight: 600,
-              color: '#2563eb',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            Показать
-          </span>
-        </summary>
-        <div style={{ padding: '0 20px 20px' }}>
-          <Link
-            href="/app/hypotheses"
-            title="Лаборатория гипотез"
-            style={{
-              display: 'block',
-              textDecoration: 'none',
-              color: 'inherit',
-            }}
-          >
-            <div
-              className="card"
-              style={{
-                marginBottom: 0,
-                padding: '18px 20px',
-                border: '1px solid #e5e7eb',
-                borderRadius: '16px',
-                boxShadow: '0 10px 30px rgba(15, 23, 42, 0.06)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: '16px',
-                transition: 'border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease',
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.borderColor = '#bfdbfe'
-                e.currentTarget.style.boxShadow = '0 14px 34px rgba(37, 99, 235, 0.12)'
-                e.currentTarget.style.transform = 'translateY(-1px)'
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.borderColor = '#e5e7eb'
-                e.currentTarget.style.boxShadow = '0 10px 30px rgba(15, 23, 42, 0.06)'
-                e.currentTarget.style.transform = 'translateY(0)'
+      {loading ? (
+        <section className={styles.skeletonList} aria-label="Загрузка проектов">
+          <div />
+          <div />
+          <div />
+        </section>
+      ) : projects.length === 0 ? (
+        <section className={styles.emptyState} aria-label="Проектов пока нет">
+          <h2>Проектов пока нет</h2>
+          <p>Создайте первый проект, чтобы подключить маркетплейсы и загрузки.</p>
+          <Button className={styles.primaryButton} variant="primary" onClick={() => setIsCreateFormOpen(true)}>
+            + Новый проект
+          </Button>
+        </section>
+      ) : (
+        <section className={styles.projects} aria-label="Список проектов">
+          {projects.map((project) => (
+            <article
+              key={project.id}
+              className={styles.projectCard}
+              onClick={() => handleProjectClick(project.id)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault()
+                  handleProjectClick(project.id)
+                }
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '16px', minWidth: 0 }}>
-                <div
-                  style={{
-                    width: '4px',
-                    alignSelf: 'stretch',
-                    minHeight: '44px',
-                    borderRadius: '999px',
-                    background: 'linear-gradient(180deg, #2563eb 0%, #0ea5e9 100%)',
-                    flexShrink: 0,
-                  }}
-                />
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: '20px', fontWeight: 600, color: '#111827' }}>
-                    Лаборатория гипотез
-                  </div>
-                  <div
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      marginTop: '8px',
-                      padding: '5px 10px',
-                      borderRadius: '999px',
-                      backgroundColor: '#eff6ff',
-                      color: '#1d4ed8',
-                      fontSize: '12px',
-                      fontWeight: 600,
-                    }}
-                  >
-                    Общий модуль
-                  </div>
+              <div className={styles.projectTop}>
+                <div>
+                  <h2>{project.name}</h2>
+                  {project.description ? <p>{project.description}</p> : null}
                 </div>
+                <span className={styles.roleChip}>{roleLabels[project.role] ?? project.role}</span>
               </div>
-              <div
-                style={{
-                  flexShrink: 0,
-                  fontSize: '14px',
-                  fontWeight: 600,
-                  color: '#2563eb',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                Открыть →
-              </div>
-            </div>
-          </Link>
-        </div>
-      </details>
 
-      <h1 style={{ marginBottom: '20px' }}>Мои проекты</h1>
-
-      <div className="card">
-        {!isCreateFormOpen && (
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '20px' }}>
-            <button onClick={() => setIsCreateFormOpen(true)}>+ Новый проект</button>
-          </div>
-        )}
-
-        {loading ? (
-          <p>Загрузка...</p>
-        ) : projects.length === 0 ? (
-          <p>Проектов пока нет. Создайте первый проект!</p>
-        ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '20px' }}>
-            {projects.map((project) => (
-              <div
-                key={project.id}
-                className="card"
-                style={{ cursor: 'pointer', padding: '20px' }}
-                onClick={() => handleProjectClick(project.id)}
-              >
-                <h3>{project.name}</h3>
-                {project.description && <p style={{ color: '#666', marginTop: '10px' }}>{project.description}</p>}
-                <div style={{ marginTop: '15px', fontSize: '0.9rem', color: '#999' }}>
-                  <div>Роль: <strong>{roleLabels[project.role] ?? project.role}</strong></div>
-                  <div>Создан: {new Date(project.created_at).toLocaleDateString()}</div>
+              <dl className={styles.projectMeta}>
+                <div>
+                  <dt>ID</dt>
+                  <dd>{project.id}</dd>
                 </div>
-                <div style={{ marginTop: '16px', display: 'flex', gap: '10px' }}>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation()
+                <div>
+                  <dt>Создан</dt>
+                  <dd>{formatDate(project.created_at)}</dd>
+                </div>
+                <div>
+                  <dt>Обновлен</dt>
+                  <dd>{formatDate(project.updated_at)}</dd>
+                </div>
+              </dl>
+
+              <div className={styles.projectFooter}>
+                <div className={styles.updated}>
+                  Обновлено: <span>{formatDate(project.updated_at)}</span>
+                </div>
+                <div className={styles.projectActions}>
+                  <Button
+                    className={styles.primaryButton}
+                    variant="primary"
+                    size="sm"
+                    onClick={(event) => {
+                      event.stopPropagation()
                       handleProjectClick(project.id)
                     }}
                   >
                     Открыть
-                  </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation()
+                  </Button>
+                  <Button
+                    className={styles.secondaryButton}
+                    variant="secondary"
+                    size="sm"
+                    onClick={(event) => {
+                      event.stopPropagation()
                       handleProjectSettings(project.id)
                     }}
                   >
                     Настройки
-                  </button>
+                  </Button>
                 </div>
               </div>
-            ))}
-          </div>
-        )}
-      </div>
+            </article>
+          ))}
+        </section>
+      )}
     </div>
   )
 }

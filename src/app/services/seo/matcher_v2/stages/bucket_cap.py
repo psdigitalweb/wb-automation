@@ -107,6 +107,7 @@ def decide_bucket(
         ranking_value=ranking_value,
         sku_atoms=sku_atoms,
         query_atoms_payload=query_atoms_payload,
+        category_profile=category_profile,
     )
 
     return BucketDecision(

@@ -48,7 +48,7 @@ export function HowToUsePanel({ projectId }: { projectId: string }) {
         <div style={{ padding: '14px 18px 18px', display: 'grid', gap: 14, fontSize: 14, lineHeight: 1.55, color: '#334155' }}>
           <HelpRow
             title="Current vs Candidate"
-            body="Current — старый путь подбора запросов (SeoSkuQuerySet status='confirmed'), продолжает работать. Candidate — новый путь: matcher_v2 → SeoMatcherRun → проекция в SeoSkuQuerySet status='candidate'. Пути идут параллельно, не перетирают друг друга."
+            body="В production UI операторский шаг один: выбрать запросы и нажать «Сохранить выбор». Внутренние статусы SeoSkuQuerySet остаются только технической совместимостью и не создают отдельный шаг подтверждения."
           />
           <HelpRow
             title="Preview vs Production"

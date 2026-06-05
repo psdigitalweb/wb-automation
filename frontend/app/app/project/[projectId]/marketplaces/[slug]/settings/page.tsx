@@ -218,7 +218,7 @@ export default function MarketplaceSettingsPage() {
 
   if (loading || !marketplace || !projectMp) {
     return (
-      <div className="container">
+      <div className="container ec-settings-page">
         <p style={{ color: '#666' }}>Загрузка…</p>
       </div>
     )
@@ -232,7 +232,7 @@ export default function MarketplaceSettingsPage() {
   }
 
   return (
-    <div className="container">
+    <div className="container ec-settings-page">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
         <h1>Настройки {marketplace.name}</h1>
         <Link href={`/app/project/${projectId}/marketplaces`}>← К маркетплейсам</Link>

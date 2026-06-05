@@ -17,6 +17,8 @@ import {
 } from '@/lib/apiClient'
 import { HeaderSummary } from './HeaderSummary'
 import PortalBackButton from '@/components/PortalBackButton'
+import { usePageTitle } from '@/hooks/usePageTitle'
+import styles from './unit-pnl.module.css'
 
 function PhotoWithHover({ src, alt }: { src: string; alt: string }) {
   const [hover, setHover] = useState(false)
@@ -36,31 +38,16 @@ function PhotoWithHover({ src, alt }: { src: string; alt: string }) {
       onMouseEnter={handleEnter}
       onMouseLeave={() => setHover(false)}
     >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         src={src}
         alt={alt}
-        style={{ width: 48, height: 48, objectFit: 'cover', borderRadius: 4, cursor: 'pointer' }}
+        className={styles.thumbnail}
       />
       {hover && (
-        <div
-          style={{
-            position: 'fixed',
-            left: pos.x,
-            top: pos.y,
-            zIndex: 1000,
-            padding: 8,
-            background: '#fff',
-            borderRadius: 8,
-            boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
-            border: '1px solid #e5e7eb',
-            pointerEvents: 'none',
-          }}
-        >
-          <img
-            src={src}
-            alt={alt}
-            style={{ width: 260, height: 260, objectFit: 'contain' }}
-          />
+        <div className={styles.photoPopover} style={{ left: pos.x, top: pos.y }}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={src} alt={alt} />
         </div>
       )}
     </div>
@@ -75,27 +62,8 @@ function formatRUB(value: number, fractionDigits: number = 2): string {
   }).format(value)
 }
 
-function formatQty(value: number): string {
-  return new Intl.NumberFormat('ru-RU', { useGrouping: true }).format(value)
-}
-
 function formatInt(value: number): string {
   return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0, useGrouping: true }).format(Math.round(value))
-}
-
-function rowWbTotalCostPct(row: WBUnitPnlRow): number | null {
-  const sale = row.sale_amount ?? 0
-  if (!sale || sale === 0) return null
-  const wb =
-    row.wb_total_signed ??
-    (row.commission_vv_signed ?? 0) +
-      (row.acquiring ?? 0) +
-      (row.logistics_cost ?? 0) +
-      (row.storage_cost ?? 0) +
-      (row.acceptance_cost ?? 0) +
-      (row.other_withholdings ?? 0) +
-      (row.penalties ?? 0)
-  return (wb / sale) * 100
 }
 
 function formatPct(value: number): string {
@@ -174,8 +142,8 @@ function ReportAutocomplete({
   const displayValue = selectedReport ? formatReportLabel(selectedReport) : (reportId && !isNaN(reportId) ? String(reportId) : '')
 
   return (
-    <div ref={containerRef} style={{ position: 'relative', minWidth: 0 }}>
-      <label className="unitpnl-label block text-sm font-medium mb-1">Отчёт</label>
+    <div ref={containerRef} className={styles.field} style={{ position: 'relative' }}>
+      <label className={styles.label}>Отчёт</label>
       <input
         type="text"
         value={reportDropdownOpen ? query : displayValue}
@@ -193,28 +161,10 @@ function ReportAutocomplete({
           if (!query) setQuery('')
         }}
         placeholder="Поиск по ID, периоду..."
-        className="unitpnl-control h-10 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm leading-5 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400"
+        className={styles.control}
       />
       {reportDropdownOpen && reportSuggestions.length > 0 && (
-        <ul
-          className="unitpnl-report-dropdown"
-          style={{
-            position: 'absolute',
-            left: 0,
-            right: 0,
-            top: 'calc(100% + 4px)',
-            zIndex: 50,
-            margin: 0,
-            padding: 0,
-            listStyle: 'none',
-            maxHeight: 256,
-            overflowY: 'auto',
-            borderRadius: 6,
-            border: '1px solid #e5e7eb',
-            background: '#fff',
-            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-          }}
-        >
+        <ul className={styles.reportDropdown}>
           {reportSuggestions.map((r) => (
             <li
               key={r.report_id}
@@ -228,13 +178,7 @@ function ReportAutocomplete({
                 onSearchQueryChange('')
                 onDropdownOpenChange(false)
               }}
-              className="unitpnl-report-dropdown-item"
-              style={{
-                cursor: 'pointer',
-                padding: '10px 12px',
-                fontSize: 14,
-                borderBottom: '1px solid #f3f4f6',
-              }}
+              className={styles.reportDropdownItem}
             >
               {formatReportLabel(r)}
             </li>
@@ -262,6 +206,7 @@ export default function WBUnitPnlPage() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const projectId = params.projectId as string
+  usePageTitle('WB Unit PnL', projectId)
 
   const reportIdFromUrl = searchParams.get('report_id')
   const rrDtFromUrl = searchParams.get('rr_dt_from')
@@ -291,7 +236,6 @@ export default function WBUnitPnlPage() {
   const [reportSuggestions, setReportSuggestions] = useState<WBFinanceReportSearchItem[]>([])
   const [reportSearchQuery, setReportSearchQuery] = useState('')
   const [reportDropdownOpen, setReportDropdownOpen] = useState(false)
-  const reportInputRef = React.useRef<HTMLDivElement>(null)
 
   const [data, setData] = useState<WBUnitPnlResponse | null>(null)
   const [loading, setLoading] = useState(false)
@@ -539,38 +483,46 @@ export default function WBUnitPnlPage() {
   ] as const
 
   return (
-    <div className="container">
+    <div className={styles.page}>
       {isReportsHost && (
-        <div style={{ marginBottom: 12 }}>
+        <div className={styles.portalBack}>
           <PortalBackButton fallbackHref="/client" />
         </div>
       )}
-      <div style={{ marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h1>Прибыльность по товарам (WB Unit PnL)</h1>
-        <div style={{ display: 'flex', gap: 10 }}>
-          <Link href={reportsHref}>
-            <button type="button">К списку отчётов</button>
+      <div className={styles.pageHeader}>
+        <div className={styles.titleBlock}>
+          <div className={styles.titleRow}>
+            <h1>Unit-экономика</h1>
+            <span className={styles.marketplaceBadge}><span />WB</span>
+          </div>
+          <p>Unit PnL по SKU: выплаты, затраты WB, РРЦ-модель и прибыль на единицу.</p>
+        </div>
+        <div className={styles.headerActions}>
+          <Link href={reportsHref} className={styles.buttonSecondary}>
+            К списку отчётов
           </Link>
         </div>
       </div>
 
-      <div className="card mb-5">
-        <div className="p-4">
-          <h3 className="m-0 mb-3 text-base font-semibold">Условия отбора</h3>
-          <div className="unitpnl-grid unitpnl-grid--scope grid grid-cols-1 gap-6 md:grid-cols-[360px_1fr_160px] items-end">
-            <div className="unitpnl-col flex flex-col min-w-0">
-              <label className="unitpnl-label block text-sm font-medium mb-1">Режим</label>
+      <div className={styles.card}>
+        <div className={styles.cardHeader}>
+          <h2>Условия отбора</h2>
+        </div>
+        <div className={styles.cardBody}>
+          <div className={styles.scopeGrid}>
+            <div className={styles.field}>
+              <label className={styles.label}>Режим</label>
               <select
                 value={mode}
                 onChange={(e) => setMode(e.target.value as 'report' | 'period')}
-                className="unitpnl-control h-10 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm leading-5 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className={styles.control}
               >
                 <option value="report">По отчёту</option>
                 <option value="period">По периоду</option>
               </select>
             </div>
             {mode === 'report' ? (
-              <div className="unitpnl-col flex flex-col min-w-0">
+              <div className={styles.field}>
                 <ReportAutocomplete
                   projectId={projectId}
                   reportId={reportId}
@@ -586,28 +538,28 @@ export default function WBUnitPnlPage() {
                 />
               </div>
             ) : (
-              <div className="unitpnl-col unitpnl-period-dates min-w-0">
-                <div className="flex flex-col min-w-0">
-                  <label className="unitpnl-label block text-sm font-medium mb-1">Дата с</label>
+              <div className={styles.periodDates}>
+                <div className={styles.field}>
+                  <label className={styles.label}>Дата с</label>
                   <input
                     type="date"
                     value={rrDtFrom}
                     onChange={(e) => setRrDtFrom(e.target.value)}
-                    className="unitpnl-control h-10 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm leading-5 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className={styles.control}
                   />
                 </div>
-                <div className="flex flex-col min-w-0">
-                  <label className="unitpnl-label block text-sm font-medium mb-1">Дата по</label>
+                <div className={styles.field}>
+                  <label className={styles.label}>Дата по</label>
                   <input
                     type="date"
                     value={rrDtTo}
                     onChange={(e) => setRrDtTo(e.target.value)}
-                    className="unitpnl-control h-10 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm leading-5 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className={styles.control}
                   />
                 </div>
               </div>
             )}
-            <div className="unitpnl-col unitpnl-actions flex items-end md:justify-end">
+            <div className={styles.actions}>
               <button
                 onClick={handleRefresh}
                 disabled={
@@ -615,7 +567,7 @@ export default function WBUnitPnlPage() {
                   (mode === 'report' && isNaN(reportId)) ||
                   (mode === 'period' && (!rrDtFrom || !rrDtTo))
                 }
-                className="unitpnl-btn h-10 px-6 w-full md:w-auto rounded border border-gray-300 bg-white text-sm hover:bg-gray-50 disabled:opacity-50"
+                className={styles.buttonPrimary}
               >
                 {loading ? 'Загрузка…' : 'Обновить'}
               </button>
@@ -625,19 +577,19 @@ export default function WBUnitPnlPage() {
       </div>
 
       {error && (
-        <div style={{ padding: 15, marginBottom: 20, backgroundColor: '#f8d7da', color: '#721c24', borderRadius: 4 }}>
+        <div className={styles.errorCard}>
           {error}
         </div>
       )}
 
       {headerTotals && (
-        <div className="card" style={{ marginBottom: 20 }}>
-          <div style={{ padding: 16 }}>
-            <h3 style={{ margin: '0 0 12px 0' }}>
-              {headerTotals.filter_header ? 'Сводка по отфильтрованным SKU' : 'Сводка по выборке'}
-            </h3>
+        <div className={styles.card}>
+          <div className={styles.cardHeader}>
+            <h2>{headerTotals.filter_header ? 'Сводка по отфильтрованным SKU' : 'Сводка по выборке'}</h2>
+          </div>
+          <div className={styles.cardBody}>
             <HeaderSummary headerTotals={headerTotals} items={items} />
-            <div style={{ marginTop: 12, fontSize: 12, color: '#666' }}>
+            <div className={styles.summaryMeta}>
               Операций (строк отчёта): {headerTotals.scope_lines_total ?? headerTotals.lines_total ?? 0} · SKU в
               выборке: {headerTotals.skus_total ?? 0}
             </div>
@@ -645,26 +597,28 @@ export default function WBUnitPnlPage() {
         </div>
       )}
 
-      <div className="card mb-5 mt-6">
-        <div className="p-4">
-          <h3 className="m-0 mb-3 text-base font-semibold">Фильтры списка SKU</h3>
-          <div className="unitpnl-grid unitpnl-grid--filters grid grid-cols-1 gap-6 md:grid-cols-[1fr_320px_280px_160px] items-end">
-            <div className="unitpnl-col flex flex-col min-w-0">
-              <label className="unitpnl-label block text-sm font-medium mb-1">Поиск</label>
+      <div className={styles.card}>
+        <div className={styles.cardHeader}>
+          <h2>Фильтры списка SKU</h2>
+        </div>
+        <div className={styles.cardBody}>
+          <div className={styles.filterGrid}>
+            <div className={styles.field}>
+              <label className={styles.label}>Поиск</label>
               <input
                 type="text"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="nm_id, артикул, название"
-                className="unitpnl-control h-10 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm leading-5 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400"
+                className={styles.control}
               />
             </div>
-            <div className="unitpnl-col flex flex-col min-w-0">
-              <label className="unitpnl-label block text-sm font-medium mb-1">Категория WB</label>
+            <div className={styles.field}>
+              <label className={styles.label}>Категория WB</label>
               <select
                 value={category === '' ? '' : String(category)}
                 onChange={(e) => setCategory(e.target.value === '' ? '' : parseInt(e.target.value, 10))}
-                className="unitpnl-control h-10 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm leading-5 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className={styles.control}
                 disabled={subjects.length === 0}
                 title={subjects.length === 0 ? 'Нет данных о категориях (нужна загрузка products)' : undefined}
               >
@@ -676,28 +630,27 @@ export default function WBUnitPnlPage() {
                 ))}
               </select>
             </div>
-            <div className="unitpnl-col unitpnl-checkbox-wrap flex items-center h-10 md:justify-center">
-              <label className="flex cursor-pointer select-none items-center text-sm leading-tight">
+            <div className={styles.field}>
+              <label className={styles.checkLabel}>
                 <input
                   type="checkbox"
                   checked={filterHeader}
                   onChange={(e) => setFilterHeader(e.target.checked)}
-                  className="mr-2 rounded border-gray-300"
                 />
                 Фильтровать сводку по фильтрам SKU
               </label>
             </div>
-            <div className="unitpnl-col unitpnl-actions flex items-end md:justify-end">
+            <div className={styles.actions}>
               <button
                 onClick={handleApplyFilters}
-                className="unitpnl-btn h-10 px-6 w-full md:w-auto rounded border border-gray-300 bg-white text-sm hover:bg-gray-50"
+                className={styles.buttonSecondary}
               >
                 Применить
               </button>
             </div>
           </div>
           {subjects.length === 0 && (
-            <div className="mt-2 text-xs text-gray-500">
+            <div className={styles.hint}>
               Нет данных о категориях (нужна загрузка products)
             </div>
           )}
@@ -705,99 +658,95 @@ export default function WBUnitPnlPage() {
       </div>
 
       {loading ? (
-        <p>Загрузка...</p>
+        <div className={styles.emptyCard}>Загрузка...</div>
       ) : !canFetch ? (
-        <p style={{ color: '#666' }}>Укажите ID отчёта или период (даты) и нажмите «Обновить».</p>
+        <div className={styles.emptyCard}>Укажите ID отчёта или период (даты) и нажмите «Обновить».</div>
       ) : items.length === 0 ? (
-        <div className="card">
-          <p style={{ padding: 20, textAlign: 'center', color: '#666' }}>
-            Нет данных за выбранные условия.
-          </p>
+        <div className={styles.emptyCard}>
+          Нет данных за выбранные условия.
         </div>
       ) : (
-        <div className="card">
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
+        <div className={styles.tableCard}>
+          <div className={styles.tableWrap}>
+            <table className={styles.table}>
               <thead>
-                <tr style={{ borderBottom: '2px solid #dee2e6' }}>
-                  <th style={{ padding: 12, textAlign: 'left', fontWeight: 600 }}>Фото</th>
-                  <th style={{ padding: 12, textAlign: 'left', fontWeight: 600 }}>Название</th>
-                  <th style={{ padding: 12, textAlign: 'right', fontWeight: 600 }}>РРЦ, ₽</th>
+                <tr>
+                  <th>Фото</th>
+                  <th>Название</th>
+                  <th className={styles.numberCell}>РРЦ, ₽</th>
                   {SORTABLE_COLUMNS.map(({ key, label }) => (
                     <th
                       key={key}
-                      style={{
-                        padding: 12,
-                        textAlign: 'right',
-                        fontWeight: 600,
-                        cursor: 'pointer',
-                        userSelect: 'none',
-                        whiteSpace: 'nowrap',
-                        color: sort === key ? '#0ea5e9' : 'inherit',
-                      }}
+                      className={`${styles.numberCell} ${styles.sortableHeader} ${sort === key ? styles.sortableHeaderActive : ''}`}
                       onClick={() => handleSortClick(key)}
                       title={`Сортировать по ${label}`}
                     >
                       {label}
                       {sort === key && (
-                        <span style={{ marginLeft: 4, fontSize: 10 }}>
+                        <span style={{ marginLeft: 4 }}>
                           {order === 'asc' ? '↑' : '↓'}
                         </span>
                       )}
                     </th>
                   ))}
-                  <th style={{ padding: 12, textAlign: 'right', fontWeight: 600 }}>Прибыль, ₽/шт</th>
-                  <th style={{ padding: 12, width: 40, textAlign: 'center' }}></th>
+                  <th className={styles.numberCell}>Прибыль, ₽/шт</th>
                 </tr>
               </thead>
               <tbody>
-                {items.map((row, idx) => {
+                {items.map((row) => {
                   const isExpanded = expandedNmId === row.nm_id
                   const details = detailsCache[row.nm_id]
                   const isLoadingDetails = detailsLoading === row.nm_id
                   const photoUrl = row.photos?.[0] || null
-                  const wbPct = rowWbTotalCostPct(row)
                   const subLabel = row.vendor_code
                     ? `${row.nm_id} · ${row.vendor_code}`
                     : `${row.nm_id}`
                   return (
                     <React.Fragment key={row.nm_id}>
                       <tr
-                        style={{
-                          borderBottom: '1px solid #eee',
-                          backgroundColor: idx % 2 === 0 ? '#fff' : '#f8f9fa',
+                        className={styles.clickableRow}
+                        role="button"
+                        tabIndex={0}
+                        aria-expanded={isExpanded}
+                        onClick={() => toggleExpand(row.nm_id)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault()
+                            toggleExpand(row.nm_id)
+                          }
                         }}
+                        title={isExpanded ? 'Свернуть детали' : 'Развернуть детали'}
                       >
-                        <td style={{ padding: 12 }}>
+                        <td>
                           {photoUrl ? (
                             <PhotoWithHover src={photoUrl} alt="" />
                           ) : (
-                            <span style={{ color: '#999' }}>—</span>
+                            <span className={styles.hint}>—</span>
                           )}
                         </td>
-                        <td style={{ padding: 12, maxWidth: 260 }}>
-                          <div style={{ fontWeight: 500 }}>{(row.title || row.vendor_code) || '—'}</div>
+                        <td className={styles.productCell}>
+                          <div className={styles.productTitle}>{(row.title || row.vendor_code) || '—'}</div>
                           {subLabel && (
-                            <div style={{ fontSize: 12, color: '#6b7280', fontFamily: 'ui-monospace, monospace', marginTop: 2 }}>
+                            <div className={styles.productMeta}>
                               {subLabel}
                             </div>
                           )}
                         </td>
-                        <td style={{ padding: 12, textAlign: 'right' }}>
+                        <td className={styles.numberCell}>
                           {row.rrp_price != null ? formatRUB(row.rrp_price) : '—'}
                         </td>
-                        <td style={{ padding: 12, textAlign: 'right' }}>{formatInt(row.net_sales_cnt)}</td>
-                        <td style={{ padding: 12, textAlign: 'right', fontWeight: 600 }}>
+                        <td className={styles.numberCell}>{formatInt(row.net_sales_cnt)}</td>
+                        <td className={`${styles.numberCell} ${styles.strongCell}`}>
                           {formatRUB(row.total_to_pay)}
                         </td>
-                        <td style={{ padding: 12, textAlign: 'right' }}>
+                        <td className={styles.numberCell}>
                           {row.cogs_missing
                             ? '—'
                             : row.margin_pct_of_revenue != null
                               ? `${formatPct(row.margin_pct_of_revenue)}%`
                               : '—'}
                         </td>
-                        <td style={{ padding: 12, textAlign: 'right' }}>
+                        <td className={styles.numberCell}>
                           {(() => {
                             const fp = row.fact_price_avg ?? 0
                             const wb = row.wb_total_cost_per_unit
@@ -805,33 +754,21 @@ export default function WBUnitPnlPage() {
                             return `${formatPct((wb / fp) * 100)}%`
                           })()}
                         </td>
-                        <td style={{ padding: 12, textAlign: 'right' }}>
+                        <td className={styles.numberCell}>
                           {row.cogs_missing
                             ? '—'
                             : row.profit_per_unit != null
                               ? formatRUB(row.profit_per_unit)
                               : '—'}
                         </td>
-                        <td
-                          style={{
-                            padding: 12,
-                            textAlign: 'center',
-                            cursor: isLoadingDetails ? 'wait' : 'pointer',
-                            width: 40,
-                          }}
-                          onClick={() => toggleExpand(row.nm_id)}
-                          title={isExpanded ? 'Свернуть' : 'Развернуть детали'}
-                        >
-                          {isLoadingDetails ? '…' : isExpanded ? '▾' : '▸'}
-                        </td>
                       </tr>
                       {isExpanded && (
-                        <tr style={{ borderBottom: '1px solid #eee', backgroundColor: '#f8fafc' }}>
-                          <td colSpan={9} style={{ padding: '16px 20px' }}>
+                        <tr className={styles.expandedRow}>
+                          <td colSpan={8}>
                             {details ? (
                               <DetailsPanel details={details} row={row} />
                             ) : (
-                              <div style={{ padding: 24, textAlign: 'center', color: '#666' }}>
+                              <div className={styles.emptyCard}>
                                 Загрузка…
                               </div>
                             )}
@@ -844,27 +781,15 @@ export default function WBUnitPnlPage() {
               </tbody>
             </table>
           </div>
-          <div
-            style={{
-              padding: 12,
-              display: 'flex',
-              flexWrap: 'wrap',
-              alignItems: 'center',
-              gap: 16,
-              fontSize: 13,
-              color: '#666',
-              borderTop: '1px solid #eee',
-            }}
-          >
+          <div className={styles.tableFooter}>
             <span>
               Показано {rowsTotal > 0 ? `${pageStart}–${pageEnd}` : '0'} из {rowsTotal}
             </span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div className={styles.pager}>
               <button
                 type="button"
                 onClick={goToFirst}
                 disabled={!canGoPrev}
-                style={{ padding: '4px 10px', fontSize: 12 }}
                 title="В начало"
               >
                 ««
@@ -873,7 +798,6 @@ export default function WBUnitPnlPage() {
                 type="button"
                 onClick={goToPrev}
                 disabled={!canGoPrev}
-                style={{ padding: '4px 10px', fontSize: 12 }}
                 title="Назад"
               >
                 « Назад
@@ -885,7 +809,6 @@ export default function WBUnitPnlPage() {
                 type="button"
                 onClick={goToNext}
                 disabled={!canGoNext}
-                style={{ padding: '4px 10px', fontSize: 12 }}
                 title="Вперёд"
               >
                 Вперёд »
@@ -894,18 +817,16 @@ export default function WBUnitPnlPage() {
                 type="button"
                 onClick={goToLast}
                 disabled={!canGoNext}
-                style={{ padding: '4px 10px', fontSize: 12 }}
                 title="В конец"
               >
                 »»
               </button>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <div className={styles.pageSize}>
               <span>На странице:</span>
               <select
                 value={limit}
                 onChange={(e) => changePageSize(parseInt(e.target.value, 10))}
-                style={{ padding: '4px 8px', fontSize: 12 }}
               >
                 {PAGE_SIZE_OPTIONS.map((n) => (
                   <option key={n} value={n}>
@@ -920,87 +841,6 @@ export default function WBUnitPnlPage() {
           </div>
         </div>
       )}
-
-      <style jsx global>{`
-        .unitpnl-grid {
-          display: grid;
-          grid-template-columns: 1fr;
-          gap: 24px;
-          align-items: end;
-        }
-        .unitpnl-col {
-          min-width: 0;
-        }
-        .unitpnl-label {
-          display: block;
-          margin-bottom: 4px;
-          font-size: 14px;
-          line-height: 1.25;
-          font-weight: 500;
-        }
-        .unitpnl-control {
-          width: 100%;
-          height: 40px;
-          padding: 8px 12px;
-          line-height: 20px;
-        }
-        .unitpnl-control::placeholder {
-          color: #9ca3af;
-        }
-        .unitpnl-btn {
-          height: 40px;
-          padding: 0 24px;
-          width: 100%;
-          margin-right: 0;
-          margin-bottom: 0;
-          white-space: nowrap;
-        }
-        .unitpnl-actions {
-          align-items: end;
-        }
-        .unitpnl-checkbox-wrap {
-          align-items: center;
-          min-height: 40px;
-        }
-        .unitpnl-report-dropdown {
-          list-style: none !important;
-          margin: 0 !important;
-          padding: 0 !important;
-        }
-        .unitpnl-report-dropdown-item:hover {
-          background-color: #f9fafb;
-        }
-        .unitpnl-report-dropdown-item:last-child {
-          border-bottom: none !important;
-        }
-        .unitpnl-period-dates {
-          display: grid;
-          grid-template-columns: 1fr;
-          gap: 16px;
-          min-width: 0;
-        }
-        @media (min-width: 768px) {
-          .unitpnl-period-dates {
-            grid-template-columns: 1fr 1fr;
-          }
-          .unitpnl-grid--scope {
-            grid-template-columns: minmax(220px, 280px) minmax(360px, 1fr) 170px;
-          }
-          .unitpnl-grid--filters {
-            grid-template-columns: minmax(260px, 1fr) minmax(260px, 360px) minmax(300px, 1.2fr) 170px;
-          }
-          .unitpnl-actions {
-            justify-content: flex-end;
-          }
-          .unitpnl-btn {
-            width: auto;
-          }
-          .unitpnl-checkbox-wrap {
-            justify-content: flex-start;
-          }
-        }
-      `}</style>
-
     </div>
   )
 }
@@ -1013,9 +853,9 @@ function MetricLine({
   value: React.ReactNode
 }) {
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
-      <span style={{ color: '#6b7280' }}>{label}</span>
-      <span style={{ fontFamily: 'ui-monospace, monospace', fontWeight: 400, color: '#374151', textAlign: 'right', whiteSpace: 'nowrap' }}>
+    <div className={styles.metricLine}>
+      <span className={styles.metricLabel}>{label}</span>
+      <span className={styles.metricValue}>
         {value}
       </span>
     </div>
@@ -1048,33 +888,14 @@ function DetailsPanel({ details, row }: { details: WBUnitPnlDetailsResponse; row
     : `${details.nm_id}`
 
   return (
-    <div
-      style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(2, minmax(280px, 1fr))',
-        gap: 24,
-      }}
-    >
-      <div style={{ gridColumn: '1 / -1', fontSize: 12, color: '#6b7280', fontFamily: 'ui-monospace, monospace' }}>
+    <div className={styles.detailsPanel}>
+      <div className={styles.detailsMeta}>
         {shortLabel}
       </div>
 
-      {/* Цены и база расчётов */}
-      <div>
-        <h3 style={{ margin: '0 0 12px 0', fontSize: 14, fontWeight: 600, color: '#333' }}>
-          Цены и база расчётов
-        </h3>
-        <div
-          style={{
-            padding: '12px 14px',
-            borderRadius: 10,
-            border: '1px solid #e5e7eb',
-            background: '#fff',
-            display: 'grid',
-            gap: 6,
-            fontSize: 13,
-          }}
-        >
+      <div className={styles.detailsCard}>
+        <h3 className={styles.detailsTitle}>Цены и база расчётов</h3>
+        <div className={styles.metricList}>
           <MetricLine label="РРЦ" value={fmt(base_calc?.rrp_price)} />
           <MetricLine label="Ср. цена WB" value={fmt(base_calc?.wb_price_avg)} />
           <MetricLine
@@ -1093,22 +914,9 @@ function DetailsPanel({ details, row }: { details: WBUnitPnlDetailsResponse; row
         </div>
       </div>
 
-      {/* 3) Расходы WB — абсолюты */}
-      <div>
-        <h3 style={{ margin: '0 0 12px 0', fontSize: 14, fontWeight: 600, color: '#333' }}>
-          Расходы WB — абсолюты
-        </h3>
-        <div
-          style={{
-            padding: '12px 14px',
-            borderRadius: 10,
-            border: '1px solid #e5e7eb',
-            background: '#fff',
-            display: 'grid',
-            gap: 6,
-            fontSize: 13,
-          }}
-        >
+      <div className={styles.detailsCard}>
+        <h3 className={styles.detailsTitle}>Расходы WB — абсолюты</h3>
+        <div className={styles.metricList}>
           <MetricLine
             label="Комиссия WB"
             value={details.commission_vv_signed != null ? fmt(details.commission_vv_signed) : '—'}
@@ -1126,22 +934,9 @@ function DetailsPanel({ details, row }: { details: WBUnitPnlDetailsResponse; row
         </div>
       </div>
 
-      {/* 4) Расходы WB — на единицу */}
-      <div>
-        <h3 style={{ margin: '0 0 12px 0', fontSize: 14, fontWeight: 600, color: '#333' }}>
-          Расходы WB — на единицу
-        </h3>
-        <div
-          style={{
-            padding: '12px 14px',
-            borderRadius: 10,
-            border: '1px solid #e5e7eb',
-            background: '#fff',
-            display: 'grid',
-            gap: 6,
-            fontSize: 13,
-          }}
-        >
+      <div className={styles.detailsCard}>
+        <h3 className={styles.detailsTitle}>Расходы WB — на единицу</h3>
+        <div className={styles.metricList}>
           {salesCnt > 0 && breakdown ? (
             <>
               <MetricLine
@@ -1183,27 +978,14 @@ function DetailsPanel({ details, row }: { details: WBUnitPnlDetailsResponse; row
               value={wbTotalCostPerUnit != null ? formatRUB(wbTotalCostPerUnit) : '—'}
             />
           ) : (
-            <div style={{ color: '#666' }}>Нет продаж (sales_cnt = 0)</div>
+            <div className={styles.stateText}>Нет продаж (sales_cnt = 0)</div>
           )}
         </div>
       </div>
 
-      {/* 5) Логистика */}
-      <div>
-        <h3 style={{ margin: '0 0 12px 0', fontSize: 14, fontWeight: 700, color: '#111827' }}>
-          Логистика
-        </h3>
-        <div
-          style={{
-            padding: '12px 14px',
-            borderRadius: 10,
-            border: '1px solid #e5e7eb',
-            background: '#fff',
-            display: 'grid',
-            gap: 6,
-            fontSize: 13,
-          }}
-        >
+      <div className={styles.detailsCard}>
+        <h3 className={styles.detailsTitle}>Логистика</h3>
+        <div className={styles.metricList}>
           <MetricLine
             label="Доставки, шт"
             value={logistics_counts?.deliveries_qty != null ? formatInt(logistics_counts.deliveries_qty) : '—'}
@@ -1223,54 +1005,17 @@ function DetailsPanel({ details, row }: { details: WBUnitPnlDetailsResponse; row
         </div>
       </div>
 
-      {/* 6) Доходность */}
-      <div style={{ gridColumn: '1 / -1' }}>
-        <h3 style={{ margin: '0 0 12px 0', fontSize: 14, fontWeight: 700, color: '#111827' }}>
-          Доходность
-        </h3>
+      <div className={`${styles.detailsCard} ${styles.detailsFull}`}>
+        <h3 className={styles.detailsTitle}>Доходность</h3>
         {profitability?.rrp_missing || profitability?.cogs_missing ? (
-          <div
-            style={{
-              padding: '14px 16px',
-              borderRadius: 10,
-              border: '1px solid #fde68a',
-              background: '#fffbeb',
-              color: '#92400e',
-              fontSize: 13,
-            }}
-          >
+          <div className={styles.warningCard} style={{ marginTop: 10 }}>
             Загрузите Internal Data / каталог, чтобы видеть РРЦ и COGS.
           </div>
         ) : (
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
-              gap: 10,
-            }}
-          >
-            {/* ФАКТ */}
-            <div
-              style={{
-                padding: '12px 14px',
-                borderRadius: 10,
-                border: '1px solid #e5e7eb',
-                background: '#fff',
-              }}
-            >
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  gap: 12,
-                  alignItems: 'baseline',
-                  marginBottom: 8,
-                }}
-              >
-                <span style={{ fontSize: 12, fontWeight: 800, color: '#111827', letterSpacing: 0.3 }}>ФАКТ</span>
-                <span style={{ fontSize: 12, color: '#6b7280' }}>Фактическая доходность (от выручки)</span>
-              </div>
-              <div style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+          <div className={styles.profitGrid} style={{ marginTop: 10 }}>
+            <div className={styles.profitSubCard}>
+              <div className={styles.sectionKicker}>Факт</div>
+              <div className={styles.metricList}>
                 <MetricLine label="Прибыль, ₽ / шт" value={profitUnit != null ? formatRUB(profitUnit) : '—'} />
                 <MetricLine
                   label="Маржа, % от выручки"
@@ -1278,19 +1023,9 @@ function DetailsPanel({ details, row }: { details: WBUnitPnlDetailsResponse; row
                 />
               </div>
             </div>
-            {/* ПЛАН / МОДЕЛЬ */}
-            <div
-              style={{
-                padding: '12px 14px',
-                borderRadius: 10,
-                border: '1px solid #e5e7eb',
-                background: '#f9fafb',
-              }}
-            >
-              <div style={{ fontSize: 12, fontWeight: 800, color: '#111827', letterSpacing: 0.3, marginBottom: 8 }}>
-                ПЛАН / МОДЕЛЬ
-              </div>
-              <div style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+            <div className={`${styles.profitSubCard} ${styles.profitSubCardMuted}`}>
+              <div className={styles.sectionKicker}>План / модель</div>
+              <div className={styles.metricList}>
                 <MetricLine
                   label="Маржа, % от РРЦ"
                   value={
@@ -1316,20 +1051,9 @@ function DetailsPanel({ details, row }: { details: WBUnitPnlDetailsResponse; row
                 />
               </div>
             </div>
-            {/* СПРАВОЧНО */}
-            <div
-              style={{
-                padding: '12px 14px',
-                borderRadius: 10,
-                border: '1px solid #e5e7eb',
-                background: '#fff',
-                opacity: 0.9,
-              }}
-            >
-              <div style={{ fontSize: 12, fontWeight: 800, color: '#111827', letterSpacing: 0.3, marginBottom: 8 }}>
-                СПРАВОЧНО
-              </div>
-              <div style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+            <div className={styles.profitSubCard}>
+              <div className={styles.sectionKicker}>Справочно</div>
+              <div className={styles.metricList}>
                 <MetricLine
                   label="Наценка, % от себестоимости"
                   value={

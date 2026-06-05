@@ -5,14 +5,30 @@ from __future__ import annotations
 import os
 import tempfile
 from decimal import Decimal
+from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Path, Query, UploadFile, status
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from app.db import SessionLocal
 from app.deps import allow_local_debug_read, require_project_admin
-from app.models import SeoQueryBatch, SeoQueryNormalized
+from app.models import (
+    SeoCategoryMeaningAxes,
+    SeoQueryBatch,
+    SeoQueryCluster,
+    SeoQueryClusterMembership,
+    SeoQueryNormalized,
+)
 from app.schemas.seo_query_import import (
+    SeoCategoryQueryClusterDetailResponse,
+    SeoCategoryQueryClusterItem,
+    SeoCategoryQueryClusterListResponse,
+    SeoCategoryQueryClusterMemberItem,
+    SeoCategoryQueryDataExpressivePrior,
+    SeoCategoryQueryDataLatestBatch,
+    SeoCategoryQueryDataReadiness,
+    SeoCategoryQueryDataStatusResponse,
+    SeoCategoryReviewArchiveCounts,
     SeoQueryCorpusResponse,
     SeoQueryCorpusSummary,
     SeoQueryDeleteResponse,
@@ -174,6 +190,147 @@ def _load_latest_batch_or_404(*, session, project_id: int, category_id: int) -> 
     return batch
 
 
+def _latest_batch(*, session, project_id: int, category_id: int) -> SeoQueryBatch | None:
+    return session.scalar(
+        select(SeoQueryBatch)
+        .where(
+            SeoQueryBatch.project_id == project_id,
+            SeoQueryBatch.category_id == category_id,
+        )
+        .order_by(SeoQueryBatch.created_at.desc(), SeoQueryBatch.id.desc())
+        .limit(1)
+    )
+
+
+def _latest_expressive_prior(*, session, project_id: int, category_id: int) -> SeoCategoryMeaningAxes | None:
+    return session.scalar(
+        select(SeoCategoryMeaningAxes)
+        .where(
+            SeoCategoryMeaningAxes.project_id == project_id,
+            SeoCategoryMeaningAxes.category_id == category_id,
+            SeoCategoryMeaningAxes.status == "ready",
+        )
+        .order_by(SeoCategoryMeaningAxes.updated_at.desc(), SeoCategoryMeaningAxes.id.desc())
+        .limit(1)
+    )
+
+
+def _cluster_item_from_row(
+    row: SeoQueryCluster,
+    *,
+    top_frequency_by_cluster_id: dict[int, str],
+) -> SeoCategoryQueryClusterItem:
+    cluster_id = int(row.id)
+    return SeoCategoryQueryClusterItem(
+        cluster_id=cluster_id,
+        cluster_key=str(row.cluster_key),
+        label=row.label,
+        top_query=row.top_query_text,
+        query_count=int(row.query_count or 0),
+        top_frequency=top_frequency_by_cluster_id.get(cluster_id),
+    )
+
+
+def _string_list_from_payload(payload: dict[str, Any], key: str) -> list[str]:
+    values = payload.get(key)
+    if not isinstance(values, list):
+        return []
+    result: list[str] = []
+    for value in values:
+        if isinstance(value, str):
+            cleaned = value.strip()
+            if cleaned:
+                result.append(cleaned)
+    return result
+
+
+def _confidence_from_payload(payload: dict[str, Any]) -> dict[str, float]:
+    raw_confidence = payload.get("confidence")
+    if not isinstance(raw_confidence, dict):
+        return {}
+    confidence: dict[str, float] = {}
+    for key, value in raw_confidence.items():
+        try:
+            confidence[str(key)] = float(value)
+        except (TypeError, ValueError):
+            continue
+    return confidence
+
+
+def _expressive_prior_from_row(row: SeoCategoryMeaningAxes | None) -> SeoCategoryQueryDataExpressivePrior:
+    if row is None:
+        return SeoCategoryQueryDataExpressivePrior(ready=False)
+    payload = row.axes_payload if isinstance(row.axes_payload, dict) else {}
+    return SeoCategoryQueryDataExpressivePrior(
+        ready=True,
+        status=row.status,
+        source=row.source,
+        schema_version=row.schema_version,
+        axes_id=int(row.id),
+        llm_model=row.llm_model,
+        prompt_version=row.prompt_version,
+        updated_at=row.updated_at,
+        confidence=_confidence_from_payload(payload),
+        evidence_refs=_string_list_from_payload(payload, "evidence_refs"),
+        expressive_axes=_string_list_from_payload(payload, "expressive_axes"),
+        audience_axes=_string_list_from_payload(payload, "audience_axes"),
+        occasion_axes=_string_list_from_payload(payload, "occasion_axes"),
+        use_case_axes=_string_list_from_payload(payload, "use_case_axes"),
+        product_type_axes=_string_list_from_payload(payload, "product_type_axes"),
+        attribute_axes=_string_list_from_payload(payload, "attribute_axes"),
+        constraint_axes=_string_list_from_payload(payload, "constraint_axes"),
+        negative_constraint_axes=_string_list_from_payload(payload, "negative_constraint_axes"),
+    )
+
+
+def _review_archive_counts(*, session, project_id: int, category_id: int) -> SeoCategoryReviewArchiveCounts:
+    dialect = session.get_bind().dialect.name
+    if dialect == "sqlite":
+        text_present_sql = """
+            NULLIF(TRIM(COALESCE(json_extract(fs.raw, '$.text'), '')), '') IS NOT NULL
+            OR NULLIF(TRIM(COALESCE(json_extract(fs.raw, '$.pros'), '')), '') IS NOT NULL
+            OR NULLIF(TRIM(COALESCE(json_extract(fs.raw, '$.cons'), '')), '') IS NOT NULL
+        """
+    else:
+        text_present_sql = """
+            NULLIF(BTRIM(COALESCE(fs.raw->>'text', '')), '') IS NOT NULL
+            OR NULLIF(BTRIM(COALESCE(fs.raw->>'pros', '')), '') IS NOT NULL
+            OR NULLIF(BTRIM(COALESCE(fs.raw->>'cons', '')), '') IS NOT NULL
+        """
+
+    query = text(
+        f"""
+        SELECT
+            COUNT(*) AS total_review_rows,
+            SUM(CASE WHEN ({text_present_sql}) THEN 1 ELSE 0 END) AS text_review_rows,
+            COUNT(DISTINCT fs.nm_id) AS sku_with_reviews,
+            COUNT(DISTINCT CASE WHEN ({text_present_sql}) THEN fs.nm_id END) AS sku_with_text_reviews,
+            SUM(CASE WHEN fs.product_valuation IS NOT NULL AND fs.product_valuation >= 4 THEN 1 ELSE 0 END)
+                AS rating_positive_rows
+        FROM wb_feedback_snapshots fs
+        JOIN products p
+          ON p.project_id = fs.project_id
+         AND p.nm_id = fs.nm_id
+        WHERE fs.project_id = :project_id
+          AND p.subject_id = :category_id
+        """
+    )
+    try:
+        row = session.execute(
+            query,
+            {"project_id": int(project_id), "category_id": int(category_id)},
+        ).mappings().one()
+    except Exception:
+        return SeoCategoryReviewArchiveCounts()
+    return SeoCategoryReviewArchiveCounts(
+        total_review_rows=int(row.get("total_review_rows") or 0),
+        text_review_rows=int(row.get("text_review_rows") or 0),
+        sku_with_reviews=int(row.get("sku_with_reviews") or 0),
+        sku_with_text_reviews=int(row.get("sku_with_text_reviews") or 0),
+        rating_positive_rows=int(row.get("rating_positive_rows") or 0),
+    )
+
+
 def _ensure_temp_dir() -> str:
     try:
         os.makedirs(SEO_QUERY_IMPORT_TMP_DIR, exist_ok=True)
@@ -186,6 +343,248 @@ def _ensure_temp_dir() -> str:
             ),
         ) from exc
     return SEO_QUERY_IMPORT_TMP_DIR
+
+
+@router.get(
+    "/projects/{project_id}/seo/categories/{category_id}/query-data/status",
+    response_model=SeoCategoryQueryDataStatusResponse,
+)
+async def get_seo_category_query_data_status_endpoint(
+    project_id: int = Path(..., description="Project ID"),
+    category_id: int = Path(..., description="WB category/subject scope"),
+    membership: dict = Depends(allow_local_debug_read),
+):
+    del membership
+    session = SessionLocal()
+    try:
+        latest_batch = _latest_batch(session=session, project_id=int(project_id), category_id=int(category_id))
+        query_count = int(
+            session.scalar(
+                select(func.coalesce(func.sum(SeoQueryBatch.row_count), 0)).where(
+                    SeoQueryBatch.project_id == int(project_id),
+                    SeoQueryBatch.category_id == int(category_id),
+                    SeoQueryBatch.status != "deleted",
+                )
+            )
+            or 0
+        )
+        normalized_query_count = int(
+            session.scalar(
+                select(func.count(func.distinct(SeoQueryNormalized.normalized_query))).where(
+                    SeoQueryNormalized.project_id == int(project_id),
+                    SeoQueryNormalized.category_id == int(category_id),
+                )
+            )
+            or 0
+        )
+        cluster_count = int(
+            session.scalar(
+                select(func.count()).select_from(SeoQueryCluster).where(
+                    SeoQueryCluster.project_id == int(project_id),
+                    SeoQueryCluster.category_id == int(category_id),
+                )
+            )
+            or 0
+        )
+        expressive_prior = _latest_expressive_prior(
+            session=session,
+            project_id=int(project_id),
+            category_id=int(category_id),
+        )
+        expressive_prior_ready = expressive_prior is not None
+        latest_batch_ready = latest_batch is not None and str(latest_batch.status) == "completed"
+        readiness = SeoCategoryQueryDataReadiness(
+            query_data_loaded=query_count > 0 and latest_batch_ready,
+            normalized_queries_ready=normalized_query_count > 0,
+            clusters_ready=cluster_count > 0,
+            expressive_prior_ready=expressive_prior_ready,
+            ready=bool(
+                query_count > 0
+                and latest_batch_ready
+                and normalized_query_count > 0
+                and cluster_count > 0
+                and expressive_prior_ready
+            ),
+        )
+        return SeoCategoryQueryDataStatusResponse(
+            project_id=int(project_id),
+            category_id=int(category_id),
+            query_count=query_count,
+            normalized_query_count=normalized_query_count,
+            cluster_count=cluster_count,
+            latest_batch=SeoCategoryQueryDataLatestBatch(
+                batch_id=int(latest_batch.id),
+                status=str(latest_batch.status),
+                original_filename=latest_batch.original_filename,
+                created_at=latest_batch.created_at,
+                updated_at=latest_batch.updated_at,
+            )
+            if latest_batch
+            else None,
+            expressive_prior=_expressive_prior_from_row(expressive_prior),
+            review_archive=_review_archive_counts(
+                session=session,
+                project_id=int(project_id),
+                category_id=int(category_id),
+            ),
+            readiness=readiness,
+        )
+    finally:
+        session.close()
+
+
+@router.get(
+    "/projects/{project_id}/seo/categories/{category_id}/clusters",
+    response_model=SeoCategoryQueryClusterListResponse,
+)
+async def list_seo_category_query_clusters_endpoint(
+    project_id: int = Path(..., description="Project ID"),
+    category_id: int = Path(..., description="WB category/subject scope"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    membership: dict = Depends(allow_local_debug_read),
+):
+    del membership
+    session = SessionLocal()
+    try:
+        total = int(
+            session.scalar(
+                select(func.count()).select_from(SeoQueryCluster).where(
+                    SeoQueryCluster.project_id == int(project_id),
+                    SeoQueryCluster.category_id == int(category_id),
+                )
+            )
+            or 0
+        )
+        rows = session.scalars(
+            select(SeoQueryCluster)
+            .where(
+                SeoQueryCluster.project_id == int(project_id),
+                SeoQueryCluster.category_id == int(category_id),
+            )
+            .order_by(SeoQueryCluster.query_count.desc(), SeoQueryCluster.cluster_key.asc())
+            .offset(offset)
+            .limit(limit)
+        ).all()
+        cluster_ids = [int(row.id) for row in rows]
+        frequency_rows = []
+        if cluster_ids:
+            frequency_rows = session.execute(
+                select(
+                    SeoQueryClusterMembership.cluster_id,
+                    func.max(SeoQueryNormalized.frequency_total),
+                )
+                .select_from(SeoQueryClusterMembership)
+                .outerjoin(
+                    SeoQueryNormalized,
+                    (SeoQueryNormalized.project_id == SeoQueryClusterMembership.project_id)
+                    & (SeoQueryNormalized.category_id == SeoQueryClusterMembership.category_id)
+                    & (SeoQueryNormalized.normalized_query == SeoQueryClusterMembership.normalized_query_text),
+                )
+                .where(
+                    SeoQueryClusterMembership.project_id == int(project_id),
+                    SeoQueryClusterMembership.category_id == int(category_id),
+                    SeoQueryClusterMembership.cluster_id.in_(cluster_ids),
+                )
+                .group_by(SeoQueryClusterMembership.cluster_id)
+            ).all()
+        top_frequency_by_cluster_id = {
+            int(cluster_id): _decimal_to_response_string(ranking_value)
+            for cluster_id, ranking_value in frequency_rows
+        }
+        return SeoCategoryQueryClusterListResponse(
+            project_id=int(project_id),
+            category_id=int(category_id),
+            total=total,
+            limit=int(limit),
+            offset=int(offset),
+            items=[
+                _cluster_item_from_row(row, top_frequency_by_cluster_id=top_frequency_by_cluster_id)
+                for row in rows
+            ],
+        )
+    finally:
+        session.close()
+
+
+@router.get(
+    "/projects/{project_id}/seo/categories/{category_id}/clusters/{cluster_id}",
+    response_model=SeoCategoryQueryClusterDetailResponse,
+)
+async def get_seo_category_query_cluster_endpoint(
+    project_id: int = Path(..., description="Project ID"),
+    category_id: int = Path(..., description="WB category/subject scope"),
+    cluster_id: int = Path(..., description="SEO query cluster ID"),
+    limit: int = Query(100, ge=1, le=500),
+    membership: dict = Depends(allow_local_debug_read),
+):
+    del membership
+    session = SessionLocal()
+    try:
+        cluster = session.scalar(
+            select(SeoQueryCluster).where(
+                SeoQueryCluster.id == int(cluster_id),
+                SeoQueryCluster.project_id == int(project_id),
+                SeoQueryCluster.category_id == int(category_id),
+            )
+        )
+        if not cluster:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="SEO query cluster not found")
+        member_rows = session.execute(
+            select(
+                SeoQueryClusterMembership.normalized_query_text,
+                SeoQueryNormalized.display_query,
+                SeoQueryNormalized.frequency_total,
+                SeoQueryClusterMembership.ranking_value_used,
+                SeoQueryClusterMembership.query_type,
+                SeoQueryClusterMembership.membership_reason_code,
+            )
+            .outerjoin(
+                SeoQueryNormalized,
+                (SeoQueryNormalized.project_id == SeoQueryClusterMembership.project_id)
+                & (SeoQueryNormalized.category_id == SeoQueryClusterMembership.category_id)
+                & (SeoQueryNormalized.normalized_query == SeoQueryClusterMembership.normalized_query_text),
+            )
+            .where(
+                SeoQueryClusterMembership.project_id == int(project_id),
+                SeoQueryClusterMembership.category_id == int(category_id),
+                SeoQueryClusterMembership.cluster_id == int(cluster_id),
+            )
+            .order_by(
+                SeoQueryClusterMembership.ranking_value_used.desc(),
+                SeoQueryClusterMembership.normalized_query_text.asc(),
+            )
+            .limit(limit)
+        ).all()
+        top_frequency = _decimal_to_response_string(member_rows[0].frequency_total) if member_rows else None
+        return SeoCategoryQueryClusterDetailResponse(
+            project_id=int(project_id),
+            category_id=int(category_id),
+            cluster=_cluster_item_from_row(
+                cluster,
+                top_frequency_by_cluster_id={int(cluster.id): top_frequency} if top_frequency else {},
+            ),
+            queries=[
+                SeoCategoryQueryClusterMemberItem(
+                    normalized_query_text=str(normalized_query_text),
+                    display_query=display_query,
+                    frequency_total=_decimal_to_response_string(frequency_total),
+                    ranking_value_used=_decimal_to_response_string(ranking_value_used),
+                    query_type=str(query_type),
+                    membership_reason_code=str(membership_reason_code),
+                )
+                for (
+                    normalized_query_text,
+                    display_query,
+                    frequency_total,
+                    ranking_value_used,
+                    query_type,
+                    membership_reason_code,
+                ) in member_rows
+            ],
+        )
+    finally:
+        session.close()
 
 
 @router.post(

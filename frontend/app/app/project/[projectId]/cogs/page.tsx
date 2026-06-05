@@ -491,7 +491,7 @@ export default function CogsPage() {
   availableSources.forEach((src) => { sourceByCode[src.code] = src.title })
 
   return (
-    <div className={[s.root, 'container'].join(' ')}>
+    <div className={[s.root, 'container', 'ec-settings-page'].join(' ')}>
       <h1>Настройки себестоимости</h1>
       <Link href={`/app/project/${projectId}/settings`} className={s.linkAsButton}>
         ← Назад к настройкам

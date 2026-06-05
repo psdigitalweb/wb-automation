@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { apiGet, apiPatch, apiPost, apiPut, ApiError } from '../../../../../lib/apiClient'
 import { User } from '../../../../../lib/auth'
+import styles from './marketplaces.module.css'
 
 interface Marketplace {
   id: number
@@ -35,6 +36,13 @@ interface SystemMarketplacePublicStatus {
   is_globally_enabled: boolean
   is_visible: boolean
   sort_order: number
+}
+
+function marketplaceCodeLabel(code: string): string {
+  if (code === 'wildberries') return 'WB'
+  if (code === 'ozon') return 'Ozon'
+  if (code === 'ym' || code === 'yandex_market') return 'YM'
+  return code
 }
 
 export default function ProjectMarketplacesPage() {
@@ -307,24 +315,27 @@ export default function ProjectMarketplacesPage() {
   const projectMpMap = new Map(projectMarketplaces.map(pm => [pm.marketplace_id, pm]))
 
   return (
-    <div className="container">
-      <h1>Marketplaces</h1>
+    <div className={styles.page}>
+      <header className={styles.header}>
+        <div>
+          <div className={styles.eyebrow}>Интеграции</div>
+          <h1>Подключение МП</h1>
+          <p>Управление подключениями маркетплейсов для проекта.</p>
+        </div>
+        {systemStatusLoading ? <span className={styles.mutedBadge}>проверяем доступность</span> : null}
+      </header>
 
-      <div className="card">
-        <h2>Available Marketplaces</h2>
+      <section className={styles.panel}>
+        <div className={styles.panelHeader}>
+          <div>
+            <h2>Маркетплейсы</h2>
+            <p>Подключайте только источники, которые реально используются в проекте.</p>
+          </div>
+        </div>
         {loading ? (
-          <p>Loading...</p>
+          <div className={styles.emptyState}>Загрузка...</div>
         ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Description</th>
-                <th>Status</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
+          <div className={styles.marketplaceGrid}>
               {allMarketplaces.map((mp) => {
                 const projectMp = projectMpMap.get(mp.id)
                 const isEnabled = projectMp?.is_enabled || false
@@ -359,24 +370,24 @@ export default function ProjectMarketplacesPage() {
                   })
                 }
                 
-                let statusText = 'Disabled'
-                let statusColor = '#6c757d'
+                let statusText = 'Отключено'
+                let statusTone: 'success' | 'warning' | 'danger' | 'neutral' = 'neutral'
                 let statusHint = ''
                 
                 // Check global status
                 if (!isGloballyEnabled) {
-                  statusText = 'Disabled (System)'
-                  statusColor = '#dc3545'
+                  statusText = 'Отключено системой'
+                  statusTone = 'danger'
                   statusHint = 'Отключено администратором системы'
                 } else if (isWB && wbConnected) {
-                  statusText = 'Connected ✅'
-                  statusColor = '#28a745'
+                  statusText = 'Подключено'
+                  statusTone = 'success'
                 } else if (isWB && wbEnabled) {
-                  statusText = 'Enabled'
-                  statusColor = '#ffc107'
+                  statusText = 'Включено'
+                  statusTone = 'warning'
                 } else if (isEnabled) {
-                  statusText = 'Enabled'
-                  statusColor = '#28a745'
+                  statusText = 'Включено'
+                  statusTone = 'success'
                 }
                 
                 // If globally hidden but connected, add hint
@@ -385,56 +396,46 @@ export default function ProjectMarketplacesPage() {
                 }
                 
                 return (
-                  <React.Fragment key={mp.id}>
-                    <tr>
-                      <td><strong>{mp.name}</strong></td>
-                      <td>{mp.description || '-'}</td>
-                      <td>
-                        <span style={{ 
-                          color: statusColor,
-                          fontWeight: 'bold'
-                        }}>
-                          {statusText}
-                        </span>
-                        {statusHint && (
-                          <div style={{ 
-                            fontSize: '12px', 
-                            color: '#666', 
-                            marginTop: '4px',
-                            fontStyle: 'italic'
-                          }}>
-                            {statusHint}
-                          </div>
-                        )}
-                      </td>
-                      <td>
+                  <article key={mp.id} className={styles.marketplaceCard}>
+                    <div className={styles.cardTop}>
+                      <div className={styles.marketplaceIdentity}>
+                        <span className={styles.marketplaceIcon}>{marketplaceCodeLabel(mp.code).slice(0, 2)}</span>
+                        <div>
+                          <h3>{mp.name}</h3>
+                          <p>{mp.description || 'Описание не задано'}</p>
+                        </div>
+                      </div>
+                      <span className={`${styles.statusBadge} ${styles[statusTone]}`}>
+                        {statusText}
+                      </span>
+                    </div>
+                    {statusHint ? <div className={styles.hint}>{statusHint}</div> : null}
+                    <div className={styles.actions}>
                         <button
+                          type="button"
+                          className={(isWB ? wbEnabled : isEnabled) ? styles.dangerButton : styles.primaryButton}
                           onClick={() => handleToggle(mp.id, mp.code, isWB ? wbEnabled : isEnabled)}
                           disabled={wbLoading || !isGloballyEnabled}
-                          style={{ 
-                            backgroundColor: (isWB ? wbEnabled : isEnabled) ? '#dc3545' : '#28a745',
-                            marginRight: '10px',
-                            opacity: !isGloballyEnabled ? 0.5 : 1,
-                            cursor: !isGloballyEnabled ? 'not-allowed' : 'pointer'
-                          }}
                           title={!isGloballyEnabled ? 'Отключено администратором системы' : ''}
                         >
-                          {wbLoading ? 'Loading...' : ((isWB ? wbEnabled : isEnabled) ? 'Disable' : 'Enable')}
+                          {wbLoading ? 'Загрузка...' : ((isWB ? wbEnabled : isEnabled) ? 'Отключить' : 'Включить')}
                         </button>
                         {isWB && wbEnabled && (
                           <>
                             <button
+                              type="button"
+                              className={styles.secondaryButton}
                               onClick={() => {
                                 console.log('[WB_DEBUG] Configure button clicked', { wbShowForm, wbEnabled, wbConnected })
                                 setWbShowForm(!wbShowForm)
                               }}
-                              style={{ backgroundColor: '#0070f3', marginRight: '10px' }}
                             >
-                              {wbShowForm ? 'Hide' : 'Configure'}
+                              {wbShowForm ? 'Скрыть' : 'Настроить'}
                             </button>
                             <button
+                              type="button"
+                              className={styles.secondaryButton}
                               onClick={() => handleConfigure('wildberries')}
-                              style={{ backgroundColor: '#6c757d', marginRight: '10px' }}
                               title="Настройки маркетплейса: витринные цены, пагинация и др."
                             >
                               Настройки
@@ -443,36 +444,28 @@ export default function ProjectMarketplacesPage() {
                         )}
                         {!isWB && isEnabled && (
                           <button
+                            type="button"
+                            className={styles.secondaryButton}
                             onClick={() => handleConfigure(mp.code)}
-                            style={{ backgroundColor: '#0070f3' }}
                           >
-                            Configure
+                            Настроить
                           </button>
                         )}
-                      </td>
-                    </tr>
+                    </div>
                     {isWB && wbShowForm && (
-                      <tr>
-                        <td colSpan={4} style={{ padding: '20px', backgroundColor: '#f8f9fa' }}>
-                          <div style={{ maxWidth: '600px' }}>
-                            <h3 style={{ marginTop: 0, marginBottom: '15px' }}>Configure Wildberries</h3>
+                      <div className={styles.inlineForm}>
+                        <h3>Настройка Wildberries</h3>
                             
                             {wbError && (
-                              <div style={{ 
-                                padding: '10px', 
-                                marginBottom: '15px', 
-                                backgroundColor: '#f8d7da', 
-                                color: '#721c24', 
-                                borderRadius: '4px'
-                              }}>
-                                <strong>Error:</strong> {wbError}
+                              <div className={styles.errorBox}>
+                                <strong>Ошибка:</strong> {wbError}
                               </div>
                             )}
                             
-                            <div style={{ marginBottom: '15px' }}>
-                              <label htmlFor="wb-token" style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
-                                WB Token
-                              </label>
+                            <label className={styles.field} htmlFor="wb-token">
+                              <span>
+                                WB token
+                              </span>
                               <input
                                 id="wb-token"
                                 type="password"
@@ -480,58 +473,64 @@ export default function ProjectMarketplacesPage() {
                                 onChange={(e) => setWbToken(e.target.value)}
                                 placeholder={wbStatus?.credentials?.api_token ? 'Оставьте пустым, чтобы не менять' : 'Введите API токен Wildberries'}
                                 disabled={wbLoading}
-                                style={{ width: '100%', padding: '8px', fontSize: '14px' }}
                               />
-                            </div>
+                            </label>
                             
-                            <p style={{ fontSize: 13, color: '#666', marginBottom: 15 }}>
+                            <p>
                               Бренды настраиваются в <strong>Настройки</strong> маркетплейса (кнопка «Настройки»).
                             </p>
-                            <div style={{ display: 'flex', gap: '10px' }}>
+                            <div className={styles.actions}>
                               <button
+                                type="button"
+                                className={styles.primaryButton}
                                 onClick={handleWBSave}
                                 disabled={wbLoading || (!wbToken.trim() && !wbStatus?.credentials?.api_token)}
-                                style={{ backgroundColor: '#007bff', color: 'white', padding: '10px 20px' }}
                               >
-                                {wbLoading ? 'Saving...' : 'Save'}
+                                {wbLoading ? 'Сохранение...' : 'Сохранить'}
                               </button>
                               <button
+                                type="button"
+                                className={styles.secondaryButton}
                                 onClick={() => setWbShowForm(false)}
                                 disabled={wbLoading}
-                                style={{ backgroundColor: '#6c757d', color: 'white', padding: '10px 20px' }}
                               >
-                                Cancel
+                                Отмена
                               </button>
                             </div>
-                          </div>
-                        </td>
-                      </tr>
+                      </div>
                     )}
-                  </React.Fragment>
+                  </article>
                 )
               })}
-            </tbody>
-          </table>
+          </div>
         )}
-      </div>
+      </section>
 
       {isAdmin && (
-        <div className="card" style={{ marginTop: '24px', borderTop: '2px dashed #ccc' }}>
-          <h2>🔒 Admin (глобально, для всех проектов)</h2>
-          <h3>Wildberries — Tariffs</h3>
+        <section className={styles.panel}>
+          <div className={styles.panelHeader}>
+            <div>
+              <div className={styles.eyebrow}>Admin</div>
+              <h2>Wildberries — Tariffs</h2>
+              <p>Глобальные тарифы используются всеми проектами с подключённым Wildberries.</p>
+            </div>
+          </div>
           {wbTariffsLoading ? (
-            <p>Загрузка статуса тарифов...</p>
+            <div className={styles.emptyState}>Загрузка статуса тарифов...</div>
           ) : wbTariffsError ? (
-            <p style={{ color: 'red' }}>{wbTariffsError}</p>
+            <div className={styles.errorBox}>{wbTariffsError}</div>
           ) : (
-            <p>
-              <strong>Последнее обновление (любой тип):</strong>{' '}
-              {wbTariffsStatus?.latest_fetched_at || 'нет данных'}
-            </p>
+            <dl className={styles.metaGrid}>
+              <div>
+                <dt>Последнее обновление</dt>
+                <dd>{wbTariffsStatus?.latest_fetched_at || 'нет данных'}</dd>
+              </div>
+            </dl>
           )}
 
-          <div className="form-group" style={{ maxWidth: '220px', marginTop: '8px' }}>
-            <label>Days ahead (0–30)</label>
+          <div className={styles.adminControls}>
+            <label className={styles.field}>
+              <span>Days ahead (0–30)</span>
             <input
               type="number"
               min={0}
@@ -539,10 +538,12 @@ export default function ProjectMarketplacesPage() {
               value={wbTariffsDaysAhead}
               onChange={(e) => setWbTariffsDaysAhead(Number(e.target.value))}
             />
-          </div>
+            </label>
 
-          <div style={{ marginTop: '12px', display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <div className={styles.actions}>
             <button
+              type="button"
+              className={styles.primaryButton}
               onClick={handleWBTariffsIngest}
               disabled={wbTariffsIngesting || wbTariffsCooldown}
             >
@@ -552,19 +553,13 @@ export default function ProjectMarketplacesPage() {
                 ? 'Подождите...'
                 : 'Обновить тарифы WB'}
             </button>
-            <button onClick={loadWBTariffsStatus} disabled={wbTariffsLoading}>
+            <button type="button" className={styles.secondaryButton} onClick={loadWBTariffsStatus} disabled={wbTariffsLoading}>
               {wbTariffsLoading ? 'Обновляем статус...' : 'Обновить статус'}
             </button>
+            </div>
           </div>
-
-          {wbTariffsStatus && (
-            <p style={{ marginTop: '8px', color: '#555' }}>
-              Admin (глобально): эти тарифы используются всеми проектами с подключённым Wildberries.
-            </p>
-          )}
-        </div>
+        </section>
       )}
     </div>
   )
 }
-

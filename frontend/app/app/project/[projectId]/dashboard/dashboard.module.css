@@ -1,0 +1,304 @@
+.dashboardPage {
+  --dashboard-surface: var(--color-surface, #fff);
+  --dashboard-surface-2: var(--color-surface-2, #f8f9fa);
+  --dashboard-surface-3: var(--color-surface-3, #eef1f4);
+  --dashboard-border: var(--color-border, rgba(31, 41, 55, 0.15));
+  --dashboard-text: var(--color-text, #222);
+  --dashboard-text-2: var(--color-text-2, #555);
+  --dashboard-text-3: var(--color-text-3, #777);
+  --dashboard-accent: var(--color-accent, #0f6f46);
+  --dashboard-accent-soft: var(--color-accent-soft, #e8f6ee);
+  --dashboard-accent-text: var(--color-accent-text, #0f6f46);
+  --dashboard-info-bg: var(--color-info-bg, #e8f3ff);
+  --dashboard-info: var(--color-info, #0969da);
+  --dashboard-warning-bg: var(--color-warning-bg, #fff4d6);
+  --dashboard-warning: var(--color-warning, #9a6700);
+  --dashboard-shadow: var(--shadow-sm, 0 1px 2px rgba(15, 23, 42, 0.08));
+  width: min(1280px, 100%);
+  margin: 0 auto;
+  padding: 4px 0 32px;
+  color: var(--dashboard-text);
+}
+
+.header {
+  margin-bottom: 18px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.header h1 {
+  margin: 4px 0 0;
+  color: var(--dashboard-text);
+  font-size: 28px;
+  font-weight: 650;
+  letter-spacing: 0;
+  line-height: 1.12;
+}
+
+.header p {
+  max-width: 720px;
+  margin: 8px 0 0;
+  color: var(--dashboard-text-2);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.eyebrow {
+  color: var(--dashboard-text-3);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1.3;
+  text-transform: uppercase;
+}
+
+.marketplaceChips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.marketplaceChip,
+.emptyChip {
+  min-height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  border: 0.5px solid var(--dashboard-border);
+  background: var(--dashboard-surface);
+  color: var(--dashboard-text-2);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.wbChip {
+  background: var(--color-mp-wb-bg, #fbedf7);
+  color: var(--color-mp-wb, #8c3f80);
+}
+
+.emptyChip {
+  background: var(--dashboard-surface-2);
+  color: var(--dashboard-text-3);
+}
+
+.notice,
+.panel {
+  border: 0.5px solid var(--dashboard-border);
+  border-radius: 10px;
+  background: var(--dashboard-surface);
+  box-shadow: var(--dashboard-shadow);
+}
+
+.notice {
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--dashboard-text-2);
+  font-size: 13px;
+}
+
+.notice strong {
+  color: var(--dashboard-text);
+  font-weight: 650;
+}
+
+.notice a {
+  margin-left: auto;
+  color: var(--dashboard-accent-text);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.panel {
+  padding: 20px;
+}
+
+.panelHeader {
+  margin-bottom: 18px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.panelHeader h2 {
+  margin: 4px 0 0;
+  color: var(--dashboard-text);
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: 0;
+  line-height: 1.15;
+}
+
+.panelHeader p {
+  margin: 6px 0 0;
+  color: var(--dashboard-text-2);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.secondaryLink,
+.cardLink {
+  min-height: 28px;
+  padding: 0 9px;
+  border: 0.5px solid var(--dashboard-border);
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--dashboard-surface);
+  color: var(--dashboard-text);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  box-shadow: var(--shadow-xs, none);
+  white-space: nowrap;
+}
+
+.secondaryLink:hover,
+.cardLink:hover {
+  background: var(--dashboard-surface-2);
+}
+
+.metricGrid,
+.skeletonGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.metricCard {
+  min-height: 158px;
+  padding: 14px;
+  border: 0.5px solid var(--dashboard-border);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  background: var(--dashboard-surface);
+}
+
+.metricLabel {
+  color: var(--dashboard-text-2);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.metricValue {
+  margin-top: 8px;
+  color: var(--dashboard-text);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 24px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+  line-height: 1.1;
+}
+
+.metricHint {
+  margin-top: 8px;
+  color: var(--dashboard-text-2);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.metricSource {
+  margin-top: auto;
+  padding-top: 8px;
+  color: var(--dashboard-text-3);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+}
+
+.splitMetric {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.splitMetric div {
+  min-width: 0;
+  padding: 10px;
+  border-radius: 6px;
+  background: var(--dashboard-surface-2);
+}
+
+.splitMetric span {
+  display: block;
+  color: var(--dashboard-text-3);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.splitMetric strong {
+  margin-top: 4px;
+  display: block;
+  color: var(--dashboard-text);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+  line-height: 1.1;
+}
+
+.cardLink {
+  align-self: flex-start;
+  margin-top: auto;
+}
+
+.skeletonGrid div {
+  height: 158px;
+  border-radius: 8px;
+  background: linear-gradient(90deg, var(--dashboard-surface-2), var(--dashboard-surface-3), var(--dashboard-surface-2));
+}
+
+@media (max-width: 1180px) {
+  .metricGrid,
+  .skeletonGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .dashboardPage {
+    padding-top: 0;
+  }
+
+  .header,
+  .panelHeader,
+  .notice {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .header h1 {
+    font-size: 24px;
+  }
+
+  .marketplaceChips {
+    justify-content: flex-start;
+  }
+
+  .notice a {
+    margin-left: 0;
+  }
+
+  .panel {
+    padding: 16px;
+  }
+
+  .metricGrid,
+  .skeletonGrid {
+    grid-template-columns: 1fr;
+  }
+}

@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>EcomCore · Проекты</title>
+  <style>
+    :root {
+      --color-bg: oklch(98.5% 0.006 250);
+      --color-surface: oklch(100% 0 0);
+      --color-surface-2: oklch(97% 0.008 250);
+      --color-surface-3: oklch(94% 0.012 250);
+      --color-border: oklch(22% 0.03 260 / 0.15);
+      --color-border-strong: oklch(22% 0.03 260 / 0.24);
+      --color-text: oklch(22% 0.03 260);
+      --color-text-2: oklch(42% 0.02 260);
+      --color-text-3: oklch(58% 0.015 260);
+      --color-accent: oklch(38% 0.10 155);
+      --color-accent-hover: oklch(32% 0.11 155);
+      --color-accent-soft: oklch(95% 0.04 155);
+      --color-accent-text: oklch(36% 0.11 155);
+      --color-info: oklch(52% 0.18 245);
+      --color-info-bg: oklch(95% 0.04 245);
+      --color-warning: oklch(68% 0.16 70);
+      --color-warning-bg: oklch(96% 0.06 75);
+      --color-danger: oklch(56% 0.20 22);
+      --color-danger-bg: oklch(96% 0.04 22);
+      --font-sans: "Geist", "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --font-mono: "Geist Mono", ui-monospace, "SFMono-Regular", monospace;
+      --shadow-xs: 0 1px 0 0 oklch(20% 0.01 75 / 0.04);
+      --shadow-sm: 0 1px 2px oklch(20% 0.01 75 / 0.05), 0 1px 0 oklch(20% 0.01 75 / 0.03);
+      --radius-sm: 6px;
+      --radius-lg: 10px;
+      --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      font-family: var(--font-sans);
+      font-size: 13px;
+      line-height: 1.5;
+      color: var(--color-text);
+      background: var(--color-bg);
+      font-feature-settings: "cv11", "ss01", "ss03";
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+
+    button {
+      border: 0;
+      background: none;
+      font: inherit;
+      color: inherit;
+      cursor: pointer;
+    }
+
+    .topbar {
+      height: 52px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 0 20px;
+      background: var(--color-surface);
+      border-bottom: 0.5px solid var(--color-border);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+
+    .logo {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      background: var(--color-accent-soft);
+      color: var(--color-accent-text);
+      font-weight: 700;
+      font-size: 14px;
+      letter-spacing: -0.02em;
+      flex: 0 0 auto;
+    }
+
+    .userbar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: var(--color-text-2);
+      white-space: nowrap;
+    }
+
+    .btn {
+      height: 32px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 0 10px;
+      border-radius: var(--radius-sm);
+      font-weight: 500;
+      border: 0.5px solid transparent;
+      transition: background 120ms var(--ease-out), border-color 120ms var(--ease-out), color 120ms var(--ease-out), box-shadow 120ms var(--ease-out);
+      white-space: nowrap;
+    }
+
+    .btn-secondary {
+      background: var(--color-surface);
+      color: var(--color-text);
+      border-color: var(--color-border);
+      box-shadow: var(--shadow-xs);
+    }
+
+    .btn-secondary:hover { background: var(--color-surface-2); }
+
+    .btn-danger {
+      background: var(--color-danger);
+      color: white;
+      border-color: transparent;
+    }
+
+    .btn-danger:hover { filter: brightness(0.96); }
+
+    .page {
+      width: min(900px, calc(100vw - 40px));
+      margin: 0 auto;
+      padding: 28px 0 48px;
+    }
+
+    .page-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 22px;
+      line-height: 1.1;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+    }
+
+    .projects {
+      display: grid;
+      gap: 12px;
+    }
+
+    .project-card {
+      width: 100%;
+      display: block;
+      text-align: left;
+      padding: 18px 20px;
+      border-radius: var(--radius-lg);
+      border: 0.5px solid var(--color-border);
+      background: var(--color-surface);
+      box-shadow: var(--shadow-sm);
+      transition: background 120ms var(--ease-out), border-color 120ms var(--ease-out), transform 120ms var(--ease-out), box-shadow 120ms var(--ease-out);
+    }
+
+    .project-card:hover {
+      background: color-mix(in oklab, var(--color-surface), var(--color-accent-soft) 20%);
+      border-color: var(--color-border-strong);
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px oklch(20% 0.01 75 / 0.06), 0 1px 0 oklch(20% 0.01 75 / 0.04);
+    }
+
+    .project-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 18px;
+    }
+
+    .project-title {
+      font-size: 16px;
+      line-height: 1.25;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      color: var(--color-text);
+      min-width: 0;
+    }
+
+    .chips {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 6px;
+      flex-wrap: wrap;
+      flex: 0 0 auto;
+    }
+
+    .chip {
+      height: 20px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0 7px;
+      border-radius: 999px;
+      border: 0.5px solid var(--color-border);
+      background: var(--color-surface);
+      color: var(--color-text-2);
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: 0.01em;
+    }
+
+    .chip.wb { color: var(--color-accent-text); background: var(--color-accent-soft); border-color: transparent; }
+    .chip.ozon { color: var(--color-info); background: var(--color-info-bg); border-color: transparent; }
+    .chip.ym { color: oklch(45% 0.12 75); background: var(--color-warning-bg); border-color: transparent; }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+
+    .metric-label {
+      color: var(--color-text-3);
+      font-size: 11px;
+      font-weight: 500;
+      margin-bottom: 4px;
+    }
+
+    .metric-value {
+      color: var(--color-text);
+      font-size: 20px;
+      line-height: 1;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .metric-value.signal {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 28px;
+      height: 24px;
+      padding: 0 8px;
+      border-radius: 999px;
+      color: oklch(42% 0.14 45);
+      background: oklch(95% 0.055 55);
+      font-size: 15px;
+    }
+
+    .metric-value.signal.zero {
+      min-width: 0;
+      height: auto;
+      padding: 0;
+      color: var(--color-text);
+      background: transparent;
+      font-size: 20px;
+    }
+
+    .updated {
+      color: var(--color-text-3);
+      font-size: 12px;
+    }
+
+    .updated span { color: var(--color-text-2); }
+
+    @media (max-width: 720px) {
+      .topbar { padding: 0 12px; }
+      .brand span { display: none; }
+      .page { width: calc(100vw - 24px); padding-top: 20px; }
+      .page-head, .project-top { align-items: flex-start; flex-direction: column; }
+      .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .project-card { padding: 16px; }
+    }
+  </style>
+</head>
+<body data-theme="light" data-density="compact">
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">E</div>
+      <span>E-com Core</span>
+    </div>
+    <div class="userbar">
+      <span>ps_admin@local.dev</span>
+      <button class="btn btn-danger">Выйти</button>
+    </div>
+  </header>
+
+  <main class="page">
+    <div class="page-head">
+      <h1>Проекты</h1>
+      <button class="btn btn-secondary">+ Новый проект</button>
+    </div>
+
+    <section class="projects" aria-label="Список проектов">
+      <button class="project-card">
+        <div class="project-top">
+          <div class="project-title">ИП Сидорова / Fashion Kids</div>
+          <div class="chips"><span class="chip wb">WB</span><span class="chip ozon">Ozon</span><span class="chip ym">YM</span></div>
+        </div>
+        <div class="metrics">
+          <div><div class="metric-label">Выручка 7д</div><div class="metric-value">3.3М ₽</div></div>
+          <div><div class="metric-label">Заказы 7д</div><div class="metric-value">1 642</div></div>
+          <div><div class="metric-label">Сигналов</div><div class="metric-value signal">4</div></div>
+          <div><div class="metric-label">Карточек</div><div class="metric-value">1 159</div></div>
+        </div>
+        <div class="updated">Обновлено: <span>13.05.2026</span></div>
+      </button>
+
+      <button class="project-card">
+        <div class="project-top">
+          <div class="project-title">Zakka</div>
+          <div class="chips"><span class="chip wb">WB</span></div>
+        </div>
+        <div class="metrics">
+          <div><div class="metric-label">Выручка 7д</div><div class="metric-value">890К ₽</div></div>
+          <div><div class="metric-label">Заказы 7д</div><div class="metric-value">412</div></div>
+          <div><div class="metric-label">Сигналов</div><div class="metric-value signal">2</div></div>
+          <div><div class="metric-label">Карточек</div><div class="metric-value">2 292</div></div>
+        </div>
+        <div class="updated">Обновлено: <span>13.05.2026</span></div>
+      </button>
+
+      <button class="project-card">
+        <div class="project-top">
+          <div class="project-title">ООО "СпортТовары"</div>
+          <div class="chips"><span class="chip wb">WB</span><span class="chip ozon">Ozon</span></div>
+        </div>
+        <div class="metrics">
+          <div><div class="metric-label">Выручка 7д</div><div class="metric-value">5.1М ₽</div></div>
+          <div><div class="metric-label">Заказы 7д</div><div class="metric-value">3 870</div></div>
+          <div><div class="metric-label">Сигналов</div><div class="metric-value signal zero">0</div></div>
+          <div><div class="metric-label">Карточек</div><div class="metric-value">540</div></div>
+        </div>
+        <div class="updated">Обновлено: <span>12.05.2026</span></div>
+      </button>
+
+      <button class="project-card">
+        <div class="project-top">
+          <div class="project-title">BabyShop Online</div>
+          <div class="chips"><span class="chip ozon">Ozon</span></div>
+        </div>
+        <div class="metrics">
+          <div><div class="metric-label">Выручка 7д</div><div class="metric-value">1.2М ₽</div></div>
+          <div><div class="metric-label">Заказы 7д</div><div class="metric-value">890</div></div>
+          <div><div class="metric-label">Сигналов</div><div class="metric-value signal">7</div></div>
+          <div><div class="metric-label">Карточек</div><div class="metric-value">310</div></div>
+        </div>
+        <div class="updated">Обновлено: <span>13.05.2026</span></div>
+      </button>
+
+      <button class="project-card">
+        <div class="project-top">
+          <div class="project-title">Мастерская подарков</div>
+          <div class="chips"><span class="chip wb">WB</span><span class="chip ozon">Ozon</span><span class="chip ym">YM</span></div>
+        </div>
+        <div class="metrics">
+          <div><div class="metric-label">Выручка 7д</div><div class="metric-value">420К ₽</div></div>
+          <div><div class="metric-label">Заказы 7д</div><div class="metric-value">215</div></div>
+          <div><div class="metric-label">Сигналов</div><div class="metric-value signal">1</div></div>
+          <div><div class="metric-label">Карточек</div><div class="metric-value">87</div></div>
+        </div>
+        <div class="updated">Обновлено: <span>11.05.2026</span></div>
+      </button>
+    </section>
+  </main>
+</body>
+</html>

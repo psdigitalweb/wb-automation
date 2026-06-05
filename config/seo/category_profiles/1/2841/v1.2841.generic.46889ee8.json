@@ -1,0 +1,829 @@
+{
+  "schema_version": "category_profile_v1",
+  "subject": {
+    "primary": "ланчбокс",
+    "primary_aliases": [
+      "ланчбокс",
+      "ланч",
+      "бокс"
+    ],
+    "related_but_different": [],
+    "detection_hints": {
+      "token_prefixes": [
+        "ланчбокс",
+        "ланч",
+        "бокс"
+      ],
+      "negative_token_prefixes": []
+    }
+  },
+  "product_type_aliases": {
+    "ланчбокс": {
+      "match_any_prefix": [
+        "ланчбокс",
+        "ланч",
+        "бокс"
+      ],
+      "score_bonus": 0.22
+    }
+  },
+  "constraints": {
+    "derive_from_query_tokens": [],
+    "derive_from_sku_meaning": []
+  },
+  "hard_conflicts": [],
+  "scoring": {
+    "bucket_caps": {
+      "broad": 500,
+      "primary": 100,
+      "secondary": 300
+    },
+    "bucket_cutoffs": {
+      "broad": 0.15,
+      "primary": 0.6,
+      "secondary": 0.35
+    },
+    "materials_relevant": [],
+    "weights": {
+      "attribute_overlap": 0.08,
+      "audience_overlap": 0.06,
+      "expressive_overlap": 0.08,
+      "material_mismatch": -0.25,
+      "negative_audience": -1.0,
+      "occasion_overlap": 0.04,
+      "product_type_compat": 0.16,
+      "product_type_match": 0.22,
+      "product_type_weak": -0.18,
+      "use_case_overlap": 0.1
+    }
+  },
+  "user_bucket_labels": {
+    "primary": "Лучшие",
+    "secondary": "Подходящие",
+    "broad": "Слишком общие",
+    "rejected": "Не подходят"
+  },
+  "sku_guards": {
+    "characteristic_mappings": [],
+    "functional_token_mappings": []
+  },
+  "query_guards": {
+    "product_type_detection": [
+      {
+        "when_contains": "ланчбокс",
+        "set_product_type": "ланчбокс",
+        "unless_set": true
+      },
+      {
+        "when_contains": "бокс",
+        "set_product_type": "ланчбокс",
+        "unless_set": true
+      },
+      {
+        "when_contains": "ланч",
+        "set_product_type": "ланчбокс",
+        "unless_set": true
+      }
+    ],
+    "required_atoms": [],
+    "excluded_atoms": []
+  },
+  "generated_by": {
+    "method": "generic_heuristic_profile_builder_v1",
+    "llm_model": null,
+    "prompt_version": null,
+    "evidence_hash": "sha256:46889ee801842d17f377216bfd01e0095160e0928a40d0125e183dd1c217ae8d",
+    "generated_at": "2026-04-25T12:49:21Z",
+    "corpus_signals": {
+      "queries_sampled": 1596,
+      "distinct_queries": 1596,
+      "top_queries_sampled": 200,
+      "product_type_axes_count": 30,
+      "economic_field_names_present_count": 0,
+      "csv_subject_match_share": 1.0
+    },
+    "builder_diagnostics": {
+      "builder_method": "generic_heuristic_profile_builder_v1",
+      "input_evidence_hash": "sha256:46889ee801842d17f377216bfd01e0095160e0928a40d0125e183dd1c217ae8d",
+      "inputs_used": [
+        "axes.product_type_axes",
+        "axes.synonym_groups",
+        "query_token_counts",
+        "corpus.query_count",
+        "corpus.distinct_query_count"
+      ],
+      "heuristics_applied": [
+        "primary_subject_from_hint_or_product_type_axis_frequency",
+        "primary_subject_prefers_specific_product_axis_over_component_axis",
+        "aliases_from_axes_synonyms_and_query_tokens",
+        "related_subjects_from_product_type_axes_with_generic_product_evidence",
+        "weak_descriptor_use_case_audience_axes_skipped_from_related_subjects",
+        "detection_prefixes_from_aliases",
+        "default_scoring_from_category_profile_v1_contract"
+      ],
+      "primary_subject": "ланчбокс",
+      "primary_subject_source": "product_type_axes_specific_product_type",
+      "product_type_axes_considered": [
+        "ланч",
+        "ланчбокс",
+        "бокс",
+        "детский",
+        "контейнер",
+        "набор",
+        "отделения",
+        "небольшой",
+        "школу",
+        "приборами",
+        "контейнеры",
+        "боксы",
+        "объем",
+        "термо",
+        "мини",
+        "электрический",
+        "garden",
+        "sweet",
+        "yummy",
+        "zakka",
+        "бенто",
+        "беспроводной",
+        "детские",
+        "контейнеров",
+        "ланча",
+        "обедаю",
+        "отделениями",
+        "покушать",
+        "положите",
+        "супница"
+      ],
+      "related_subjects_count": 0,
+      "related_product_type_axes": {
+        "accepted": [],
+        "skipped": [
+          {
+            "axis": "детский",
+            "status": "skipped",
+            "reason": "descriptor_token_shape",
+            "evidence": {
+              "token_count": 15843,
+              "direct_phrase": true,
+              "direct_phrase_count": 8,
+              "cooccurs_with_primary_count": 8,
+              "standalone_phrase_count": 0,
+              "cooccurs_with_primary_share": 1.0,
+              "synonym_group_size": 1,
+              "weak_axis_groups": [],
+              "single_token_descriptor_shape": true
+            }
+          },
+          {
+            "axis": "контейнер",
+            "status": "skipped",
+            "reason": "weak_axis_group_without_product_evidence",
+            "evidence": {
+              "token_count": 6326,
+              "direct_phrase": true,
+              "direct_phrase_count": 11,
+              "cooccurs_with_primary_count": 10,
+              "standalone_phrase_count": 1,
+              "cooccurs_with_primary_share": 0.9091,
+              "synonym_group_size": 1,
+              "weak_axis_groups": [
+                "attribute_axes"
+              ],
+              "single_token_descriptor_shape": false
+            }
+          },
+          {
+            "axis": "набор",
+            "status": "skipped",
+            "reason": "cooccurring_modifier_without_standalone_product_evidence",
+            "evidence": {
+              "token_count": 6151,
+              "direct_phrase": true,
+              "direct_phrase_count": 4,
+              "cooccurs_with_primary_count": 4,
+              "standalone_phrase_count": 0,
+              "cooccurs_with_primary_share": 1.0,
+              "synonym_group_size": 1,
+              "weak_axis_groups": [],
+              "single_token_descriptor_shape": false
+            }
+          },
+          {
+            "axis": "отделения",
+            "status": "skipped",
+            "reason": "descriptor_token_shape",
+            "evidence": {
+              "token_count": 0,
+              "direct_phrase": false,
+              "direct_phrase_count": 0,
+              "cooccurs_with_primary_count": 0,
+              "standalone_phrase_count": 0,
+              "cooccurs_with_primary_share": 0.0,
+              "synonym_group_size": 1,
+              "weak_axis_groups": [],
+              "single_token_descriptor_shape": true
+            }
+          },
+          {
+            "axis": "небольшой",
+            "status": "skipped",
+            "reason": "descriptor_token_shape",
+            "evidence": {
+              "token_count": 896,
+              "direct_phrase": true,
+              "direct_phrase_count": 1,
+              "cooccurs_with_primary_count": 1,
+              "standalone_phrase_count": 0,
+              "cooccurs_with_primary_share": 1.0,
+              "synonym_group_size": 1,
+              "weak_axis_groups": [],
+              "single_token_descriptor_shape": true
+            }
+          },
+          {
+            "axis": "школу",
+            "status": "skipped",
+            "reason": "cooccurring_modifier_without_standalone_product_evidence",
+            "evidence": {
+              "token_count": 102248,
+              "direct_phrase": true,
+              "direct_phrase_count": 18,
+              "cooccurs_with_primary_count": 18,
+              "standalone_phrase_count": 0,
+              "cooccurs_with_primary_share": 1.0,
+              "synonym_group_size": 1,
+              "weak_axis_groups": [
+                "use_case_axes",
+                "occasion_axes"
+              ],
+              "single_token_descriptor_shape": false
+            }
+          },
+          {
+            "axis": "приборами",
+            "status": "skipped",
+            "reason": "descriptor_token_shape",
+            "evidence": {
+              "token_count": 5226,
+              "direct_phrase": true,
+              "direct_phrase_count": 4,
+              "cooccurs_with_primary_count": 4,
+              "standalone_phrase_count": 0,
+              "cooccurs_with_primary_share": 1.0,
+              "synonym_group_size": 1,
+              "weak_axis_groups": [
+                "attribute_axes"
+              ],
+              "single_token_descriptor_shape": true
+            }
+          },
+          {
+            "axis": "контейнеры",
+            "status": "skipped",
+            "reason": "weak_axis_group_without_product_evidence",
+            "evidence": {
+              "token_count": 0,
+              "direct_phrase": false,
+              "direct_phrase_count": 0,
+              "cooccurs_with_primary_count": 0,
+              "standalone_phrase_count": 0,
+              "cooccurs_with_primary_share": 0.0,
+              "synonym_group_size": 1,
+              "weak_axis_groups": [
+                "attribute_axes"
+              ],
+              "single_token_descriptor_shape": false
+            }
+          },
+          {
+            "axis": "боксы",
+            "status": "skipped",
+            "reason": "cooccurring_modifier_without_standalone_product_evidence",
+            "evidence": {
+              "token_count": 12944,
+              "direct_phrase": true,
+              "direct_phrase_count": 7,
+              "cooccurs_with_primary_count": 7,
+              "standalone_phrase_count": 0,
+              "cooccurs_with_primary_share": 1.0,
+              "synonym_group_size": 1,
+              "weak_axis_groups": [
+                "attribute_axes"
+              ],
+              "single_token_descriptor_shape": false
+            }
+          },
+          {
+            "axis": "объем",
+            "status": "skipped",
+            "reason": "descriptor_token_shape",
+            "evidence": {
+              "token_count": 0,
+              "direct_phrase": false,
+              "direct_phrase_count": 0,
+              "cooccurs_with_primary_count": 0,
+              "standalone_phrase_count": 0,
+              "cooccurs_with_primary_share": 0.0,
+              "synonym_group_size": 1,
+              "weak_axis_groups": [],
+              "single_token_descriptor_shape": true
+            }
+          },
+          {
+            "axis": "термо",
+            "status": "skipped",
+            "reason": "cooccurring_modifier_without_standalone_product_evidence",
+            "evidence": {
+              "token_count": 5358,
+              "direct_phrase": true,
+              "direct_phrase_count": 3,
+              "cooccurs_with_primary_count": 3,
+              "standalone_phrase_count": 0,
+              "cooccurs_with_primary_share": 1.0,
+              "synonym_group_size": 1,
+              "weak_axis_groups": [],
+              "single_token_descriptor_shape": false
+            }
+          },
+          {
+            "axis": "мини",
+            "status": "skipped",
+            "reason": "cooccurring_modifier_without_standalone_product_evidence",
+            "evidence": {
+              "token_count": 2792,
+              "direct_phrase": true,
+              "direct_phrase_count": 2,
+              "cooccurs_with_primary_count": 2,
+              "standalone_phrase_count": 0,
+              "cooccurs_with_primary_share": 1.0,
+              "synonym_group_size": 1,
+              "weak_axis_groups": [],
+              "single_token_descriptor_shape": false
+            }
+          },
+          {
+            "axis": "электрический",
+            "status": "skipped",
+            "reason": "descriptor_token_shape",
+            "evidence": {
+              "token_count": 5010,
+              "direct_phrase": true,
+              "direct_phrase_count": 5,
+              "cooccurs_with_primary_count": 5,
+              "standalone_phrase_count": 0,
+              "cooccurs_with_primary_share": 1.0,
+              "synonym_group_size": 1,
+              "weak_axis_groups": [],
+              "single_token_descriptor_shape": true
+            }
+          },
+          {
+            "axis": "garden",
+            "status": "skipped",
+            "reason": "no_query_token_or_phrase_evidence",
+            "evidence": {
+              "token_count": 0,
+              "direct_phrase": false,
+              "direct_phrase_count": 0,
+              "cooccurs_with_primary_count": 0,
+              "standalone_phrase_count": 0,
+              "cooccurs_with_primary_share": 0.0,
+              "synonym_group_size": 1,
+              "weak_axis_groups": [],
+              "single_token_descriptor_shape": false
+            }
+          },
+          {
+            "axis": "sweet",
+            "status": "skipped",
+            "reason": "no_query_token_or_phrase_evidence",
+            "evidence": {
+              "token_count": 0,
+              "direct_phrase": false,
+              "direct_phrase_count": 0,
+              "cooccurs_with_primary_count": 0,
+              "standalone_phrase_count": 0,
+              "cooccurs_with_primary_share": 0.0,
+              "synonym_group_size": 1,
+              "weak_axis_groups": [],
+              "single_token_descriptor_shape": false
+            }
+          },
+          {
+            "axis": "yummy",
+            "status": "skipped",
+            "reason": "no_query_token_or_phrase_evidence",
+            "evidence": {
+              "token_count": 0,
+              "direct_phrase": false,
+              "direct_phrase_count": 0,
+              "cooccurs_with_primary_count": 0,
+              "standalone_phrase_count": 0,
+              "cooccurs_with_primary_share": 0.0,
+              "synonym_group_size": 1,
+              "weak_axis_groups": [],
+              "single_token_descriptor_shape": false
+            }
+          },
+          {
+            "axis": "zakka",
+            "status": "skipped",
+            "reason": "no_query_token_or_phrase_evidence",
+            "evidence": {
+              "token_count": 0,
+              "direct_phrase": false,
+              "direct_phrase_count": 0,
+              "cooccurs_with_primary_count": 0,
+              "standalone_phrase_count": 0,
+              "cooccurs_with_primary_share": 0.0,
+              "synonym_group_size": 1,
+              "weak_axis_groups": [],
+              "single_token_descriptor_shape": false
+            }
+          },
+          {
+            "axis": "бенто",
+            "status": "skipped",
+            "reason": "cooccurring_modifier_without_standalone_product_evidence",
+            "evidence": {
+              "token_count": 473,
+              "direct_phrase": true,
+              "direct_phrase_count": 1,
+              "cooccurs_with_primary_count": 1,
+              "standalone_phrase_count": 0,
+              "cooccurs_with_primary_share": 1.0,
+              "synonym_group_size": 1,
+              "weak_axis_groups": [],
+              "single_token_descriptor_shape": false
+            }
+          },
+          {
+            "axis": "беспроводной",
+            "status": "skipped",
+            "reason": "descriptor_token_shape",
+            "evidence": {
+              "token_count": 1370,
+              "direct_phrase": true,
+              "direct_phrase_count": 2,
+              "cooccurs_with_primary_count": 2,
+              "standalone_phrase_count": 0,
+              "cooccurs_with_primary_share": 1.0,
+              "synonym_group_size": 1,
+              "weak_axis_groups": [],
+              "single_token_descriptor_shape": true
+            }
+          },
+          {
+            "axis": "детские",
+            "status": "skipped",
+            "reason": "descriptor_token_shape",
+            "evidence": {
+              "token_count": 0,
+              "direct_phrase": false,
+              "direct_phrase_count": 0,
+              "cooccurs_with_primary_count": 0,
+              "standalone_phrase_count": 0,
+              "cooccurs_with_primary_share": 0.0,
+              "synonym_group_size": 1,
+              "weak_axis_groups": [],
+              "single_token_descriptor_shape": true
+            }
+          },
+          {
+            "axis": "контейнеров",
+            "status": "skipped",
+            "reason": "weak_axis_group_without_product_evidence",
+            "evidence": {
+              "token_count": 0,
+              "direct_phrase": false,
+              "direct_phrase_count": 0,
+              "cooccurs_with_primary_count": 0,
+              "standalone_phrase_count": 0,
+              "cooccurs_with_primary_share": 0.0,
+              "synonym_group_size": 1,
+              "weak_axis_groups": [
+                "attribute_axes"
+              ],
+              "single_token_descriptor_shape": false
+            }
+          },
+          {
+            "axis": "ланча",
+            "status": "skipped",
+            "reason": "weak_axis_group_without_product_evidence",
+            "evidence": {
+              "token_count": 1682,
+              "direct_phrase": true,
+              "direct_phrase_count": 2,
+              "cooccurs_with_primary_count": 0,
+              "standalone_phrase_count": 2,
+              "cooccurs_with_primary_share": 0.0,
+              "synonym_group_size": 1,
+              "weak_axis_groups": [
+                "attribute_axes"
+              ],
+              "single_token_descriptor_shape": false
+            }
+          },
+          {
+            "axis": "обедаю",
+            "status": "skipped",
+            "reason": "no_query_token_or_phrase_evidence",
+            "evidence": {
+              "token_count": 0,
+              "direct_phrase": false,
+              "direct_phrase_count": 0,
+              "cooccurs_with_primary_count": 0,
+              "standalone_phrase_count": 0,
+              "cooccurs_with_primary_share": 0.0,
+              "synonym_group_size": 1,
+              "weak_axis_groups": [],
+              "single_token_descriptor_shape": false
+            }
+          },
+          {
+            "axis": "отделениями",
+            "status": "skipped",
+            "reason": "descriptor_token_shape",
+            "evidence": {
+              "token_count": 51186,
+              "direct_phrase": true,
+              "direct_phrase_count": 22,
+              "cooccurs_with_primary_count": 22,
+              "standalone_phrase_count": 0,
+              "cooccurs_with_primary_share": 1.0,
+              "synonym_group_size": 1,
+              "weak_axis_groups": [],
+              "single_token_descriptor_shape": true
+            }
+          },
+          {
+            "axis": "покушать",
+            "status": "skipped",
+            "reason": "no_query_token_or_phrase_evidence",
+            "evidence": {
+              "token_count": 0,
+              "direct_phrase": false,
+              "direct_phrase_count": 0,
+              "cooccurs_with_primary_count": 0,
+              "standalone_phrase_count": 0,
+              "cooccurs_with_primary_share": 0.0,
+              "synonym_group_size": 1,
+              "weak_axis_groups": [],
+              "single_token_descriptor_shape": false
+            }
+          },
+          {
+            "axis": "положите",
+            "status": "skipped",
+            "reason": "no_query_token_or_phrase_evidence",
+            "evidence": {
+              "token_count": 0,
+              "direct_phrase": false,
+              "direct_phrase_count": 0,
+              "cooccurs_with_primary_count": 0,
+              "standalone_phrase_count": 0,
+              "cooccurs_with_primary_share": 0.0,
+              "synonym_group_size": 1,
+              "weak_axis_groups": [],
+              "single_token_descriptor_shape": false
+            }
+          },
+          {
+            "axis": "супница",
+            "status": "skipped",
+            "reason": "cooccurring_modifier_without_standalone_product_evidence",
+            "evidence": {
+              "token_count": 5325,
+              "direct_phrase": true,
+              "direct_phrase_count": 5,
+              "cooccurs_with_primary_count": 5,
+              "standalone_phrase_count": 0,
+              "cooccurs_with_primary_share": 1.0,
+              "synonym_group_size": 1,
+              "weak_axis_groups": [],
+              "single_token_descriptor_shape": false
+            }
+          }
+        ]
+      },
+      "token_prefixes_count": 3,
+      "negative_token_prefixes_count": 0,
+      "fallback_fields": [
+        "scoring",
+        "user_bucket_labels",
+        "sku_guards",
+        "query_guards.required_atoms",
+        "query_guards.excluded_atoms"
+      ],
+      "economic_fields_used_for_build_decisions": false
+    },
+    "constraints_builder_diagnostics": {
+      "builder_method": "generic_constraints_hard_conflicts_builder_v1",
+      "input_evidence_hash": "sha256:46889ee801842d17f377216bfd01e0095160e0928a40d0125e183dd1c217ae8d",
+      "inputs_used": [
+        "profile.subject.related_but_different",
+        "axes.constraint_axes",
+        "query_token_counts",
+        "query_candidates.normalized_query"
+      ],
+      "heuristics_applied": [
+        "related_subjects_get_product_type_hard_conflicts",
+        "constraint_axes_promoted_only_when_backed_by_query_tokens",
+        "weak_axes_recorded_as_diagnostics_not_hard_conflicts"
+      ],
+      "hard_conflicts_count": 0,
+      "constraint_rules_count": 0,
+      "uncovered_related_subjects": [],
+      "product_type_conflicts": [],
+      "constraint_axes": {
+        "accepted_constraints": [],
+        "skipped_constraint_axes": [
+          {
+            "axis": "thermal",
+            "reason": "no_query_token_or_phrase_evidence"
+          },
+          {
+            "axis": "set",
+            "reason": "no_query_token_or_phrase_evidence"
+          },
+          {
+            "axis": "material:glass",
+            "reason": "no_query_token_or_phrase_evidence"
+          },
+          {
+            "axis": "material:ceramic",
+            "reason": "no_query_token_or_phrase_evidence"
+          }
+        ],
+        "skipped_weak_axis_groups": {
+          "use_case_axes": "not promoted to hard conflicts without explicit constraint evidence",
+          "attribute_axes": "not promoted to hard conflicts without explicit constraint evidence",
+          "audience_axes": "not promoted to hard conflicts without explicit constraint evidence",
+          "expressive_axes": "not promoted to hard conflicts without explicit constraint evidence",
+          "occasion_axes": "not promoted to hard conflicts without explicit constraint evidence",
+          "negative_constraint_axes": "not promoted to hard conflicts without explicit constraint evidence"
+        }
+      },
+      "economic_fields_used_for_build_decisions": false,
+      "limitations": [
+        "use_case, attribute, audience, expressive, occasion, and negative axes are not promoted to hard conflicts without explicit constraint evidence",
+        "LLM refinement is not used in Phase 1 Step 3"
+      ]
+    },
+    "guard_builder_diagnostics": {
+      "builder_method": "generic_guard_builder_v1",
+      "input_evidence_hash": "sha256:46889ee801842d17f377216bfd01e0095160e0928a40d0125e183dd1c217ae8d",
+      "inputs_used": [
+        "profile.product_type_aliases",
+        "profile.constraints.derive_from_query_tokens",
+        "profile.constraints.derive_from_sku_meaning",
+        "axes.explicit_guard_axes_when_available"
+      ],
+      "heuristics_applied": [
+        "product_type_detection_from_profile_alias_prefixes",
+        "constraint_markers_materialized_as_use_case_atoms",
+        "sku_functional_markers_materialized_only_to_known_fields",
+        "weak_axes_recorded_as_diagnostics_not_guards"
+      ],
+      "query_guard_counts": {
+        "product_type_detection": 3,
+        "required_atoms": 0,
+        "excluded_atoms": 0
+      },
+      "sku_guard_counts": {
+        "characteristic_mappings": 0,
+        "functional_token_mappings": 0
+      },
+      "product_type_detection": [
+        {
+          "subject": "ланчбокс",
+          "status": "materialized",
+          "source": "profile.product_type_aliases",
+          "markers": [
+            "ланчбокс",
+            "ланч",
+            "бокс"
+          ]
+        }
+      ],
+      "required_atoms": {
+        "materialized": [],
+        "skipped": []
+      },
+      "excluded_atoms": {
+        "materialized": [],
+        "skipped": [],
+        "skipped_weak_axis_groups": {
+          "use_case_axes": "not materialized as exclusions without explicit field/value evidence",
+          "attribute_axes": "not materialized as exclusions without explicit field/value evidence",
+          "audience_axes": "not materialized as exclusions without explicit field/value evidence",
+          "expressive_axes": "not materialized as exclusions without explicit field/value evidence",
+          "occasion_axes": "not materialized as exclusions without explicit field/value evidence",
+          "negative_constraint_axes": "not materialized as exclusions without explicit field/value evidence"
+        }
+      },
+      "characteristic_mappings": {
+        "materialized": [],
+        "skipped": []
+      },
+      "functional_token_mappings": {
+        "materialized": [],
+        "skipped": []
+      },
+      "market_fields_used_for_build_decisions": false
+    }
+  },
+  "self_check": {
+    "status": "passed",
+    "checks": [
+      {
+        "name": "schema_version_is_v1",
+        "result": "pass",
+        "detail": "schema_version='category_profile_v1'"
+      },
+      {
+        "name": "operational_sections_present",
+        "result": "pass",
+        "detail": "all operational sections present"
+      },
+      {
+        "name": "subject_non_empty",
+        "result": "pass",
+        "detail": "primary='ланчбокс', aliases=3"
+      },
+      {
+        "name": "subject_alias_safety",
+        "result": "pass",
+        "detail": "subject aliases and product-type aliases are safe"
+      },
+      {
+        "name": "subject_coverage",
+        "result": "pass",
+        "detail": "subject_match_share=1.0000"
+      },
+      {
+        "name": "hard_conflicts_cover_related",
+        "result": "pass",
+        "detail": "all related subjects covered"
+      },
+      {
+        "name": "hard_conflicts_syntax",
+        "result": "pass",
+        "detail": "syntax ok"
+      },
+      {
+        "name": "constraints_structure",
+        "result": "pass",
+        "detail": "constraints structure ok"
+      },
+      {
+        "name": "bucket_cutoffs_monotonic",
+        "result": "pass",
+        "detail": "primary=0.6, secondary=0.35, broad=0.15"
+      },
+      {
+        "name": "scoring_labels_structure",
+        "result": "pass",
+        "detail": "scoring and labels structure ok"
+      },
+      {
+        "name": "constraint_references",
+        "result": "pass",
+        "detail": "all constraints referenced"
+      },
+      {
+        "name": "guards_structure",
+        "result": "pass",
+        "detail": "guards structure ok"
+      },
+      {
+        "name": "guards_target_known_fields",
+        "result": "pass",
+        "detail": "all guard targets known"
+      },
+      {
+        "name": "no_economic_decision_fields",
+        "result": "pass",
+        "detail": "no orders/conversion decision fields"
+      },
+      {
+        "name": "no_cross_category_duplication",
+        "result": "pass",
+        "detail": "no shared vocabulary sections duplicated"
+      },
+      {
+        "name": "generated_by_auditability",
+        "result": "pass",
+        "detail": "method='generic_heuristic_profile_builder_v1'"
+      },
+      {
+        "name": "eval_smoke",
+        "result": "skip",
+        "detail": "No strict eval labels supplied; semantic/profile integrity checks applied"
+      }
+    ]
+  },
+  "source_note": "Phase 1 Step 7 generic derive persist. Payload was built from existing corpus and ready category meaning axes only; profile row was saved as inactive candidate and not activated."
+}

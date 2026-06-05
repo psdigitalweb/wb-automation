@@ -261,7 +261,7 @@ export default function SeoMatcherComparePage({
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <span>Категория: <strong>{categoryIdRaw}</strong></span>
           <Link
-            href={`/app/project/${projectId}/seo/products/${nmId}/queries`}
+            href={`/app/project/${projectId}/seo/products/${nmId}?category_id=${categoryIdRaw}#seo-query-selection`}
             style={{ color: '#2563eb', fontSize: 13 }}
           >
             ← Поиск. запросы

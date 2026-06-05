@@ -48,6 +48,8 @@ services:
       - BOOTSTRAP_ADMIN_USERNAME=${BOOTSTRAP_ADMIN_USERNAME:-admin}
       - BOOTSTRAP_ADMIN_PASSWORD=${BOOTSTRAP_ADMIN_PASSWORD:-}
       - BOOTSTRAP_ADMIN_EMAIL=${BOOTSTRAP_ADMIN_EMAIL:-admin@local.dev}
+      - SEO_GENERATION_PREVIEW_ENABLED=true
+      - SEO_GENERATION_MAX_ATTEMPTS=2
     volumes:
       # Persistent storage for Internal Data uploads (required on server)
       - internal_data:/data/internal_data

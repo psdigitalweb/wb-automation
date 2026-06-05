@@ -64,9 +64,9 @@ def test_derive_snapshot_path_is_deterministic(monkeypatch: pytest.MonkeyPatch, 
     assert first.snapshot_path == second.snapshot_path
 
 
-def test_derive_skeleton_only_supports_812() -> None:
-    with pytest.raises(NotImplementedError):
-        derive_category_profile(project_id=1, category_id=99999, session=None, dry_run=True)  # type: ignore[arg-type]
+def test_derive_activation_remains_separate_from_persist() -> None:
+    with pytest.raises(NotImplementedError, match="Activation"):
+        derive_category_profile(project_id=1, category_id=99999, session=None, activate=True)  # type: ignore[arg-type]
 
 
 def test_cli_help_works() -> None:

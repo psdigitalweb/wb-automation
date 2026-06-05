@@ -1,11 +1,12 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { useParams, useRouter } from 'next/navigation'
+import { useEffect, useMemo, useState } from 'react'
+import { useParams } from 'next/navigation'
 import Link from 'next/link'
-import { apiGet, apiPost, apiGetData, getWBFinanceReportsLatest } from '../../../../../lib/apiClient'
-import type { ApiDebug, ApiError } from '../../../../../lib/apiClient'
+import { apiGet, apiGetData, getWBFinanceReportsLatest } from '../../../../../lib/apiClient'
+import type { ApiError, WBFinanceReportLatest } from '../../../../../lib/apiClient'
 import { usePageTitle } from '../../../../../hooks/usePageTitle'
+import styles from './dashboard.module.css'
 
 interface Kpis {
   wb: {
@@ -47,8 +48,8 @@ interface ProjectMarketplace {
   id: number
   marketplace_id: number
   is_enabled: boolean
-  marketplace_code: string
-  marketplace_name: string
+  marketplace_code: string | null
+  marketplace_name: string | null
 }
 
 interface Project {
@@ -57,892 +58,263 @@ interface Project {
   description: string | null
 }
 
+type PriceDiscrepancyResponse = {
+  meta?: {
+    total_count?: number
+  }
+}
+
+function formatDateTime(value: string | null | undefined): string {
+  if (!value) return 'Нет снимка'
+  return new Date(value).toLocaleString('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+function formatDate(value: string | null | undefined): string {
+  if (!value) return '—'
+  return new Date(value).toLocaleDateString('ru-RU')
+}
+
+function formatNumber(value: number | null | undefined): string {
+  return new Intl.NumberFormat('ru-RU').format(value ?? 0)
+}
+
+function formatCurrency(value: number, currency: string | null | undefined): string {
+  return new Intl.NumberFormat('ru-RU', {
+    style: 'currency',
+    currency: currency || 'RUB',
+    maximumFractionDigits: 0,
+  }).format(value)
+}
+
+function marketplaceLabel(marketplace: ProjectMarketplace): string {
+  if (marketplace.marketplace_code === 'wildberries') return 'WB'
+  if (marketplace.marketplace_code === 'ozon') return 'Ozon'
+  if (marketplace.marketplace_code === 'ym') return 'YM'
+  return marketplace.marketplace_name || marketplace.marketplace_code || 'Marketplace'
+}
+
 export default function ProjectDashboard() {
   const params = useParams()
-  const router = useRouter()
   const projectId = params.projectId as string
-  usePageTitle('Сводка данных', projectId)
-  const [kpis, setKpis] = useState<Kpis | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [toast, setToast] = useState<string | null>(null)
-  const [error, setError] = useState<ApiError | string | null>(null)
-  const [debug, setDebug] = useState<ApiDebug | null>(null)
-  const [wbEnabled, setWbEnabled] = useState(false)
-  const [otherMarketplacesEnabled, setOtherMarketplacesEnabled] = useState(false)
-  const [checkingWb, setCheckingWb] = useState(true)
-  const [project, setProject] = useState<Project | null>(null)
-  const [priceDiscrepanciesCount, setPriceDiscrepanciesCount] = useState<number | null>(null)
-  const [loadingDiscrepancies, setLoadingDiscrepancies] = useState(false)
-  const [latestWbReport, setLatestWbReport] = useState<{
-    report_id: number
-    period_from: string | null
-    period_to: string | null
-  } | null>(null)
-  const DEBUG_UI = process.env.NEXT_PUBLIC_DEBUG === 'true'
+  usePageTitle('Обзор проекта', projectId)
 
-  // Reset state when projectId changes to prevent showing data from previous project
+  const [project, setProject] = useState<Project | null>(null)
+  const [marketplaces, setMarketplaces] = useState<ProjectMarketplace[]>([])
+  const [kpis, setKpis] = useState<Kpis | null>(null)
+  const [priceDiscrepanciesCount, setPriceDiscrepanciesCount] = useState<number | null>(null)
+  const [latestWbReport, setLatestWbReport] = useState<WBFinanceReportLatest | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<ApiError | string | null>(null)
+
+  const connectedMarketplaces = useMemo(
+    () => marketplaces.filter((marketplace) => marketplace.is_enabled),
+    [marketplaces],
+  )
+  const wbEnabled = connectedMarketplaces.some((marketplace) => marketplace.marketplace_code === 'wildberries')
+
   useEffect(() => {
-    setKpis(null)
-    setWbEnabled(false)
-    setOtherMarketplacesEnabled(false)
-    setCheckingWb(true)
-    setError(null)
-    setProject(null)
+    let alive = true
+
+    async function loadDashboard() {
+      setLoading(true)
+      setError(null)
+      setPriceDiscrepanciesCount(null)
+      setLatestWbReport(null)
+
+      try {
+        const [projectResult, marketplacesResult, kpisResult] = await Promise.all([
+          apiGet<Project>(`/api/v1/projects/${projectId}`),
+          apiGet<ProjectMarketplace[]>(`/api/v1/projects/${projectId}/marketplaces`),
+          apiGet<Kpis>(`/api/v1/dashboard/projects/${projectId}/kpis`),
+        ])
+
+        if (!alive) return
+
+        setProject(projectResult.data)
+        setMarketplaces(marketplacesResult.data)
+        setKpis(kpisResult.data)
+
+        const hasWb = marketplacesResult.data.some(
+          (marketplace) => marketplace.is_enabled && marketplace.marketplace_code === 'wildberries',
+        )
+
+        if (hasWb) {
+          const [discrepancies, latestReport] = await Promise.all([
+            apiGetData<PriceDiscrepancyResponse>(
+              `/api/v1/projects/${projectId}/wildberries/price-discrepancies?only_below_rrp=true&page_size=1`,
+            ).catch(() => null),
+            getWBFinanceReportsLatest(projectId),
+          ])
+
+          if (!alive) return
+          setPriceDiscrepanciesCount(discrepancies?.meta?.total_count ?? 0)
+          setLatestWbReport(latestReport)
+        }
+      } catch (error) {
+        if (!alive) return
+        console.error('Failed to load dashboard:', error)
+        setError(error as ApiError)
+      } finally {
+        if (alive) setLoading(false)
+      }
+    }
+
+    loadDashboard()
+
+    return () => {
+      alive = false
+    }
   }, [projectId])
 
-  useEffect(() => {
-    loadProject()
-    checkWbEnabled()
-    loadKpis()
-    const interval = setInterval(loadKpis, 30000)
-    return () => clearInterval(interval)
-  }, [projectId]) // Include projectId in dependencies
-
-  useEffect(() => {
-    if (wbEnabled && projectId) {
-      loadPriceDiscrepanciesCount()
-    }
-  }, [wbEnabled, projectId])
-
-  useEffect(() => {
-    if (wbEnabled && projectId) {
-      getWBFinanceReportsLatest(projectId).then((r) => {
-        if (r) setLatestWbReport({ report_id: r.report_id, period_from: r.period_from, period_to: r.period_to })
-        else setLatestWbReport(null)
-      })
-    } else {
-      setLatestWbReport(null)
-    }
-  }, [wbEnabled, projectId])
-
-  const loadProject = async () => {
-    try {
-      const { data } = await apiGet<Project>(`/api/v1/projects/${projectId}`)
-      setProject(data)
-    } catch (error) {
-      console.error('Failed to load project:', error)
-    }
-  }
-
-  const checkWbEnabled = async () => {
-    try {
-      const { data: marketplaces } = await apiGet<ProjectMarketplace[]>(`/api/v1/projects/${projectId}/marketplaces`)
-      const wb = marketplaces.find(m => m.marketplace_code === 'wildberries')
-      setWbEnabled(wb?.is_enabled || false)
-      const otherEnabled = marketplaces.some(
-        (m) => m.marketplace_code !== 'wildberries' && m.is_enabled
-      )
-      setOtherMarketplacesEnabled(otherEnabled)
-      setCheckingWb(false)
-    } catch (error) {
-      console.error('Failed to check WB status:', error)
-      setCheckingWb(false)
-    }
-  }
-
-  const loadKpis = async () => {
-    try {
-      setError(null)
-      setLoading(true)
-      const result = await apiGet<Kpis>(`/api/v1/dashboard/projects/${projectId}/kpis`)
-      console.log('kpis result:', result)
-      setDebug(result.debug)
-      setKpis(result.data)
-    } catch (error) {
-      console.error('Failed to load metrics:', error)
-      setError(error as any)
-      setDebug((error as any)?.debug || null)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-
-  const formatDate = (dateStr: string | null | undefined) => {
-    if (!dateStr) return 'N/A'
-    return new Date(dateStr).toLocaleString('ru-RU')
-  }
-
-  const loadPriceDiscrepanciesCount = async () => {
-    try {
-      setLoadingDiscrepancies(true)
-      const resp = await apiGetData<{ meta: { total_count: number } }>(
-        `/api/v1/projects/${projectId}/wildberries/price-discrepancies?only_below_rrp=true&page_size=1`
-      )
-      setPriceDiscrepanciesCount(resp.meta?.total_count || 0)
-    } catch (error) {
-      console.error('Failed to load price discrepancies count:', error)
-      setPriceDiscrepanciesCount(0)
-    } finally {
-      setLoadingDiscrepancies(false)
-    }
-  }
+  const coverage = kpis && kpis.storefront.expected_storefront_products > 0
+    ? Math.round((kpis.storefront.storefront_products / kpis.storefront.expected_storefront_products) * 100)
+    : null
+  const latestWbReportTotal = latestWbReport?.total_amount
 
   return (
-    <div className="container">
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-        <h1 style={{ marginBottom: 20 }}>{project?.name || 'Loading...'}</h1>
-        <Link
-          href={`/app/project/${projectId}/seo`}
-          title="SEO"
-          aria-label="SEO"
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            minHeight: 32,
-            padding: '0 10px',
-            borderRadius: 8,
-            border: '1px solid #d1d5db',
-            background: '#fff',
-            color: '#111827',
-            textDecoration: 'none',
-            fontSize: 13,
-            fontWeight: 600,
-            transition: 'background-color 120ms ease, border-color 120ms ease',
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.backgroundColor = '#f9fafb'
-            e.currentTarget.style.borderColor = '#9ca3af'
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.backgroundColor = '#fff'
-            e.currentTarget.style.borderColor = '#d1d5db'
-          }}
-        >
-          SEO
-        </Link>
-        <Link
-          href={`/app/project/${projectId}/settings`}
-          title="Настройки проекта"
-          aria-label="Настройки проекта"
-          style={{
-            width: 32,
-            height: 32,
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            borderRadius: 8,
-            color: '#6b7280',
-            textDecoration: 'none',
-            userSelect: 'none',
-            transition: 'background-color 120ms ease, color 120ms ease',
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.backgroundColor = '#f3f4f6'
-            e.currentTarget.style.color = '#111827'
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.backgroundColor = 'transparent'
-            e.currentTarget.style.color = '#6b7280'
-          }}
-        >
-          ⚙
-        </Link>
-      </div>
-
-      {toast && <div className="toast">{toast}</div>}
-
-      {error && (
-        <div className="card" style={{ background: '#f8d7da', border: '1px solid #f5c2c7' }}>
-          <p style={{ margin: 0 }}>
-            <strong>Error:</strong>{' '}
-            {typeof error === 'string' ? error : error.detail}
-          </p>
-          {typeof error !== 'string' && (
-            <div style={{ marginTop: 10, fontSize: 12 }}>
-              <div><strong>Status:</strong> {error.status}</div>
-              <div><strong>URL:</strong> {error.url}</div>
-              <div style={{ marginTop: 8 }}>
-                <strong>Body preview:</strong>
-                <pre style={{ whiteSpace: 'pre-wrap', marginTop: 6 }}>{error.bodyPreview}</pre>
-              </div>
-            </div>
+    <div className={styles.dashboardPage}>
+      <header className={styles.header}>
+        <div>
+          <div className={styles.eyebrow}>Обзор проекта</div>
+          <h1>{project?.name || 'Проект'}</h1>
+          {project?.description ? <p>{project.description}</p> : null}
+        </div>
+        <div className={styles.marketplaceChips} aria-label="Подключенные маркетплейсы">
+          {connectedMarketplaces.length > 0 ? (
+            connectedMarketplaces.map((marketplace) => (
+              <span
+                key={`${marketplace.marketplace_id}-${marketplace.marketplace_code}`}
+                className={`${styles.marketplaceChip} ${
+                  marketplace.marketplace_code === 'wildberries' ? styles.wbChip : ''
+                }`}
+              >
+                {marketplaceLabel(marketplace)}
+              </span>
+            ))
+          ) : (
+            <span className={styles.emptyChip}>Маркетплейсы не подключены</span>
           )}
         </div>
-      )}
+      </header>
 
-      {DEBUG_UI && debug && (
-        <div className="card" style={{ background: '#eef6ff', border: '1px solid #b6d4fe' }}>
-          <h3 style={{ marginTop: 0 }}>Debug</h3>
-          <div style={{ fontSize: 12 }}>
-            <div><strong>Status:</strong> {debug.status}</div>
-            <div><strong>URL:</strong> {debug.url}</div>
-            <div><strong>isJson:</strong> {String(debug.isJson)}</div>
-            <div><strong>parsed keys:</strong> {debug.parsed && typeof debug.parsed === 'object' ? Object.keys(debug.parsed).join(', ') : '(none)'}</div>
-            <div><strong>total/items:</strong> {debug.parsed?.total ?? '(n/a)'} / {debug.parsed?.items?.length ?? '(n/a)'}</div>
-          </div>
-        </div>
-      )}
+      {error ? (
+        <section className={styles.notice} role="alert">
+          <strong>Не удалось загрузить обзор проекта.</strong>
+          <span>{typeof error === 'string' ? error : error.detail || 'Проверьте API и повторите попытку.'}</span>
+        </section>
+      ) : null}
 
-      {!checkingWb && !wbEnabled && (
-        <div className="card" style={{ background: '#fff3cd', border: '1px solid #ffc107' }}>
-          <p style={{ margin: 0 }}>
-            <strong>WB not enabled.</strong> Enable it in{' '}
-            <Link href={`/app/project/${projectId}/marketplaces`} style={{ color: '#0070f3', textDecoration: 'underline' }}>
-              Marketplaces
-            </Link>
-            {' '}section to use ingestion features.
-          </p>
-        </div>
-      )}
-
-      <div className="card">
-        <h2>Сводка данных</h2>
-        {loading ? (
-          <p>Loading...</p>
-        ) : error ? (
-          <div>
-            <p style={{ color: 'red' }}>
-              Error: {typeof error === 'string' ? error : error.detail}
-            </p>
-            <button onClick={loadKpis}>Retry</button>
-          </div>
-        ) : kpis ? (
-          <>
-            {/* Внутренние данные */}
-            {kpis.internal_data && kpis.internal_data.total > 0 && (
-              <div style={{ marginBottom: 20 }}>
-                <h3 style={{ marginTop: 0, marginBottom: 10 }}>Внутренние данные</h3>
-                <div className="metrics">
-                  <div className="metric-card" style={{ flex: '2 1 200px' }}>
-                    <div className="metric-label" style={{ fontSize: 12, textTransform: 'uppercase', color: '#0d6efd' }}>
-                      Товары в наличии
-                    </div>
-                    <Link href={`/app/project/${projectId}/settings`} style={{ textDecoration: 'none', color: 'inherit' }}>
-                      <div className="metric-value" style={{ fontSize: 28, color: '#0d6efd', cursor: 'pointer', textDecoration: 'underline', opacity: 1, transition: 'opacity 0.2s' }} onMouseEnter={(e) => e.currentTarget.style.opacity = '0.7'} onMouseLeave={(e) => e.currentTarget.style.opacity = '1'}>
-                        {kpis.internal_data.with_stock || 0}
-                      </div>
-                    </Link>
-                    <div style={{ fontSize: 12, color: '#666', marginTop: 4 }}>
-                      Всего товаров: {kpis.internal_data.total}
-                    </div>
-                    <div style={{ fontSize: 12, color: '#888', marginTop: 4 }}>
-                      Обновлено: {formatDate(kpis.last_snapshots.internal_data_at)}
-                    </div>
-                    <div style={{ marginTop: 8 }}>
-                      <Link
-                        href={`/app/project/${projectId}/internal-data`}
-                        style={{
-                          display: 'inline-block',
-                          padding: '6px 12px',
-                          fontSize: 12,
-                          backgroundColor: '#0d6efd',
-                          color: 'white',
-                          border: 'none',
-                          borderRadius: 4,
-                          cursor: 'pointer',
-                          textDecoration: 'none',
-                        }}
-                      >
-                        Посмотреть данные
-                      </Link>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Wildberries — Данные */}
-            <div style={{ marginBottom: 32 }}>
-              <h3 style={{ marginTop: 0, marginBottom: 12, color: '#374151', fontWeight: 500 }}>Wildberries — Данные</h3>
-              <div className="metrics">
-                {/* Каталог / Витрина */}
-                <div className="metric-card">
-                  <div className="metric-label" style={{ fontSize: 12, textTransform: 'uppercase', color: '#6c757d' }}>
-                    Каталог / Витрина
-                  </div>
-                  <div className="metric-value" style={{ fontSize: 22 }}>
-                    {kpis.wb.products_total}
-                  </div>
-                  <div style={{ fontSize: 12, color: '#666', marginTop: 4 }}>
-                    Витрина: {kpis.storefront.storefront_products} (ожидается {kpis.storefront.expected_storefront_products})
-                  </div>
-                  <div style={{ fontSize: 12, color: '#888', marginTop: 4 }}>
-                    Обновлено: {formatDate(kpis.last_snapshots.storefront_at)}
-                  </div>
-                </div>
-
-                {/* Наличие (FBS / FBO) */}
-                <div className="metric-card">
-                  <div className="metric-label" style={{ fontSize: 12, textTransform: 'uppercase', color: '#6c757d' }}>
-                    Наличие (FBS / FBO)
-                  </div>
-                  <div style={{ display: 'flex', gap: 16, marginTop: 4 }}>
-                    <div>
-                      <div style={{ fontSize: 11, textTransform: 'uppercase', color: '#6c757d' }}>FBS</div>
-                      <Link href={`/app/project/${projectId}/stocks`} style={{ textDecoration: 'none', color: 'inherit' }}>
-                        <div className="metric-value" style={{ fontSize: 20, cursor: 'pointer', textDecoration: 'underline', opacity: 1, transition: 'opacity 0.2s' }} onMouseEnter={(e) => e.currentTarget.style.opacity = '0.7'} onMouseLeave={(e) => e.currentTarget.style.opacity = '1'}>
-                          {kpis.stock.fbs_in_stock_products}
-                        </div>
-                      </Link>
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 11, textTransform: 'uppercase', color: '#6c757d' }}>FBO</div>
-                      <Link href={`/app/project/${projectId}/supplier-stocks`} style={{ textDecoration: 'none', color: 'inherit' }}>
-                        <div className="metric-value" style={{ fontSize: 20, cursor: 'pointer', textDecoration: 'underline', opacity: 1, transition: 'opacity 0.2s' }} onMouseEnter={(e) => e.currentTarget.style.opacity = '0.7'} onMouseLeave={(e) => e.currentTarget.style.opacity = '1'}>
-                          {kpis.stock.fbo_in_stock_products}
-                        </div>
-                      </Link>
-                    </div>
-                  </div>
-                  <div style={{ fontSize: 12, color: '#888', marginTop: 4 }}>
-                    Обновлено (FBS): {formatDate(kpis.last_snapshots.fbs_stock_at)}
-                  </div>
-                  <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>
-                    Обновлено (FBO): {formatDate(kpis.last_snapshots.fbo_stock_at)}
-                  </div>
-                </div>
-
-                {/* Цены */}
-                <div className="metric-card">
-                  <div className="metric-label" style={{ fontSize: 12, textTransform: 'uppercase', color: '#6c757d' }}>
-                    Цены
-                  </div>
-                  <Link href={`/app/project/${projectId}/frontend-prices`} style={{ textDecoration: 'none', color: 'inherit' }}>
-                    <div className="metric-value" style={{ fontSize: 22, cursor: 'pointer', textDecoration: 'underline', opacity: 1, transition: 'opacity 0.2s' }} onMouseEnter={(e) => e.currentTarget.style.opacity = '0.7'} onMouseLeave={(e) => e.currentTarget.style.opacity = '1'}>
-                      {kpis.storefront.storefront_products}
-                    </div>
-                  </Link>
-                  <div style={{ fontSize: 12, color: '#666', marginTop: 4 }}>
-                    товаров с ценами на витрине
-                  </div>
-                  <div style={{ fontSize: 12, color: '#888', marginTop: 4 }}>
-                    Обновлено: {formatDate(kpis.last_snapshots.storefront_at)}
-                  </div>
-                  {wbEnabled && priceDiscrepanciesCount !== null && priceDiscrepanciesCount > 0 && (
-                    <div style={{ fontSize: 12, color: '#6b7280', marginTop: 6 }}>
-                      <span style={{ fontSize: 11, marginRight: 4 }}>⚠</span>
-                      <span>{priceDiscrepanciesCount} товаров ниже РРЦ — </span>
-                      <Link
-                        href={`/app/project/${projectId}/wildberries/price-discrepancies?only_below_rrp=true`}
-                        style={{ color: '#2563eb', textDecoration: 'none' }}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.textDecoration = 'underline'
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.textDecoration = 'none'
-                        }}
-                      >
-                        Расхождения →
-                      </Link>
-                    </div>
-                  )}
-                </div>
-              </div>
+      {loading ? (
+        <section className={styles.panel}>
+          <div className={styles.panelHeader}>
+            <div>
+              <div className={styles.eyebrow}>Пульс проекта</div>
+              <h2>Загружаем реальные данные</h2>
             </div>
+          </div>
+          <div className={styles.skeletonGrid} aria-label="Загрузка">
+            <div />
+            <div />
+            <div />
+            <div />
+          </div>
+        </section>
+      ) : null}
 
-            {/* Инструменты */}
-            {wbEnabled && (
-              <div style={{ marginBottom: 32 }}>
-                <h3 style={{ marginTop: 0, marginBottom: 12, color: '#374151', fontWeight: 500 }}>Инструменты</h3>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gridAutoRows: '1fr', gap: 16, alignItems: 'stretch', minHeight: 375 }}>
-                  <Link
-                    href={`/app/project/${projectId}/wildberries/price-discrepancies?only_below_rrp=true`}
-                    style={{ textDecoration: 'none', color: 'inherit', display: 'block', minHeight: 0 }}
-                  >
-                    <div
-                      className="card"
-                      style={{
-                        padding: 16,
-                        border: '1px solid #e5e7eb',
-                        borderRadius: 8,
-                        background: '#fff',
-                        cursor: 'pointer',
-                        transition: 'all 0.2s',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: 8,
-                        height: '100%',
-                        minHeight: 0,
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.borderColor = '#d1d5db'
-                        e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.05)'
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.borderColor = '#e5e7eb'
-                        e.currentTarget.style.boxShadow = 'none'
-                      }}
-                    >
-                      <div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-                          <div style={{ fontSize: 20, flexShrink: 0 }}>📊</div>
-                          <div style={{ fontSize: 18, fontWeight: 600, color: '#111827' }}>
-                            Расхождения цен
-                          </div>
-                        </div>
-                        <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6, marginLeft: 30 }}>
-                          РРЦ vs витрина Wildberries
-                        </div>
-                        <div style={{ fontSize: 13, color: '#374151', marginBottom: 8, marginLeft: 30 }}>
-                          Контроль соблюдения РРЦ
-                        </div>
-                        {priceDiscrepanciesCount !== null && priceDiscrepanciesCount > 0 && (
-                          <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4, marginLeft: 30 }}>
-                            <span style={{ fontSize: 11, marginRight: 4 }}>⚠</span>
-                            <strong style={{ fontWeight: 600 }}>{priceDiscrepanciesCount}</strong> товаров ниже РРЦ
-                          </div>
-                        )}
-                      </div>
-                      <div
-                        style={{
-                          marginTop: 'auto',
-                          fontSize: 13,
-                          color: '#2563eb',
-                          fontWeight: 500,
-                        }}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.textDecoration = 'underline'
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.textDecoration = 'none'
-                        }}
-                      >
-                        Посмотреть расхождения →
-                      </div>
-                    </div>
-                  </Link>
+      {!loading && !error && !wbEnabled ? (
+        <section className={styles.notice}>
+          <strong>WB не подключён.</strong>
+          <span>Пульс проекта сейчас строится только по реальным данным Wildberries.</span>
+          <Link href={`/app/project/${projectId}/marketplaces`}>Подключить маркетплейс</Link>
+        </section>
+      ) : null}
 
-                  <Link
-                    href={`/app/project/${projectId}/wildberries/stock-without-photos`}
-                    style={{ textDecoration: 'none', color: 'inherit', display: 'block', minHeight: 0 }}
-                  >
-                    <div
-                      className="card"
-                      style={{
-                        padding: 16,
-                        border: '1px solid #e5e7eb',
-                        borderRadius: 8,
-                        background: '#fff',
-                        cursor: 'pointer',
-                        transition: 'all 0.2s',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: 8,
-                        height: '100%',
-                        minHeight: 0,
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.borderColor = '#d1d5db'
-                        e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.05)'
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.borderColor = '#e5e7eb'
-                        e.currentTarget.style.boxShadow = 'none'
-                      }}
-                    >
-                      <div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-                          <div style={{ fontSize: 20, flexShrink: 0 }}>📷</div>
-                          <div style={{ fontSize: 18, fontWeight: 600, color: '#111827' }}>
-                            Остаток WB без фото
-                          </div>
-                        </div>
-                        <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6, marginLeft: 30 }}>
-                          Товары, которые лежат на складах WB, но в карточке нет фото
-                        </div>
-                        <div style={{ fontSize: 13, color: '#374151', marginBottom: 8, marginLeft: 30 }}>
-                          Контроль наличия фото для товаров с остатком
-                        </div>
-                      </div>
-                      <div
-                        style={{
-                          marginTop: 'auto',
-                          fontSize: 13,
-                          color: '#2563eb',
-                          fontWeight: 500,
-                        }}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.textDecoration = 'underline'
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.textDecoration = 'none'
-                        }}
-                      >
-                        Посмотреть товары →
-                      </div>
-                    </div>
-                  </Link>
+      {!loading && !error && wbEnabled && kpis ? (
+        <section className={styles.panel}>
+          <div className={styles.panelHeader}>
+            <div>
+              <div className={styles.eyebrow}>Пульс проекта</div>
+              <h2>Wildberries</h2>
+              <p>Операционные счётчики по последним доступным снимкам. Это не 7-дневные продажи.</p>
+            </div>
+            <Link className={styles.secondaryLink} href={`/app/project/${projectId}/wildberries`}>
+              Открыть WB
+            </Link>
+          </div>
 
-                  <div
-                    className="card"
-                    style={{
-                      padding: 16,
-                      border: '1px solid #e5e7eb',
-                      borderRadius: 8,
-                      background: '#fff',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: 8,
-                      height: '100%',
-                      minHeight: 0,
-                    }}
-                  >
-                    <div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-                        <div style={{ fontSize: 20, flexShrink: 0 }}>💰</div>
-                        <div style={{ fontSize: 18, fontWeight: 600, color: '#111827' }}>
-                          Прибыльность WB (Unit PnL)
-                        </div>
-                      </div>
-                      <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6, marginLeft: 30 }}>
-                        Юнит-экономика по финансовым отчётам Wildberries
-                      </div>
-                      {latestWbReport && (
-                        <div style={{ fontSize: 12, color: '#374151', marginBottom: 8, marginLeft: 30 }}>
-                          Последний отчёт:{' '}
-                          {latestWbReport.report_id} ·{' '}
-                          {latestWbReport.period_from
-                            ? new Date(latestWbReport.period_from).toLocaleDateString('ru-RU', {
-                                day: '2-digit',
-                                month: '2-digit',
-                                year: 'numeric',
-                              })
-                            : '—'}
-                          –
-                          {latestWbReport.period_to
-                            ? new Date(latestWbReport.period_to).toLocaleDateString('ru-RU', {
-                                day: '2-digit',
-                                month: '2-digit',
-                                year: 'numeric',
-                              })
-                            : '—'}
-                        </div>
-                      )}
-                      {!latestWbReport && (
-                        <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 8, marginLeft: 30 }}>
-                          Нет загруженных финансовых отчётов.{' '}
-                          <Link
-                            href={`/app/project/${projectId}/wildberries/finances/reports`}
-                            style={{ color: '#2563eb', textDecoration: 'underline' }}
-                          >
-                            Перейти к списку отчётов
-                          </Link>
-                        </div>
-                      )}
-                    </div>
-                    <div style={{ display: 'flex', gap: 8, marginTop: 'auto', flexWrap: 'wrap' }}>
-                      {latestWbReport ? (
-                        <Link
-                          href={`/app/project/${projectId}/wildberries/finances/unit-pnl?report_id=${latestWbReport.report_id}`}
-                          style={{
-                            display: 'inline-block',
-                            padding: '8px 14px',
-                            fontSize: 13,
-                            backgroundColor: '#0d6efd',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: 4,
-                            textDecoration: 'none',
-                            fontWeight: 500,
-                          }}
-                        >
-                          Открыть последний отчёт
-                        </Link>
-                      ) : (
-                        <span
-                          style={{
-                            display: 'inline-block',
-                            padding: '8px 14px',
-                            fontSize: 13,
-                            backgroundColor: '#dee2e6',
-                            color: '#6c757d',
-                            border: 'none',
-                            borderRadius: 4,
-                            cursor: 'not-allowed',
-                          }}
-                        >
-                          Открыть последний отчёт
-                        </span>
-                      )}
-                      <Link
-                        href={`/app/project/${projectId}/wildberries/finances/reports`}
-                        style={{
-                          display: 'inline-block',
-                          padding: '8px 14px',
-                          fontSize: 13,
-                          backgroundColor: 'transparent',
-                          color: '#0d6efd',
-                          border: '1px solid #0d6efd',
-                          borderRadius: 4,
-                          textDecoration: 'none',
-                          fontWeight: 500,
-                        }}
-                      >
-                        Список отчётов
-                      </Link>
-                    </div>
-                  </div>
+          <div className={styles.metricGrid}>
+            <article className={styles.metricCard}>
+              <div className={styles.metricLabel}>Каталог WB</div>
+              <div className={styles.metricValue}>{formatNumber(kpis.storefront.storefront_products)}</div>
+              <div className={styles.metricHint}>
+                На витрине из {formatNumber(kpis.storefront.expected_storefront_products || kpis.wb.products_total)}
+                {coverage !== null ? ` (${coverage}%)` : ''}
+              </div>
+              <div className={styles.metricSource}>Снимок витрины: {formatDateTime(kpis.last_snapshots.storefront_at)}</div>
+            </article>
 
-                  <Link
-                    href={`/app/project/${projectId}/wildberries/funnel-signals`}
-                    style={{ textDecoration: 'none', color: 'inherit', display: 'block', minHeight: 0 }}
-                  >
-                    <div
-                      className="card"
-                      style={{
-                        padding: 16,
-                        border: '1px solid #e5e7eb',
-                        borderRadius: 8,
-                        background: '#fff',
-                        cursor: 'pointer',
-                        transition: 'all 0.2s',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: 8,
-                        height: '100%',
-                        minHeight: 0,
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.borderColor = '#d1d5db'
-                        e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.05)'
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.borderColor = '#e5e7eb'
-                        e.currentTarget.style.boxShadow = 'none'
-                      }}
-                    >
-                      <div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-                          <div style={{ fontSize: 20, flexShrink: 0 }}>📊</div>
-                          <div style={{ fontSize: 18, fontWeight: 600, color: '#111827' }}>
-                            Воронка: Сигналы
-                          </div>
-                        </div>
-                        <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6, marginLeft: 30 }}>
-                          Сигналы по воронке: низкий трафик, add-to-cart, конверсия, масштабировать
-                        </div>
-                        <div style={{ fontSize: 13, color: '#374151', marginBottom: 8, marginLeft: 30 }}>
-                          Рекомендации по улучшению воронки конверсии
-                        </div>
-                      </div>
-                      <div
-                        style={{
-                          marginTop: 'auto',
-                          fontSize: 13,
-                          color: '#2563eb',
-                          fontWeight: 500,
-                        }}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.textDecoration = 'underline'
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.textDecoration = 'none'
-                        }}
-                      >
-                        Посмотреть сигналы →
-                      </div>
-                    </div>
-                  </Link>
-
-                  <Link
-                    href={`/app/project/${projectId}/wildberries/hypothesis-lab/experiments`}
-                    style={{ textDecoration: 'none', color: 'inherit', display: 'block', minHeight: 0 }}
-                  >
-                    <div
-                      className="card"
-                      style={{
-                        padding: 16,
-                        border: '1px solid #e5e7eb',
-                        borderRadius: 8,
-                        background: '#fff',
-                        cursor: 'pointer',
-                        transition: 'all 0.2s',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: 8,
-                        height: '100%',
-                        minHeight: 0,
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.borderColor = '#d1d5db'
-                        e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.05)'
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.borderColor = '#e5e7eb'
-                        e.currentTarget.style.boxShadow = 'none'
-                      }}
-                    >
-                      <div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-                          <div style={{ fontSize: 20, flexShrink: 0 }}>🧪</div>
-                          <div style={{ fontSize: 18, fontWeight: 600, color: '#111827' }}>
-                            Hypothesis Lab — Эксперименты
-                          </div>
-                        </div>
-                        <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6, marginLeft: 30 }}>
-                          A/B эксперименты: 1 TEST SKU, контроль по subject_id, DiD / before-after
-                        </div>
-                        <div style={{ fontSize: 13, color: '#374151', marginBottom: 8, marginLeft: 30 }}>
-                          Создание экспериментов, запуск, подтверждение изменения, результаты
-                        </div>
-                      </div>
-                      <div
-                        style={{
-                          marginTop: 'auto',
-                          fontSize: 13,
-                          color: '#2563eb',
-                          fontWeight: 500,
-                        }}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.textDecoration = 'underline'
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.textDecoration = 'none'
-                        }}
-                      >
-                        Открыть эксперименты →
-                      </div>
-                    </div>
-                  </Link>
-
-                  <Link
-                    href={`/app/project/${projectId}/wildberries/search-report`}
-                    style={{ textDecoration: 'none', color: 'inherit', display: 'block', minHeight: 0 }}
-                  >
-                    <div
-                      className="card"
-                      style={{
-                        padding: 16,
-                        border: '1px solid #e5e7eb',
-                        borderRadius: 8,
-                        background: '#fff',
-                        cursor: 'pointer',
-                        transition: 'all 0.2s',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: 8,
-                        height: '100%',
-                        minHeight: 0,
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.borderColor = '#d1d5db'
-                        e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.05)'
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.borderColor = '#e5e7eb'
-                        e.currentTarget.style.boxShadow = 'none'
-                      }}
-                    >
-                      <div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-                          <div style={{ fontSize: 20, flexShrink: 0 }}>🔎</div>
-                          <div style={{ fontSize: 18, fontWeight: 600, color: '#111827' }}>
-                            Поисковые слова WB
-                          </div>
-                        </div>
-                        <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6, marginLeft: 30 }}>
-                          Табличный отчёт по поисковым запросам, позициям и видимости товаров
-                        </div>
-                        <div style={{ fontSize: 13, color: '#374151', marginBottom: 8, marginLeft: 30 }}>
-                          Срез по товарам и просмотр ключевых слов в отдельной модалке
-                        </div>
-                      </div>
-                      <div
-                        style={{
-                          marginTop: 'auto',
-                          fontSize: 13,
-                          color: '#2563eb',
-                          fontWeight: 500,
-                        }}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.textDecoration = 'underline'
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.textDecoration = 'none'
-                        }}
-                      >
-                        Открыть отчёт →
-                      </div>
-                    </div>
-                  </Link>
-
-                  <Link
-                    href={`/app/project/${projectId}/wildberries/reviews`}
-                    style={{ textDecoration: 'none', color: 'inherit', display: 'block', minHeight: 0 }}
-                  >
-                    <div
-                      className="card"
-                      style={{
-                        padding: 16,
-                        border: '1px solid #e5e7eb',
-                        borderRadius: 8,
-                        background: '#fff',
-                        cursor: 'pointer',
-                        transition: 'all 0.2s',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: 8,
-                        height: '100%',
-                        minHeight: 0,
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.borderColor = '#d1d5db'
-                        e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.05)'
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.borderColor = '#e5e7eb'
-                        e.currentTarget.style.boxShadow = 'none'
-                      }}
-                    >
-                      <div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-                          <div style={{ fontSize: 20, flexShrink: 0 }}>⭐</div>
-                          <div style={{ fontSize: 18, fontWeight: 600, color: '#111827' }}>
-                            Отзывы WB
-                          </div>
-                        </div>
-                        <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6, marginLeft: 30 }}>
-                          Рейтинг и динамика отзывов по товарам
-                        </div>
-                        <div style={{ fontSize: 13, color: '#374151', marginBottom: 8, marginLeft: 30 }}>
-                          Мониторинг качества товаров по отзывам покупателей
-                        </div>
-                      </div>
-                      <div
-                        style={{
-                          marginTop: 'auto',
-                          fontSize: 13,
-                          color: '#2563eb',
-                          fontWeight: 500,
-                        }}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.textDecoration = 'underline'
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.textDecoration = 'none'
-                        }}
-                      >
-                        Посмотреть отзывы →
-                      </div>
-                    </div>
-                  </Link>
+            <article className={styles.metricCard}>
+              <div className={styles.metricLabel}>Остатки FBS / FBO</div>
+              <div className={styles.splitMetric}>
+                <div>
+                  <span>FBS</span>
+                  <strong>{formatNumber(kpis.stock.fbs_in_stock_products)}</strong>
+                </div>
+                <div>
+                  <span>FBO</span>
+                  <strong>{formatNumber(kpis.stock.fbo_in_stock_products)}</strong>
                 </div>
               </div>
-            )}
+              <div className={styles.metricSource}>FBS: {formatDateTime(kpis.last_snapshots.fbs_stock_at)}</div>
+              <div className={styles.metricSource}>FBO: {formatDateTime(kpis.last_snapshots.fbo_stock_at)}</div>
+            </article>
 
-            {/* Другие маркетплейсы */}
-            {otherMarketplacesEnabled && (
-              <div>
-                <h3 style={{ marginTop: 0, marginBottom: 10 }}>Другие маркетплейсы</h3>
-                <div className="metrics">
-                  <div className="metric-card" style={{ opacity: 0.8 }}>
-                    <div className="metric-label" style={{ fontSize: 12, textTransform: 'uppercase', color: '#6c757d' }}>
-                      Данные других маркетплейсов
-                    </div>
-                    <div style={{ fontSize: 13, color: '#666', marginTop: 4 }}>
-                      Метрики будут добавлены по мере подключения модулей для других маркетплейсов.
-                    </div>
-                  </div>
+            {kpis.internal_data && kpis.internal_data.total > 0 ? (
+              <article className={styles.metricCard}>
+                <div className={styles.metricLabel}>Внутренние данные</div>
+                <div className={styles.metricValue}>{formatNumber(kpis.internal_data.with_stock)}</div>
+                <div className={styles.metricHint}>С остатками из {formatNumber(kpis.internal_data.total)} товаров</div>
+                <div className={styles.metricSource}>
+                  Снимок: {formatDateTime(kpis.last_snapshots.internal_data_at)}
                 </div>
+              </article>
+            ) : null}
+
+            <article className={styles.metricCard}>
+              <div className={styles.metricLabel}>Расхождения цен</div>
+              <div className={styles.metricValue}>
+                {priceDiscrepanciesCount === null ? '—' : formatNumber(priceDiscrepanciesCount)}
               </div>
-            )}
-          </>
-        ) : (
-          <p>Failed to load metrics</p>
-        )}
-      </div>
+              <div className={styles.metricHint}>Товаров ниже РРЦ, без периода</div>
+              <Link
+                className={styles.cardLink}
+                href={`/app/project/${projectId}/wildberries/price-discrepancies?only_below_rrp=true`}
+              >
+                Открыть отчёт
+              </Link>
+            </article>
+
+            {latestWbReport && latestWbReportTotal !== null && latestWbReportTotal !== undefined ? (
+              <article className={styles.metricCard}>
+                <div className={styles.metricLabel}>Последний фин. отчёт WB</div>
+                <div className={styles.metricValue}>{formatCurrency(latestWbReportTotal, latestWbReport.currency)}</div>
+                <div className={styles.metricHint}>
+                  {formatDate(latestWbReport.period_from)} — {formatDate(latestWbReport.period_to)}
+                </div>
+                <Link className={styles.cardLink} href={`/app/project/${projectId}/wildberries/finances/reports`}>
+                  Список отчётов
+                </Link>
+              </article>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
     </div>
   )
 }

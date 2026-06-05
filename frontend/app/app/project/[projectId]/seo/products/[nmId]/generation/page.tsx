@@ -10,11 +10,13 @@ import {
   getSeoGenerationLatest,
   getSeoProductSummary,
   getSeoQuerySelection,
+  postSeoGenerationPromptPreview,
   postSeoGenerationHumanReview,
   postSeoGenerationPromote,
   postSeoGenerationRun,
   type SeoFeatureFlags,
   type SeoGenerationLatestResponse,
+  type SeoGenerationPromptPreviewResponse,
   type SeoGenerationRunResponse,
   type SeoProductSummaryResponse,
   type SeoQuerySelectionItem,
@@ -27,7 +29,8 @@ import { QualityBadge, ResearchPreviewBanner } from '../../../_components/Qualit
 import { CategoryTierBadge } from '../../../_components/CategoryTierBadge'
 
 type BrandVoice = 'экспертный' | 'тёплый' | 'минималистичный' | 'игривый'
-type Panel = 'brief' | 'queries' | 'rules' | 'draft'
+type GenerationStrategy = 'two_pass' | 'single_pass_sonnet'
+type Panel = 'brief' | 'queries' | 'rules' | 'draft' | 'prompt'
 
 const brandVoices: BrandVoice[] = ['экспертный', 'тёплый', 'минималистичный', 'игривый']
 
@@ -43,6 +46,7 @@ const panelLabels: Record<Panel, string> = {
   queries: 'Запросы',
   rules: 'Правила',
   draft: 'Черновик',
+  prompt: 'Prompt',
 }
 
 const isSelected = (item: SeoQuerySelectionItem) => item.selection_state !== 'excluded' && item.bucket !== 'rejected'
@@ -98,6 +102,18 @@ function relevanceTone(report: { score: number } | null | undefined): 'good' | '
   return 'bad'
 }
 
+function generationStatusLabel(status: SeoGenerationRunResponse['status']) {
+  if (status === 'completed') return 'Validator OK'
+  if (status === 'needs_review') return 'Needs review'
+  return 'Сохранено с ошибками'
+}
+
+function generationStatusTone(status: SeoGenerationRunResponse['status']): 'good' | 'warn' | 'bad' | 'neutral' {
+  if (status === 'completed') return 'good'
+  if (status === 'needs_review') return 'warn'
+  return 'bad'
+}
+
 export default function SeoGenerationPage({ params }: { params: { projectId: string; nmId: string } }) {
   const { projectId, nmId } = params
   const searchParams = useSearchParams()
@@ -106,13 +122,15 @@ export default function SeoGenerationPage({ params }: { params: { projectId: str
   const [querySet, setQuerySet] = useState<SeoQuerySetResponse | null>(null)
   const [latest, setLatest] = useState<SeoGenerationLatestResponse | null>(null)
   const [generation, setGeneration] = useState<SeoGenerationRunResponse | null>(null)
+  const [promptPreview, setPromptPreview] = useState<SeoGenerationPromptPreviewResponse | null>(null)
   const [featureFlags, setFeatureFlags] = useState<SeoFeatureFlags | null>(null)
   const [eligibilityTier, setEligibilityTier] = useState<string | null>(null)
-  const [brandVoice, setBrandVoice] = useState<BrandVoice>('экспертный')
+  const [brandVoice, setBrandVoice] = useState<BrandVoice>('тёплый')
   const [mainQueryText, setMainQueryText] = useState('')
   const [panel, setPanel] = useState<Panel>('brief')
   const [loading, setLoading] = useState(false)
   const [generating, setGenerating] = useState(false)
+  const [promptLoading, setPromptLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [reviewVerdict, setReviewVerdict] = useState<'accept' | 'reject' | 'needs_changes'>('accept')
   const [reviewReviewer, setReviewReviewer] = useState('operator')
@@ -136,7 +154,7 @@ export default function SeoGenerationPage({ params }: { params: { projectId: str
         getSeoProductSummary(projectId, Number(nmId), { category_id: Number(categoryId) }),
         getSeoQuerySelection(projectId, Number(nmId), { category_id: Number(categoryId) }),
         getSeoGenerationLatest(projectId, Number(nmId), { category_id: Number(categoryId) }).catch(() => null),
-        getSeoFeatureFlags().catch(() => null),
+        getSeoFeatureFlags(projectId).catch(() => null),
         getSeoEvalRuns(projectId, { category_id: Number(categoryId), limit: 1 }).catch(() => null),
       ])
       setSummary(summaryData)
@@ -171,7 +189,7 @@ export default function SeoGenerationPage({ params }: { params: { projectId: str
   )
   const negative = useMemo(() => blockItems(summary, 'Какие запросы не подходят'), [summary])
   const product = summary?.product || {}
-  const isConfirmed = querySet?.status === 'confirmed'
+  const hasSavedQuerySet = Boolean(querySet?.id)
   const hasProductMeaning = summary?.product_status_label === 'Готов к подбору'
   const hasSelectedQueries = selected.length > 0
   const hasPrimaryQueries = primary.length > 0
@@ -179,9 +197,9 @@ export default function SeoGenerationPage({ params }: { params: { projectId: str
   // Iteration 1 (CD-1 / OD-1): the run button is gated on the
   // `SEO_GENERATION_PREVIEW_ENABLED` env flag exposed via
   // `GET /api/v1/seo/feature-flags`. The hardcoded `true` has been removed.
-  const previewEnabled = Boolean(featureFlags?.generation_preview_enabled)
+  const previewEnabled = featureFlags?.generation_preview_enabled ?? true
   const generationEndpointReady = previewEnabled
-  const canGenerate = Boolean(isConfirmed && hasProductMeaning && hasSelectedQueries && hasPrimaryQueries && hasMainQuery && generationEndpointReady && !generating)
+  const canGenerate = Boolean(hasSavedQuerySet && hasProductMeaning && hasSelectedQueries && hasPrimaryQueries && hasMainQuery && generationEndpointReady && !generating)
   const generatedCard = generation?.generated_card || null
   const draftTitle = generatedCard?.title || latest?.title || ''
   const draftDescription = generatedCard?.description || latest?.description || ''
@@ -238,7 +256,7 @@ export default function SeoGenerationPage({ params }: { params: { projectId: str
     }
   }
 
-  const runGeneration = async () => {
+  const runGeneration = async (strategy: GenerationStrategy = 'two_pass') => {
     if (!canGenerate || !categoryId) return
     setGenerating(true)
     setError(null)
@@ -249,7 +267,7 @@ export default function SeoGenerationPage({ params }: { params: { projectId: str
         query_set_id: querySet?.id || null,
         main_query_text: mainQueryText,
         brand_voice: brandVoice,
-        allow_draft_query_set: false,
+        strategy,
       })
       setGeneration(response)
       setPanel('draft')
@@ -262,10 +280,29 @@ export default function SeoGenerationPage({ params }: { params: { projectId: str
     }
   }
 
+  const showPromptPreview = async () => {
+    if (!categoryId) return
+    setPromptLoading(true)
+    setError(null)
+    try {
+      const response = await postSeoGenerationPromptPreview(projectId, Number(nmId), {
+        category_id: Number(categoryId),
+        query_set_id: querySet?.id || null,
+        main_query_text: mainQueryText,
+        brand_voice: brandVoice,
+      })
+      setPromptPreview(response)
+      setPanel('prompt')
+    } catch (e) {
+      setError(normalizeError(e))
+    } finally {
+      setPromptLoading(false)
+    }
+  }
+
   const readiness = [
     { label: 'Товар проанализирован', ok: Boolean(hasProductMeaning), detail: summary?.product_status_label || 'Нет данных' },
-    { label: 'Запросы выбраны для генерации', ok: Boolean(isConfirmed), detail: isConfirmed ? 'готово' : 'не выбраны' },
-    { label: 'Есть выбранные запросы', ok: Boolean(hasSelectedQueries), detail: `${selected.length} выбрано` },
+    { label: 'Выбор запросов сохранён', ok: Boolean(hasSavedQuerySet && hasSelectedQueries), detail: hasSelectedQueries ? `${selected.length} выбрано` : 'сохранённого выбора нет' },
     { label: 'Главный запрос выбран', ok: Boolean(hasMainQuery), detail: mainQueryText || 'Не выбран' },
     {
       label: 'Generation preview включён',
@@ -301,7 +338,7 @@ export default function SeoGenerationPage({ params }: { params: { projectId: str
     },
     query_set: {
       id: querySet?.id || null,
-      status: querySet?.status || 'draft',
+      status: querySet?.id ? 'saved' : 'empty',
       main_query_text: mainQueryText || null,
       primary: primary.slice(0, 12).map((item) => item.display_query),
       secondary: secondary.slice(0, 12).map((item) => item.display_query),
@@ -323,7 +360,7 @@ export default function SeoGenerationPage({ params }: { params: { projectId: str
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16, alignItems: 'center' }}>
             <div>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
-                <StatusPill label={isConfirmed ? 'Запросы выбраны для генерации' : 'Запросы не выбраны для генерации'} tone={isConfirmed ? 'good' : 'warn'} />
+                <StatusPill label={hasSavedQuerySet && hasSelectedQueries ? 'Выбор запросов сохранён' : 'Запросы не выбраны для генерации'} tone={hasSavedQuerySet && hasSelectedQueries ? 'good' : 'warn'} />
                 <StatusPill label={`${selected.length} выбрано`} tone={hasSelectedQueries ? 'good' : 'warn'} />
                 <StatusPill label={mainQueryText ? `главный: ${mainQueryText}` : 'главный не выбран'} tone={hasMainQuery ? 'good' : 'warn'} />
                 {seoRelevanceV2 ? (
@@ -332,6 +369,7 @@ export default function SeoGenerationPage({ params }: { params: { projectId: str
                   <StatusPill label={`Lint ${seoRelevance.score}/100`} tone={relevanceTone(seoRelevance)} />
                 ) : null}
                 {latest?.status && <StatusPill label={`Текст: ${latest.status}`} tone="neutral" />}
+                {generation?.strategy ? <StatusPill label={`strategy: ${generation.strategy}`} tone="neutral" /> : null}
                 <QualityBadge
                   mode={generation?.quality_mode || latest?.quality_mode}
                   reasons={(generation?.degraded_reasons || latest?.degraded_reasons || []) as any}
@@ -357,11 +395,19 @@ export default function SeoGenerationPage({ params }: { params: { projectId: str
               </button>
               <button
                 type="button"
-                onClick={runGeneration}
+                onClick={() => runGeneration('two_pass')}
                 disabled={!canGenerate}
                 style={{ ...buttonStyle('primary'), opacity: canGenerate ? 1 : 0.52, cursor: canGenerate ? 'pointer' : 'not-allowed' }}
               >
-                {generating ? 'Генерируем...' : 'Сгенерировать'}
+                {generating ? 'Генерируем...' : 'Сгенерировать two-pass'}
+              </button>
+              <button
+                type="button"
+                onClick={() => runGeneration('single_pass_sonnet')}
+                disabled={!canGenerate}
+                style={{ ...buttonStyle('light'), opacity: canGenerate ? 1 : 0.52, cursor: canGenerate ? 'pointer' : 'not-allowed' }}
+              >
+                Sonnet single-pass
               </button>
             </div>
           </div>
@@ -418,6 +464,9 @@ export default function SeoGenerationPage({ params }: { params: { projectId: str
                 {panelLabels[item]}
               </button>
             ))}
+            <button type="button" onClick={showPromptPreview} disabled={promptLoading || !querySet?.id} style={buttonStyle('light')}>
+              {promptLoading ? 'Собираем prompt...' : 'Показать prompt'}
+            </button>
           </div>
 
           {panel === 'brief' && (
@@ -458,7 +507,50 @@ export default function SeoGenerationPage({ params }: { params: { projectId: str
               <RuleLine label="Описание" value="до 5000 символов, ровно 6 блоков через пустую строку" />
               <RuleLine label="Запросы" value="selected query не чаще 3 раз, rejected/excluded запрещены" />
               <RuleLine label="Модели" value="Haiku 4.5 primary, Sonnet 4.5 fallback после ошибки валидации" />
-              <RuleLine label="Статус" value="результат должен попасть в SeoContentVersion как draft/needs_review" />
+              <RuleLine label="Статус" value="результат должен сохраниться как preview/needs_review" />
+            </div>
+          )}
+
+          {panel === 'prompt' && (
+            <div style={{ display: 'grid', gap: 14 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                <div>
+                  <h2 style={{ margin: 0 }}>Prompt preview</h2>
+                  <div style={{ color: '#64748b', marginTop: 4 }}>
+                    Runtime input без запуска модели.
+                  </div>
+                </div>
+                <button type="button" onClick={showPromptPreview} disabled={promptLoading || !querySet?.id} style={buttonStyle('primary')}>
+                  {promptLoading ? 'Собираем...' : 'Обновить prompt'}
+                </button>
+              </div>
+              {promptPreview ? (
+                <>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <StatusPill label={promptPreview.model_name} tone="neutral" />
+                    <StatusPill label={promptPreview.prompt_version} tone="neutral" />
+                    <StatusPill label={`выбор #${promptPreview.query_set_id}`} tone="neutral" />
+                  </div>
+                  <label style={{ display: 'block' }}>
+                    <div style={{ fontWeight: 800, marginBottom: 6 }}>User prompt</div>
+                    <textarea
+                      readOnly
+                      value={promptPreview.user_prompt}
+                      style={{ width: '100%', minHeight: 420, padding: 12, border: '1px solid #cbd5e1', borderRadius: 8, resize: 'vertical', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace', fontSize: 13, lineHeight: 1.45 }}
+                    />
+                  </label>
+                  <details>
+                    <summary style={{ cursor: 'pointer', fontWeight: 800 }}>System prompt</summary>
+                    <textarea
+                      readOnly
+                      value={promptPreview.system_prompt}
+                      style={{ width: '100%', minHeight: 320, marginTop: 10, padding: 12, border: '1px solid #cbd5e1', borderRadius: 8, resize: 'vertical', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace', fontSize: 13, lineHeight: 1.45 }}
+                    />
+                  </details>
+                </>
+              ) : (
+                <div style={{ color: '#64748b' }}>Нажмите «Показать prompt», чтобы увидеть input.</div>
+              )}
             </div>
           )}
 
@@ -467,12 +559,13 @@ export default function SeoGenerationPage({ params }: { params: { projectId: str
               <h2 style={{ margin: 0 }}>Черновик карточки</h2>
               {generation && (
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  <StatusPill label={generation.status === 'completed' ? 'Сохранено в draft' : 'Ошибка генерации'} tone={generation.status === 'completed' ? 'good' : 'bad'} />
+                  <StatusPill label={generationStatusLabel(generation.status)} tone={generationStatusTone(generation.status)} />
                   <StatusPill label={generation.model_name || 'model unknown'} tone="neutral" />
                   <StatusPill label={`${generation.attempts} attempts`} tone="neutral" />
                   {generation.content_version_id && <StatusPill label={`content #${generation.content_version_id}`} tone="neutral" />}
                 </div>
               )}
+              <SinglePassValidationBadges validation={generation?.single_pass_validation} />
               {seoRelevanceV2 && <SeoRelevanceV2Panel report={seoRelevanceV2} />}
               {seoRelevance && <SeoRelevancePanel report={seoRelevance} />}
               {generation?.error_text && <div style={{ color: '#b91c1c' }}>{generation.error_text}</div>}
@@ -608,7 +701,7 @@ export default function SeoGenerationPage({ params }: { params: { projectId: str
 
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
           <Link href={`/app/project/${projectId}/seo/products/${nmId}?category_id=${categoryId}`} style={buttonStyle('light')}>К товару</Link>
-          <Link href={`/app/project/${projectId}/seo/products/${nmId}/queries?category_id=${categoryId}`} style={buttonStyle('ghost')}>К запросам</Link>
+          <Link href={`/app/project/${projectId}/seo/products/${nmId}?category_id=${categoryId}#seo-query-selection`} style={buttonStyle('ghost')}>К запросам</Link>
           <Link href={`/app/project/${projectId}/seo/products/${nmId}/compare?category_id=${categoryId}`} style={buttonStyle('ghost')}>Compare</Link>
           {activeMatcherRunId ? (
             <Link href={`/app/project/${projectId}/seo/matcher-runs/${activeMatcherRunId}`} style={buttonStyle('ghost')}>
@@ -763,6 +856,38 @@ function Metric({ label, value }: { label: string; value: string }) {
     <div style={{ border: '1px solid #e2e8f0', borderRadius: 8, padding: 10 }}>
       <div style={{ color: '#64748b', fontSize: 13 }}>{label}</div>
       <div style={{ fontWeight: 900, marginTop: 3, overflowWrap: 'anywhere' }}>{value}</div>
+    </div>
+  )
+}
+
+function SinglePassValidationBadges({ validation }: { validation?: Record<string, any> | null }) {
+  if (!validation) return null
+  const formatErrors = Array.isArray(validation.format_errors) ? validation.format_errors : []
+  const coverage = validation.keyword_coverage || {}
+  const missing = Array.isArray(coverage.missing) ? coverage.missing : []
+  const covered = Array.isArray(coverage.covered) ? coverage.covered : []
+  const blacklistHits = Array.isArray(validation.blacklist_hits) ? validation.blacklist_hits : []
+  const mainQueryOk = validation.main_query_in_title === true
+  return (
+    <div style={{ display: 'grid', gap: 8, border: '1px solid #e2e8f0', borderRadius: 8, padding: 12 }}>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <StatusPill label={validation.passed ? 'single-pass passed' : 'single-pass review'} tone={validation.passed ? 'good' : 'warn'} />
+        <StatusPill label={formatErrors.length ? `format: ${formatErrors.length}` : 'format OK'} tone={formatErrors.length ? 'bad' : 'good'} />
+        <StatusPill label={missing.length ? `missing keys: ${missing.length}` : `keys OK: ${covered.length}`} tone={missing.length ? 'warn' : 'good'} />
+        <StatusPill label={blacklistHits.length ? `blacklist: ${blacklistHits.length}` : 'blacklist OK'} tone={blacklistHits.length ? 'bad' : 'good'} />
+        <StatusPill label={mainQueryOk ? 'main query in title' : 'main query missing'} tone={mainQueryOk ? 'good' : 'bad'} />
+      </div>
+      {formatErrors.length ? <ValidationLine title="Формат" items={formatErrors} /> : null}
+      {missing.length ? <ValidationLine title="Не покрыты ключи" items={missing} /> : null}
+      {blacklistHits.length ? <ValidationLine title="Blacklist" items={blacklistHits} /> : null}
+    </div>
+  )
+}
+
+function ValidationLine({ title, items }: { title: string; items: string[] }) {
+  return (
+    <div style={{ color: '#475569', fontSize: 13 }}>
+      <strong>{title}:</strong> {items.join(', ')}
     </div>
   )
 }

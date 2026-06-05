@@ -7,6 +7,7 @@ import { apiDownload, apiGetData, apiPost } from '@/lib/apiClient'
 import { usePageTitle } from '@/hooks/usePageTitle'
 import CategoryMultiSelectPopover from '@/components/CategoryMultiSelectPopover'
 import PortalBackButton from '@/components/PortalBackButton'
+import styles from './price-discrepancies.module.css'
 
 interface PriceDiscrepancyItem {
   article: string | null
@@ -390,8 +391,8 @@ function PriceDiscrepancyFilters({
   }, [searchInput, filters.q, onChange])
 
   return (
-    <div className="card" style={{ marginTop: 16, marginBottom: 16 }}>
-      <div style={{ marginBottom: 12 }}>
+    <div className={`card ${styles.filtersCard}`} style={{ marginTop: 16, marginBottom: 16 }}>
+      <div className={styles.cardHeader} style={{ marginBottom: 12 }}>
         <h2 style={{ margin: 0 }}>Фильтры</h2>
       </div>
 
@@ -677,15 +678,15 @@ interface TableProps {
 function PriceDiscrepancyTable({ items }: TableProps) {
   if (!items.length) {
     return (
-      <div className="card">
+      <div className={`card ${styles.emptyCard}`}>
         <p>Нет данных по расхождениям цен с текущими фильтрами.</p>
       </div>
     )
   }
 
   return (
-    <div className="card">
-      <div style={{ overflowX: 'auto' }}>
+    <div className={`card ${styles.tableCard}`}>
+      <div className={styles.tableScroll} style={{ overflowX: 'auto' }}>
         <table>
           <thead>
             <tr>
@@ -845,7 +846,7 @@ function Pagination({ meta, showAll, loading, onPageChange }: PaginationProps) {
   }
 
   return (
-    <div className="pagination" style={{ flexWrap: 'wrap', gap: 8 }}>
+    <div className={`pagination ${styles.pagination}`} style={{ flexWrap: 'wrap', gap: 8 }}>
       {!showAll ? (
         <>
           <button
@@ -870,6 +871,407 @@ function Pagination({ meta, showAll, loading, onPageChange }: PaginationProps) {
         <>
           <span>Показаны все записи (Всего: {meta.total_count})</span>
         </>
+      )}
+    </div>
+  )
+}
+
+interface RrpSavedViewsProps {
+  filters: FiltersState
+  meta: PriceDiscrepancyResponse['meta'] | null
+  onChange: (next: Partial<FiltersState>, resetPage?: boolean) => void
+}
+
+function RrpSavedViews({ filters, meta, onChange }: RrpSavedViewsProps) {
+  const activeTotal = meta?.total_count
+
+  const views = [
+    {
+      id: 'all',
+      label: 'Все позиции',
+      count: !filters.onlyBelowRrp ? activeTotal : undefined,
+      active: !filters.onlyBelowRrp,
+      onClick: () => onChange({ onlyBelowRrp: false, page: 1 }, true),
+    },
+    {
+      id: 'below',
+      label: 'Только проблемы',
+      count: filters.onlyBelowRrp ? activeTotal : undefined,
+      active: filters.onlyBelowRrp,
+      tone: 'success',
+      onClick: () => onChange({ onlyBelowRrp: true, page: 1 }, true),
+    },
+    {
+      id: 'rrp',
+      label: 'Ниже РРЦ',
+      count: filters.onlyBelowRrp ? activeTotal : undefined,
+      active: false,
+      onClick: () => onChange({ onlyBelowRrp: true, page: 1 }, true),
+    },
+    {
+      id: 'wb-stock',
+      label: 'Без остатка',
+      count: filters.hasWbStock === 'false' ? activeTotal : undefined,
+      active: filters.hasWbStock === 'false',
+      onClick: () =>
+        onChange({ hasWbStock: filters.hasWbStock === 'false' ? 'any' : 'false', page: 1 }, true),
+    },
+    {
+      id: 'competitive',
+      label: 'Конкурентные',
+      count: undefined,
+      active: false,
+      onClick: () => onChange({ onlyBelowRrp: false, hasWbStock: 'any', hasEnterpriseStock: 'any', page: 1 }, true),
+    },
+  ].filter((view) => view.id !== 'competitive')
+
+  return (
+    <div className={styles.savedViewsCard}>
+      <div className={styles.savedViewsRow}>
+        {views.map((view) => (
+          <button
+            key={view.id}
+            type="button"
+            className={`${styles.savedView} ${view.active ? styles.savedViewActive : ''} ${
+              view.tone === 'success' ? styles.savedViewSuccess : ''
+            }`}
+            onClick={view.onClick}
+          >
+            {view.tone === 'success' && <span className={styles.savedViewStar}>☆</span>}
+            <span>{view.label}</span>
+            {typeof view.count === 'number' && <span className={styles.savedViewCount}>{view.count}</span>}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+interface RrpFilterToolbarProps {
+  filters: FiltersState
+  categories: CategoryOption[]
+  frontSnapshots: FrontSnapshotOption[]
+  frontSnapshotsLoading: boolean
+  meta: PriceDiscrepancyResponse['meta'] | null
+  onChange: (next: Partial<FiltersState>, resetPage?: boolean) => void
+}
+
+function RrpFilterToolbar({
+  filters,
+  categories,
+  frontSnapshots,
+  frontSnapshotsLoading,
+  onChange,
+}: RrpFilterToolbarProps) {
+  const [searchValue, setSearchValue] = useState(filters.q)
+
+  useEffect(() => {
+    setSearchValue(filters.q)
+  }, [filters.q])
+
+  useEffect(() => {
+    const handle = window.setTimeout(() => {
+      if (searchValue !== filters.q) {
+        onChange({ q: searchValue, page: 1 }, true)
+      }
+    }, 350)
+
+    return () => window.clearTimeout(handle)
+  }, [searchValue, filters.q, onChange])
+
+  return (
+    <div className={styles.filterToolbar}>
+      <div className={styles.filterRow}>
+        <div className={styles.searchControl}>
+          <span>⌕</span>
+          <input
+            aria-label="Поиск по артикулу, nmID или названию"
+            value={searchValue}
+            onChange={(event) => setSearchValue(event.target.value)}
+            placeholder="Артикул / nmID / название..."
+          />
+        </div>
+
+        <div className={styles.categoryFilter}>
+          {categories.length > 0 ? (
+            <CategoryMultiSelectPopover
+              categories={categories}
+              selectedIds={filters.categoryIds}
+              onChange={(ids) => onChange({ categoryIds: ids, page: 1 }, true)}
+              fullWidth
+            />
+          ) : (
+            <button type="button" className={styles.toolbarButton} disabled>
+              Категория
+            </button>
+          )}
+        </div>
+
+        <label className={styles.snapshotSelect}>
+          <select
+            value={filters.frontSnapshotAt}
+            onChange={(event) => onChange({ frontSnapshotAt: event.target.value, page: 1 }, true)}
+            disabled={frontSnapshotsLoading}
+          >
+            <option value="">Витрина: последняя</option>
+            {frontSnapshots.map((snapshot) => (
+              <option key={snapshot.snapshot_at || 'latest'} value={snapshot.snapshot_at || ''}>
+                {snapshot.snapshot_at ? `Витрина: ${formatDate(snapshot.snapshot_at)}` : 'Витрина: последняя'} (
+                {snapshot.items_count})
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <div className={styles.toolbarSpacer} />
+
+        <label className={styles.sortControl}>
+          <span>Сортировка:</span>
+          <select value={filters.sort} onChange={(event) => onChange({ sort: event.target.value, page: 1 }, true)}>
+            <option value="diff_rub_desc">↕ Δ ₽ ↓</option>
+            <option value="diff_rub_asc">↕ Δ ₽ ↑</option>
+            <option value="rrp_price_desc">РРЦ ↓</option>
+            <option value="showcase_price_asc">Витрина ↑</option>
+          </select>
+        </label>
+
+        <button type="button" className={styles.toolbarButton} title="Настройка колонок пока недоступна">
+          <span>☀</span>
+          Колонки
+        </button>
+      </div>
+    </div>
+  )
+}
+
+interface RrpReportTableProps {
+  items: PriceDiscrepancyItem[]
+  meta: PriceDiscrepancyResponse['meta'] | null
+  showAll: boolean
+  loading: boolean
+  onToggleShowAll: () => void
+  onPageChange: (page: number) => void
+}
+
+function getItemKey(item: PriceDiscrepancyItem, index: number): string {
+  return `${item.nm_id ?? 'nm'}-${item.article ?? 'article'}-${index}`
+}
+
+function RrpReportTable({ items, meta, showAll, loading, onToggleShowAll, onPageChange }: RrpReportTableProps) {
+  const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set())
+  const totalPages = meta ? Math.max(1, Math.ceil(meta.total_count / meta.page_size)) : 1
+
+  useEffect(() => {
+    setSelectedRows(new Set())
+  }, [items])
+
+  if (!items.length) {
+    return (
+      <div className={styles.emptyCard}>
+        <p>Нет данных по расхождениям цен с текущими фильтрами.</p>
+      </div>
+    )
+  }
+
+  const allRowsSelected = items.length > 0 && items.every((item, index) => selectedRows.has(getItemKey(item, index)))
+
+  const toggleAll = () => {
+    if (allRowsSelected) {
+      setSelectedRows(new Set())
+      return
+    }
+    setSelectedRows(new Set(items.map((item, index) => getItemKey(item, index))))
+  }
+
+  const toggleRow = (key: string) => {
+    setSelectedRows((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) {
+        next.delete(key)
+      } else {
+        next.add(key)
+      }
+      return next
+    })
+  }
+
+  return (
+    <div className={styles.tableCard}>
+      {selectedRows.size > 0 && (
+        <div className={styles.bulkBar}>
+          <span>{selectedRows.size} товаров выбрано</span>
+          <button type="button" onClick={() => setSelectedRows(new Set())}>
+            Снять
+          </button>
+        </div>
+      )}
+      <div className={styles.tableWrap}>
+        <table className={styles.rrpTable}>
+          <colgroup>
+            <col style={{ width: 34 }} />
+            <col style={{ width: 44 }} />
+            <col style={{ width: 84 }} />
+            <col style={{ width: 300 }} />
+            <col style={{ width: 66 }} />
+            <col style={{ width: 66 }} />
+            <col style={{ width: 66 }} />
+            <col style={{ width: 54 }} />
+            <col style={{ width: 60 }} />
+            <col style={{ width: 76 }} />
+            <col style={{ width: 56 }} />
+          </colgroup>
+          <thead>
+            <tr>
+              <th className={`${styles.sticky} ${styles.stickySelect} ${styles.selectCol}`}>
+                <input
+                  type="checkbox"
+                  className={styles.rowCheck}
+                  checked={allRowsSelected}
+                  onChange={toggleAll}
+                  aria-label="Выбрать все товары на странице"
+                />
+              </th>
+              <th className={`${styles.sticky} ${styles.stickyPhoto} ${styles.photoCol}`}>Фото</th>
+              <th className={`${styles.sticky} ${styles.stickySku} ${styles.skuCol}`}>Артикул</th>
+              <th className={`${styles.sticky} ${styles.stickyTitle} ${styles.titleCol}`}>Название</th>
+              <th className={styles.num}>Цена</th>
+              <th className={styles.num}>РРЦ</th>
+              <th className={styles.num}>Витр.</th>
+              <th className={styles.num}>Скид.</th>
+              <th className={styles.num}>Δ РРЦ</th>
+              <th className={styles.num}>Реком.</th>
+              <th className={styles.num}>Ост.</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((item, index) => {
+              const key = getItemKey(item, index)
+              const hasShowcase = item.prices.showcase_price !== null
+              const isBelow = item.computed.is_below_rrp && hasShowcase
+              const diffRub = item.computed.diff_rub
+              const diffPercent = item.computed.diff_percent
+              const absDiffRub = diffRub !== null ? Math.abs(diffRub) : null
+              const absDiffPercent = diffPercent !== null ? Math.abs(diffPercent) : null
+              const recommended = item.computed.recommended_wb_admin_price
+              const deltaRecommended = item.computed.delta_recommended
+              const expectedShowcase = item.computed.expected_showcase_price
+              const deltaSign = diffRub !== null && diffRub > 0 ? '-' : '+'
+              const deltaLabelRub = absDiffRub !== null ? `${deltaSign}${absDiffRub.toFixed(0)} ₽` : '—'
+              const deltaLabelPercent =
+                absDiffPercent !== null ? `${deltaSign}${absDiffPercent.toFixed(1)}%` : '—'
+
+              return (
+                <tr key={key} className={!hasShowcase ? styles.mutedRow : undefined}>
+                  <td className={`${styles.sticky} ${styles.stickySelect} ${styles.selectCol}`}>
+                    <input
+                      type="checkbox"
+                      className={styles.rowCheck}
+                      checked={selectedRows.has(key)}
+                      onChange={() => toggleRow(key)}
+                      aria-label={`Выбрать товар ${item.article || item.nm_id || index + 1}`}
+                    />
+                  </td>
+                  <td className={`${styles.sticky} ${styles.stickyPhoto} ${styles.photoCol}`}>
+                    <PhotoPopover photos={item.photos} size={28} />
+                  </td>
+                  <td className={`${styles.sticky} ${styles.stickySku} ${styles.skuCol}`}>
+                    <div className={styles.skuText}>{item.article || '—'}</div>
+                    {item.nm_id ? (
+                      <a
+                        className={styles.nmLink}
+                        href={`https://www.wildberries.ru/catalog/${item.nm_id}/detail.aspx`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        {item.nm_id}
+                      </a>
+                    ) : (
+                      <span className={styles.nmMuted}>—</span>
+                    )}
+                  </td>
+                  <td className={`${styles.sticky} ${styles.stickyTitle} ${styles.titleCol}`}>
+                    <div className={styles.productTitle}>{item.title || '—'}</div>
+                    <div className={styles.productMeta}>
+                      {item.category?.name || 'Без категории'}
+                      {!hasShowcase && <span> · нет данных витрины</span>}
+                    </div>
+                  </td>
+                  <td className={`${styles.num} ${styles.priceCell}`}>{formatCurrency(item.prices.wb_admin_price)}</td>
+                  <td className={`${styles.num} ${styles.priceCell}`}>{formatCurrency(item.prices.rrp_price)}</td>
+                  <td className={`${styles.num} ${styles.priceCell}`}>
+                    {formatCurrency(item.prices.showcase_price)}
+                    {expectedShowcase !== null && <span className={styles.priceHint}>≈ {formatCurrency(expectedShowcase)}</span>}
+                  </td>
+                  <td className={styles.num}>
+                    <div>{item.discounts.wb_discount_percent ?? '—'}%</div>
+                    <span className={styles.priceHint}>СПП {item.discounts.spp_percent ?? '—'}%</span>
+                  </td>
+                  <td className={styles.num}>
+                    {hasShowcase && diffRub !== null ? (
+                      <span
+                        className={`${styles.deltaBadge} ${isBelow ? styles.deltaDanger : styles.deltaNeutral}`}
+                        title={deltaLabelRub}
+                      >
+                        {deltaLabelPercent}
+                      </span>
+                    ) : (
+                      '—'
+                    )}
+                  </td>
+                  <td className={`${styles.num} ${styles.recommend}`}>
+                    {recommended !== null ? (
+                      <>
+                        <div>{formatCurrency(recommended)}</div>
+                        {deltaRecommended !== null && deltaRecommended !== 0 && (
+                          <span>{deltaRecommended > 0 ? `+${deltaRecommended.toFixed(0)} ₽` : `${deltaRecommended.toFixed(0)} ₽`}</span>
+                        )}
+                      </>
+                    ) : (
+                      '—'
+                    )}
+                  </td>
+                  <td className={`${styles.num} ${styles.stock}`}>
+                    <div>WB {formatInt(item.stocks.wb_stock_qty)}</div>
+                    <span>Скл {formatInt(item.stocks.enterprise_stock_qty)}</span>
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {meta && (
+        <div className={styles.tableFooter}>
+          <span>
+            Показано <strong>{items.length}</strong> из <strong>{meta.total_count}</strong> позиций
+          </span>
+          <button type="button" onClick={onToggleShowAll} disabled={loading}>
+            {showAll ? 'Вернуть пагинацию' : 'Показать все'}
+          </button>
+          {!showAll && (
+            <>
+              <button
+                type="button"
+                onClick={() => onPageChange(Math.max(1, meta.page - 1))}
+                disabled={loading || totalPages <= 1 || meta.page <= 1}
+              >
+                Назад
+              </button>
+              <span>
+                Страница {meta.page} из {totalPages}
+              </span>
+              <button
+                type="button"
+                onClick={() => onPageChange(Math.min(totalPages, meta.page + 1))}
+                disabled={loading || totalPages <= 1 || meta.page >= totalPages}
+              >
+                Вперед
+              </button>
+            </>
+          )}
+        </div>
       )}
     </div>
   )
@@ -1147,225 +1549,84 @@ export default function WbPriceDiscrepanciesPage() {
   }
 
   return (
-    <div className="container">
+    <div className={styles.page}>
       {isReportsHost && (
-        <div style={{ marginBottom: 12 }}>
+        <div className={styles.portalBack}>
           <PortalBackButton fallbackHref="/client" />
         </div>
       )}
-      <h1>Расхождения цен (РРЦ vs витрина WB)</h1>
-      {!isReportsHost && (
-        <Link href={`/app/project/${projectId}/dashboard`}>
-          <button type="button">← Назад к дашборду</button>
-        </Link>
-      )}
 
-      {meta && (
-        <div className="card" style={{ marginTop: 16 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
-          <div>
-            <strong>Всего позиций:</strong> {meta.total_count}
-          </div>
-          <div style={{ fontSize: 12, color: '#666' }}>
-            <strong>Данные обновлены:</strong> {formatDate(meta.updated_at)}
+      <div className={styles.reportHeader}>
+        <div className={styles.reportTitleBlock}>
+          <div className={styles.reportTitleRow}>
+            <h1>Расхождения цен</h1>
+            <span className={styles.marketplaceBadge}>
+              <span />
+              Wildberries
+            </span>
           </div>
         </div>
-        {meta.total_count === 0 && diagnosticInfo && (
-          <div
-            style={{
-              marginTop: 12,
-              padding: 16,
-              background: '#fef3c7',
-              border: '1px solid #f59e0b',
-              borderRadius: 4,
-              fontSize: 14,
-            }}
-          >
-            <div style={{ marginBottom: 12 }}>
-              <strong>⚠️ Отчёт пуст. Диагностика данных:</strong>
-            </div>
-            
-            <div style={{ marginBottom: 12 }}>
-              <strong>Доступность данных:</strong>
-              <ul style={{ marginTop: 4, marginBottom: 0, paddingLeft: 20 }}>
-                <li>Products: {diagnosticInfo.data_availability.products_count}</li>
-                <li>Price snapshots: {diagnosticInfo.data_availability.price_snapshots_count}</li>
-                <li>Frontend prices: {diagnosticInfo.data_availability.frontend_catalog_price_snapshots_count}</li>
-                <li>Stock snapshots: {diagnosticInfo.data_availability.stock_snapshots_count}</li>
-                <li>
-                  <strong style={{ color: diagnosticInfo.data_availability.rrp_snapshots_count === 0 ? '#dc2626' : '#059669' }}>
-                    RRP snapshots: {diagnosticInfo.data_availability.rrp_snapshots_count}
-                  </strong>
-                </li>
-                {diagnosticInfo.data_availability.rrp_snapshots_latest_snapshot_at && (
-                  <li>
-                    Последний RRP snapshot:{' '}
-                    {formatDate(diagnosticInfo.data_availability.rrp_snapshots_latest_snapshot_at)}
-                  </li>
-                )}
-                <li>Products with both RRP and showcase: {diagnosticInfo.data_availability.products_with_both_rrp_and_showcase}</li>
-              </ul>
-            </div>
-
-            {diagnosticInfo.data_availability.internal_data_latest_snapshot && (
-              <div style={{ marginBottom: 12 }}>
-                <strong>Internal Data (источник РРЦ):</strong>
-                <ul style={{ marginTop: 4, marginBottom: 0, paddingLeft: 20 }}>
-                  <li>
-                    Последний snapshot: #{diagnosticInfo.data_availability.internal_data_latest_snapshot.id}{' '}
-                    ({diagnosticInfo.data_availability.internal_data_latest_snapshot.status || '—'}) —{' '}
-                    {formatDate(diagnosticInfo.data_availability.internal_data_latest_snapshot.imported_at || undefined)}
-                  </li>
-                  {typeof diagnosticInfo.data_availability.internal_data_rrp_rows_found === 'number' && (
-                    <li>RRP строк (найдено): {diagnosticInfo.data_availability.internal_data_rrp_rows_found}</li>
-                  )}
-                  {typeof diagnosticInfo.data_availability.internal_data_rrp_rows_matched_products === 'number' && (
-                    <li>
-                      Матчится с products.vendor_code_norm:{' '}
-                      {diagnosticInfo.data_availability.internal_data_rrp_rows_matched_products}
-                    </li>
-                  )}
-                  {typeof diagnosticInfo.data_availability.internal_data_rrp_rows_inserted === 'number' && (
-                    <li>
-                      Уже вставлено в rrp_snapshots (для этого snapshot):{' '}
-                      {diagnosticInfo.data_availability.internal_data_rrp_rows_inserted}
-                    </li>
-                  )}
-                </ul>
-              </div>
-            )}
-
-            {diagnosticInfo.data_availability.internal_data_rrp_errors_preview &&
-              diagnosticInfo.data_availability.internal_data_rrp_errors_preview.length > 0 && (
-                <div style={{ marginBottom: 12 }}>
-                  <strong>Ошибки парсинга/валидации RRP (превью):</strong>
-                  <ul style={{ marginTop: 4, marginBottom: 0, paddingLeft: 20 }}>
-                    {diagnosticInfo.data_availability.internal_data_rrp_errors_preview.slice(0, 5).map((e, idx) => (
-                      <li key={idx}>
-                        {e.message || '—'}
-                        {e.row_index !== null && e.row_index !== undefined ? ` (row ${e.row_index})` : ''}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            
-            {diagnosticInfo.issues.length > 0 && (
-              <div style={{ marginBottom: 12 }}>
-                <strong style={{ color: '#dc2626' }}>Проблемы:</strong>
-                <ul style={{ marginTop: 4, marginBottom: 0, paddingLeft: 20 }}>
-                  {diagnosticInfo.issues.map((issue, idx) => (
-                    <li key={idx}>{issue}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-            
-            {diagnosticInfo.recommendations.length > 0 && (
-              <div>
-                <strong style={{ color: '#059669' }}>Рекомендации:</strong>
-                <ul style={{ marginTop: 4, marginBottom: 0, paddingLeft: 20 }}>
-                  {diagnosticInfo.recommendations.map((rec, idx) => (
-                    <li key={idx}>{rec}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </div>
-        )}
-        
-        {meta.total_count === 0 && !diagnosticInfo && (
-          <div
-            style={{
-              marginTop: 12,
-              padding: 12,
-              background: '#fef3c7',
-              border: '1px solid #f59e0b',
-              borderRadius: 4,
-              fontSize: 14,
-            }}
-          >
-            <strong>Внимание:</strong> Отчёт пуст. Проверьте доступность источников данных или логи worker.
-          </div>
-        )}
+        <div className={styles.headerActions}>
+          <button type="button" className={styles.buttonSecondary} onClick={handleExportCsv} disabled={exportingCsv}>
+            <span className={styles.headerActionIcon}>↓</span>
+            {exportingCsv ? 'Экспортируем CSV…' : 'Экспорт CSV'}
+          </button>
         </div>
-      )}
-
-      <div className="card" style={{ marginTop: 16, marginBottom: 16 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
-          <h2 style={{ margin: 0 }}>Действия</h2>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            {diagnosticInfo?.data_availability?.rrp_snapshots_count === 0 && (
-              <button
-                type="button"
-                onClick={handleBuildRrpSnapshots}
-                disabled={buildingRrp}
-                style={{ minWidth: 190 }}
-              >
-                {buildingRrp ? 'Запуск...' : 'Построить RRP snapshots'}
-              </button>
-            )}
-            {!filters.showAll ? (
-              <button
-                type="button"
-                onClick={() => updateQuery({ showAll: true, page: 1 }, true)}
-                disabled={loading}
-              >
-                Показать все ({meta?.total_count ?? 0})
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => updateQuery({ showAll: false, page: 1 }, true)}
-                disabled={loading}
-              >
-                Вернуть пагинацию
-              </button>
-            )}
-            <button type="button" onClick={handleExportCsv} disabled={exportingCsv}>
-              {exportingCsv ? 'Экспортируем CSV…' : 'Экспорт CSV'}
-            </button>
-          </div>
-        </div>
-        {rrpBuildMessage && (
-          <div
-            style={{
-              marginTop: 12,
-              padding: 12,
-              background: '#dbeafe',
-              border: '1px solid #60a5fa',
-              borderRadius: 4,
-              fontSize: 14,
-            }}
-          >
-            {rrpBuildMessage}
-          </div>
-        )}
       </div>
 
-      <PriceDiscrepancyFilters
+      <RrpSavedViews filters={filters} meta={meta} onChange={updateQuery} />
+
+      {diagnosticInfo?.data_availability?.rrp_snapshots_count === 0 && (
+        <div className={styles.noticeBar}>
+          <div>
+            <strong>Нет RRP snapshots</strong>
+            <span>Данные РРЦ нужно построить из internal data.</span>
+          </div>
+          <button type="button" onClick={handleBuildRrpSnapshots} disabled={buildingRrp}>
+            {buildingRrp ? 'Запуск...' : 'Построить RRP snapshots'}
+          </button>
+        </div>
+      )}
+
+      {rrpBuildMessage && <div className={styles.infoBar}>{rrpBuildMessage}</div>}
+
+      {meta?.total_count === 0 && (
+        <div className={styles.noticeBar}>
+          <div>
+            <strong>Отчет пуст</strong>
+            <span>
+              {diagnosticInfo
+                ? `Products: ${diagnosticInfo.data_availability.products_count}, RRP snapshots: ${diagnosticInfo.data_availability.rrp_snapshots_count}, витрина: ${diagnosticInfo.data_availability.frontend_catalog_price_snapshots_count}.`
+                : 'Проверьте доступность источников данных или логи worker.'}
+            </span>
+          </div>
+        </div>
+      )}
+
+      <RrpFilterToolbar
         filters={filters}
         categories={categories}
         frontSnapshots={frontSnapshots}
         frontSnapshotsLoading={frontSnapshotsLoading}
+        meta={meta}
         onChange={updateQuery}
       />
 
-      {loading && <p>Загрузка данных…</p>}
+      {loading && <p className={styles.loadingText}>Загрузка данных…</p>}
       {error && (
-        <div className="card" style={{ background: '#f8d7da', border: '1px solid #f5c2c7' }}>
-          <p style={{ margin: 0 }}>
+        <div className={styles.errorCard}>
+          <p>
             <strong>Ошибка:</strong> {error}
           </p>
         </div>
       )}
-      {!loading && !error && <PriceDiscrepancyTable items={data} />}
-
-      {meta && (
-        <Pagination
+      {!loading && !error && (
+        <RrpReportTable
+          items={data}
           meta={meta}
           showAll={filters.showAll}
           loading={loading}
+          onToggleShowAll={() => updateQuery({ showAll: !filters.showAll, page: 1 }, true)}
           onPageChange={(page) => {
             updateQuery({ page }, false)
           }}

@@ -101,7 +101,7 @@ D:/Work/EcomCore/
 
 ---
 
-## 3. Текущее состояние системы (2026-04-24, после Phase 0)
+## 3. Текущее состояние системы (2026-04-25, после Phase 1 / перед Phase 1Q)
 
 ### 3.1. Что есть в БД
 
@@ -113,9 +113,17 @@ D:/Work/EcomCore/
   - 191 `seo_eval_labels` (ground truth).
   - свежий Step 10 matcher/eval прогон для 8 labeled SKU: run ids `63..70`, eval run id `75`.
   - ~8 SKU с `seo_sku_meaning_annotations` + meaning atoms.
-  - активный `SeoCategoryProfile`: `id=1`, `version=v1.812.skeleton.243953b2`, `schema_version=category_profile_v1`, `self_check.status=passed`.
+  - активный `SeoCategoryProfile`: `id=1`, `version=v1.812.skeleton.243953b2`, `is_active=true`, `schema_version=category_profile_v1`, `self_check.status=passed`.
+- **Категория 2841 (ланчбоксы)**:
+  - Phase 1 Step 6 dry-run принят: `subject.primary="ланчбокс"`, aliases `["ланчбокс", "ланч", "бокс"]`, `self_check.status=passed`.
+  - Phase 1 Step 7 сохранён candidate `SeoCategoryProfile`: `id=2`, `version=v1.2841.generic.46889ee8`, `schema_version=category_profile_v1`, `self_check.status=passed`.
+  - Phase 1 Step 8 activation выполнен: `id=2`, `version=v1.2841.generic.46889ee8`, `is_active=true`, `self_check.status=passed`, `subject.primary="ланчбокс"`, `hard_conflicts_count=0`.
+  - Phase 1 Step 9 matcher smoke прошёл как runtime/backend feasibility: active profile loaded, no `ProfileMissingError`, no legacy fallback, replayable traces exist.
+  - Phase 1 Step 9D зафиксировал product-quality blocked: SKU `10533814` и `893327503` дали pathological bucket distributions `915 primary / 24 secondary / 2 broad / 0 rejected`.
+  - Category 2841 is NOT production-proven. См. `docs/seo-module/phase1/STEP_9D_2841_MATCHER_QUALITY_FAILURE.md`.
+  - Следующий шаг: Phase 1Q Step 2 — SKU Evidence Audit for `535441190`.
 - **Категория 821 (тарелки, бегло упоминалась в транскрипте)**: был пример axes с полным набором экономических метрик, но не активно работали. В Phase 0 **не трогаем**.
-- **Таблица `seo_category_profiles`**: существует; для `(project_id=1, category_id=812)` ровно один активный профиль.
+- **Таблица `seo_category_profiles`**: существует; для `(project_id=1, category_id=812)` и `(project_id=1, category_id=2841)` есть активные профили.
 - **Таблица `seo_category_profile_derive_runs`**: существует; используется для observability derive/activation tooling.
 
 #### 3.1.1. Реальные ключи `sample_source_payload` (категория 812, проверено в БД 2026-04-24)
@@ -157,6 +165,7 @@ D:/Work/EcomCore/
 - Bootstrap pipeline: normalize → cluster → meaning → axes → atoms → embeddings.
 - `POST /api/seo/matcher/v2/run` для 812 SKU — создаёт `SeoMatcherRun` с `bucket` per query и пишет `category_profile_version` / `category_profile_active` в `metrics`.
 - `matcher_v2` требует активный `SeoCategoryProfile`; нет активного профиля → понятная ошибка `ProfileMissingError`, а не hidden legacy fallback.
+- Категория 2841 доказала backend portability passed: derive/persist/activate/matcher runtime path работает на второй категории без legacy fallback.
 - `POST /api/seo/eval/matcher/run` для 812 — accuracy считается по 191 labels.
 - Active guards и `query_meaning_matcher/matcher.py` profile-driven/literal-free; legacy matcher изолирован в `query_meaning_matcher/_legacy/matcher.py`.
 - Phase 0 Step 10 regression gate passed for 812: baseline accuracy `0.1678`, current accuracy `0.2349`, drift `+0.0671`, minimum acceptable `0.1378`.
@@ -170,6 +179,8 @@ D:/Work/EcomCore/
 | `matcher_v2` для категории без активного профиля | После Phase 0 это ожидаемый fail-fast: нужно сначала derive/self-check/activate профиль |
 | `eval` без ручного перечисления `nm_ids` | Эндпоинт требует явные `nm_ids`; без них возвращает 0 labels |
 | Strict eval labels для категорий кроме 812 | Пока нет ground-truth labels; Phase 1 использует qualitative validation |
+| Product-quality validation после Phase 1 | Product-quality blocked: missing/weak buyer-perception evidence, missing/failed vision, missing SKU atoms on some 2841 SKU, matcher over-primary failure |
+| Phase 2 | Phase 2 blocked до прохождения Phase 1Q или явного operator waiver |
 | Operator happy-path UI | Текущие экраны — микс iter1/iter2 + отладка, нет чистого пути «от CSV до брифа» |
 | Экспорт брифа | Phase 4, не реализовано |
 | Optional full SEO test suite | Известный unrelated failure: `tests/seo/test_matcher_retention.py::test_keeps_referenced_runs` |
@@ -269,9 +280,11 @@ Phase 0 переводит всю категорийную логику в `SeoC
 
 В ходе обсуждения 2026-04-24 было предложено выпилить meaning_atoms. **Решение: оставляем.** Генерация атомов уже автоматизирована через bootstrap и SKU-analysis. Проблема только в том, что producer читает hardcoded правила вместо профиля — это Phase 0 Step 5.
 
-### 5.6. Категории-агностика — Phase 0 backend state
+### 5.6. Категории-агностика — Phase 0/1 backend state
 
-После Phase 0 backend-путь стал category-agnostic для категорий с активным `SeoCategoryProfile`: `matcher_v2` читает профиль, active guards/matcher literal-free, legacy изолирован. Практически валидирована пока только категория 812; Phase 1 должна проверить вторую категорию.
+После Phase 0 backend-путь стал category-agnostic для категорий с активным `SeoCategoryProfile`: `matcher_v2` читает профиль, active guards/matcher literal-free, legacy изолирован. Phase 1 доказала backend portability passed на категории 2841: профиль был derived/persisted/activated, matcher smoke исполнился на активном профиле, legacy fallback не появился.
+
+Но Phase 1 не доказала product-quality. Category 2841 is not production-proven: Step 9D показал matcher over-primary failure на двух SKU без SKU atoms (`915/941 primary`, `0 rejected`), а Phase 1Q дополнительно фиксирует риски missing/weak buyer-perception evidence, missing/failed vision и пустые/слабые expressive signals. Поэтому Phase 2 blocked до прохождения Phase 1Q или явного operator waiver.
 
 ### 5.7. Reviews уже участвуют в axes
 
@@ -475,3 +488,7 @@ Legacy matcher не удалён полностью: он изолирован �
 
 - **2026-04-24 v1** — initial. Первичный primer перед стартом Phase 0.
 - **2026-04-24 v1.1** — Phase 0 closed: active profile 812, profile-driven matcher/guards, Step 10 regression gate, Phase 1 starting state.
+- **2026-04-25 v1.2** — Phase 1 Step 8 activation reflected: category 2841 active profile `v1.2841.generic.46889ee8`; next Step 9 matcher smoke.
+- **2026-04-25 v1.3** — Phase 1 reclassified: backend portability passed, product-quality blocked; Phase 1Q is required before Phase 2 unless operator waiver is explicit.
+- **2026-04-28 v1.4** — Phase 1Q first production query-selection path added on `/queries`: preview input, LLM run through provider interface, and persisted run artifacts without separate operator brief entity or auto-approval.
+- **2026-04-28 v1.5** — Production query-selection candidate retrieval corrected: backend run input now sends the wide deduped cluster-representative set (~2200 candidates when corpus is sufficient), while preview displays only the first N and persists total vs sent candidate counts separately.

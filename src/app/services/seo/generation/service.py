@@ -16,7 +16,7 @@ from app import settings
 from app.models import SeoContentVersion, SeoGenerationRun, SeoSkuQuerySet, SeoSkuQuerySetItem
 from app.schemas.seo_generation import (
     GeneratedCard,
-    GeneratedCharacteristic,
+    SeoGenerationPromptPreviewResponse,
     GenerationValidationIssue,
     SeoRelevanceQueryCoverage,
     SeoRelevanceReport,
@@ -33,9 +33,11 @@ from app.services.seo.quality import (
     infer_quality_mode,
     make_reason,
 )
+from app.services.seo.generation.single_pass_validator import validate_generation as validate_single_pass_generation
 from app.services.seo.query_meaning_matcher.embeddings import LocalPreviewEmbeddingProvider, cosine_similarity
 from app.services.seo.query_pipeline import normalize_query_text
 from app.services.seo.sku_meaning.evidence import build_sku_evidence_pack
+from app.services.seo.visual_motifs import VISUAL_MOTIF_RULES, extract_visual_motifs
 
 
 def _coerce_quality_mode(value: Any) -> QualityMode | None:
@@ -53,13 +55,24 @@ def _coerce_quality_mode(value: Any) -> QualityMode | None:
 
 
 GENERATION_PROMPT_VERSION = "wb_card_system_v1"
+GENERATION_REVIEWER_PROMPT_VERSION = "wb_card_reviewer_system_v1"
 GENERATION_VALIDATOR_VERSION = "wb_card_validator_v1"
 SEO_RELEVANCE_TARGET_SCORE = 70
 SEO_RELEVANCE_RETRY_SCORE = 55
+SEO_GENERATION_WRITER_TEMPERATURE = 0.8
+SEO_GENERATION_REVIEWER_TEMPERATURE = 0.3
+SEO_GENERATION_TWO_PASS_STRATEGY = "two_pass"
+SEO_GENERATION_SINGLE_PASS_STRATEGY = "single_pass_sonnet"
+SEO_GENERATION_SINGLE_PASS_MODEL = "anthropic/claude-sonnet-4.5"
+SEO_GENERATION_SINGLE_PASS_PARAMS = {
+    "temperature": 0.7,
+    "top_p": 0.9,
+    "max_tokens": 2600,
+}
+_KNOWN_VISUAL_MOTIFS = {rule.canonical for rule in VISUAL_MOTIF_RULES}
 
 _SECTION_DELIMITERS = [
     "===== НАЗВАНИЕ =====",
-    "===== ХАРАКТЕРИСТИКИ =====",
     "===== ОПИСАНИЕ =====",
     "===== ОТЧЁТ =====",
 ]
@@ -95,18 +108,38 @@ _TITLE_STOP_WORDS = {
 }
 
 _TITLE_FORBIDDEN_RE = re.compile(r"[/⭐★♥✓❤🔥💎!]|[A-ZА-ЯЁ]{4,}")
+_SEO_SLOP_PATTERNS: tuple[tuple[str, str], ...] = (
+    ("удобно держится в руке", "универсальное обещание про удобство"),
+    ("не занимает много места", "универсальное обещание про компактность"),
+    ("гарантирует долгое служение", "неподтвержденная гарантия долговечности"),
+    ("будет служить долго", "неподтвержденная гарантия долговечности"),
+    ("прослужит долго", "неподтвержденная гарантия долговечности"),
+    ("долгое служение", "неподтвержденная гарантия долговечности"),
+    ("захочется использовать каждый день", "универсальное эмоциональное обещание"),
+    ("использовать каждый день", "универсальное обещание регулярного использования"),
+    ("дарить друзьям", "универсальный подарочный штамп"),
+    ("станет отличным подарком", "универсальный подарочный штамп"),
+    ("отличный подарок", "универсальный подарочный штамп"),
+    ("практичный выбор", "каталожный штамп"),
+    ("инвестиция в удобство", "маркетинговый штамп"),
+    ("соответствует стандартам качества", "юридически звучащий штамп без пользы для покупателя"),
+)
 
 
 class SeoGenerationError(Exception):
     """Raised when generation cannot be completed."""
 
 
-def _prompt_path() -> Path:
-    return Path(__file__).resolve().parent / "prompts" / f"{GENERATION_PROMPT_VERSION}.md"
+def _prompt_path(version: str = GENERATION_PROMPT_VERSION) -> Path:
+    return Path(__file__).resolve().parent / "prompts" / f"{version}.md"
 
 
 def _load_system_prompt() -> str:
     return _prompt_path().read_text(encoding="utf-8")
+
+
+def _load_reviewer_system_prompt() -> str:
+    return _prompt_path(GENERATION_REVIEWER_PROMPT_VERSION).read_text(encoding="utf-8")
 
 
 def _stable_json(value: Any) -> str:
@@ -150,6 +183,71 @@ def _flatten_characteristics(value: Any) -> list[str]:
     return _strings(value)
 
 
+def _is_conflicting_visual_motif_fact(name: str, values: list[str], trusted_motifs: set[str]) -> bool:
+    normalized_name = normalize_query_text(name)
+    if "рисунок" not in normalized_name or not trusted_motifs:
+        return False
+    fact_motifs = set(extract_visual_motifs(*values))
+    return bool(fact_motifs and fact_motifs.isdisjoint(trusted_motifs))
+
+
+def _known_visual_motifs(*texts: Any) -> list[str]:
+    return [motif for motif in extract_visual_motifs(*texts) if motif in _KNOWN_VISUAL_MOTIFS]
+
+
+def _human_product_facts(product: Mapping[str, Any]) -> list[str]:
+    noise_markers = (
+        "сертифик",
+        "декларац",
+        "ндс",
+        "дата регистрации",
+        "дата окончания",
+        "страна",
+        "производств",
+        "изготовител",
+        "импортер",
+        "импортёр",
+        "тр тс",
+        "еаэс",
+        "хрупк",
+    )
+    facts: list[str] = []
+    for value in _strings(product.get("title")):
+        facts.append(value)
+    trusted_visual_motifs = _known_visual_motifs(
+        product.get("title"),
+        product.get("description"),
+    )
+    trusted_visual_motif_set = set(trusted_visual_motifs)
+    visual_motif_fact_present = False
+    skipped_visual_motif_conflict = False
+    characteristics = product.get("characteristics")
+    if isinstance(characteristics, Sequence) and not isinstance(characteristics, (str, bytes)):
+        for item in characteristics:
+            if not isinstance(item, Mapping):
+                continue
+            name = str(item.get("name") or "").strip()
+            normalized_name = normalize_query_text(name)
+            if any(marker in normalized_name for marker in noise_markers):
+                continue
+            values = _strings(item.get("value"))
+            if name and values:
+                is_visual_motif_fact = "рисунок" in normalized_name
+                if _is_conflicting_visual_motif_fact(name, values, trusted_visual_motif_set):
+                    skipped_visual_motif_conflict = True
+                    continue
+                if is_visual_motif_fact:
+                    visual_motif_fact_present = True
+                facts.append(f"{name}: {', '.join(values)}")
+    if skipped_visual_motif_conflict and trusted_visual_motifs and not visual_motif_fact_present:
+        facts.append(f"Рисунок: {', '.join(trusted_visual_motifs)}")
+    for label, key in (("Размер", "sizes"), ("Цвет", "colors"), ("Габариты", "dimensions")):
+        values = [value for value in _strings(product.get(key)) if value.lower() not in {"true", "false"}]
+        if values:
+            facts.append(f"{label}: {', '.join(values)}")
+    return list(dict.fromkeys([fact for fact in facts if fact]))[:28]
+
+
 def _query_row_to_dict(row: SeoSkuQuerySetItem) -> dict[str, Any]:
     return {
         "id": int(row.id),
@@ -174,7 +272,6 @@ def _load_query_set(
     category_id: int,
     nm_id: int,
     query_set_id: int | None,
-    allow_draft: bool,
 ) -> SeoSkuQuerySet:
     stmt = select(SeoSkuQuerySet).where(
         SeoSkuQuerySet.project_id == int(project_id),
@@ -183,31 +280,16 @@ def _load_query_set(
     )
     if query_set_id is not None:
         stmt = stmt.where(SeoSkuQuerySet.id == int(query_set_id))
-    elif not allow_draft:
-        # Iteration 2 (WS-C): the candidate path projects matcher_v2 traces
-        # into a ``status='candidate'`` SeoSkuQuerySet and tracks operator
-        # intent through ``approval_state``. The legacy ``status='confirmed'``
-        # selection stays fully supported; additionally we accept a candidate
-        # row once its ``approval_state`` is in {candidate, approved}. Draft
-        # / preview rows are still refused unless ``allow_draft=True``.
-        stmt = stmt.where(
-            (SeoSkuQuerySet.status == "confirmed")
-            | (
-                (SeoSkuQuerySet.status == "candidate")
-                & (SeoSkuQuerySet.approval_state.in_(("candidate", "approved")))
-            )
+    row = session.scalars(
+        stmt.order_by(
+            desc(SeoSkuQuerySet.approval_state == "approved"),
+            desc(SeoSkuQuerySet.status == "confirmed"),
+            desc(SeoSkuQuerySet.updated_at),
+            desc(SeoSkuQuerySet.id),
         )
-    row = session.scalars(stmt.order_by(desc(SeoSkuQuerySet.updated_at), desc(SeoSkuQuerySet.id))).first()
+    ).first()
     if row is None:
-        raise SeoGenerationError("Confirmed query set is required before generation")
-    if not allow_draft:
-        is_confirmed_legacy = row.status == "confirmed"
-        is_candidate_ready = (
-            row.status == "candidate"
-            and str(getattr(row, "approval_state", "") or "") in {"candidate", "approved"}
-        )
-        if not (is_confirmed_legacy or is_candidate_ready):
-            raise SeoGenerationError("Query set must be confirmed before generation")
+        raise SeoGenerationError("Saved query selection is required before generation")
     return row
 
 
@@ -289,7 +371,6 @@ def _build_generation_brief(
     query_set_id: int | None,
     main_query_text: str | None,
     brand_voice: str,
-    allow_draft_query_set: bool,
 ) -> tuple[dict[str, Any], SeoSkuQuerySet]:
     evidence = build_sku_evidence_pack(session, project_id=project_id, category_id=category_id, nm_id=nm_id)
     query_set = _load_query_set(
@@ -298,7 +379,6 @@ def _build_generation_brief(
         category_id=category_id,
         nm_id=nm_id,
         query_set_id=query_set_id,
-        allow_draft=allow_draft_query_set,
     )
     query_groups = _query_groups(session, query_set)
     resolved_main_query = _apply_main_query(query_groups, main_query_text)
@@ -313,11 +393,7 @@ def _build_generation_brief(
 
     functional = meaning.get("functional") if isinstance(meaning.get("functional"), Mapping) else {}
     expressive = meaning.get("expressive") if isinstance(meaning.get("expressive"), Mapping) else {}
-    key_facts = _strings(product.get("title")) + _flatten_characteristics(product.get("characteristics"))
-    key_facts.extend(_strings(product.get("sizes")))
-    key_facts.extend(_strings(product.get("colors")))
-    key_facts.extend(_strings(product.get("dimensions")))
-    key_facts = list(dict.fromkeys([item for item in key_facts if item]))[:40]
+    key_facts = _human_product_facts(product)
 
     brief = {
         "schema_version": "ecomcore_generation_brief_v1",
@@ -372,7 +448,7 @@ def _build_generation_brief(
         },
         "generation_policy": {
             "brand_voice": brand_voice,
-            "allow_characteristics_draft": True,
+            "allow_characteristics_draft": False,
             "max_title_chars": 60,
             "max_description_chars": 5000,
             "prompt_version": GENERATION_PROMPT_VERSION,
@@ -401,20 +477,10 @@ def _extract_sections(raw: str) -> dict[str, str]:
 
 def parse_generated_card(raw: str) -> GeneratedCard:
     sections = _extract_sections(raw)
-    characteristics: list[GeneratedCharacteristic] = []
-    for line in sections["ХАРАКТЕРИСТИКИ"].splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        if ":" not in stripped:
-            raise SeoGenerationError(f"Characteristic line has no colon: {stripped}")
-        field, _, value = stripped.partition(":")
-        characteristics.append(GeneratedCharacteristic(field=field.strip(), value=value.strip()))
-
     report = _parse_report(sections["ОТЧЁТ"])
     return GeneratedCard(
         title=sections["НАЗВАНИЕ"].splitlines()[0].strip(),
-        characteristics=characteristics,
+        characteristics=[],
         description=sections["ОПИСАНИЕ"].strip(),
         report=report,
     )
@@ -587,8 +653,7 @@ def _selected_queries_from_brief(brief: Mapping[str, Any]) -> list[str]:
 def _blocked_queries_from_brief(brief: Mapping[str, Any]) -> list[str]:
     query_set = brief.get("query_set") if isinstance(brief.get("query_set"), Mapping) else {}
     rejected = _as_list(query_set.get("rejected"))
-    excluded = _as_list(query_set.get("excluded"))
-    return [str(item.get("display_query") or "") for item in [*rejected, *excluded] if isinstance(item, Mapping)]
+    return [str(item.get("display_query") or "") for item in rejected if isinstance(item, Mapping)]
 
 
 def _selected_query_items_from_brief(brief: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -1106,9 +1171,20 @@ def validate_generated_card(card: GeneratedCard, brief: Mapping[str, Any]) -> li
     blocks = _description_blocks(card.description)
     if len(blocks) != 6:
         add("description_blocks", "error", f"Описание содержит {len(blocks)} блоков, должно быть 6")
-    if len(card.characteristics) < 8:
-        add("characteristics_count", "error", f"Заполнено {len(card.characteristics)} характеристик, минимум 8")
-
+    normalized_description = normalize_query_text(card.description)
+    slop_hits = [
+        {"phrase": phrase, "reason": reason}
+        for phrase, reason in _SEO_SLOP_PATTERNS
+        if normalize_query_text(phrase) in normalized_description
+    ]
+    if slop_hits:
+        add(
+            "seo_slop_phrases",
+            "error",
+            "В описании найдены универсальные SEO-штампы: "
+            + ", ".join(hit["phrase"] for hit in slop_hits),
+            {"hits": slop_hits},
+        )
     query_set = brief.get("query_set") if isinstance(brief.get("query_set"), Mapping) else {}
     primary = _as_list(query_set.get("primary"))
     selected_queries = _selected_queries_from_brief(brief)
@@ -1156,21 +1232,185 @@ def _provider_for_model(model: str, provider: ChatProvider | None) -> ChatProvid
     return OpenRouterProvider(chat_model=model, timeout_seconds=90.0)
 
 
-def _build_messages(brief: Mapping[str, Any], *, retry_errors: list[str] | None = None) -> list[ChatMessage]:
-    user_payload = {
-        "input": brief,
-        "instruction": "Сгенерируй карточку по системному промпту. Верни только четыре секции.",
-    }
+def _format_lines(title: str, values: Sequence[Any], *, limit: int | None = None) -> list[str]:
+    cleaned = [str(value or "").strip() for value in values if str(value or "").strip()]
+    if limit is not None:
+        cleaned = cleaned[:limit]
+    if not cleaned:
+        return [f"{title}: нет данных"]
+    return [f"{title}:"] + [f"- {value}" for value in cleaned]
+
+
+def _query_names(items: Sequence[Any]) -> list[str]:
+    names: list[str] = []
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        query = str(item.get("display_query") or item.get("query") or "").strip()
+        if query and query not in names:
+            names.append(query)
+    return names
+
+
+def _priority_query_names(brief: Mapping[str, Any]) -> list[str]:
+    seo_targets = brief.get("seo_targets") if isinstance(brief.get("seo_targets"), Mapping) else {}
+    query_set = brief.get("query_set") if isinstance(brief.get("query_set"), Mapping) else {}
+    focus_queries = _query_names(_as_list(seo_targets.get("focus_queries")))
+    if focus_queries:
+        return focus_queries
+    return _query_names(
+        [
+            *_as_list(query_set.get("primary")),
+            *_as_list(query_set.get("secondary")),
+            *_as_list(query_set.get("broad_context")),
+        ]
+    )
+
+
+def _render_generation_user_prompt(brief: Mapping[str, Any], *, retry_errors: list[str] | None = None) -> str:
+    product = brief.get("product") if isinstance(brief.get("product"), Mapping) else {}
+    evidence = brief.get("evidence") if isinstance(brief.get("evidence"), Mapping) else {}
+    query_set = brief.get("query_set") if isinstance(brief.get("query_set"), Mapping) else {}
+    seo_targets = brief.get("seo_targets") if isinstance(brief.get("seo_targets"), Mapping) else {}
+    policy = brief.get("generation_policy") if isinstance(brief.get("generation_policy"), Mapping) else {}
+    selected_queries = _query_names(
+        [
+            *_as_list(query_set.get("primary")),
+            *_as_list(query_set.get("secondary")),
+            *_as_list(query_set.get("broad_context")),
+        ]
+    )
+    focus_queries = _query_names(_as_list(seo_targets.get("focus_queries")))
+    lines: list[str] = [
+        "Сгенерируй SEO-текст для карточки Wildberries.",
+        "",
+        "Товар:",
+        f"- Название сейчас: {product.get('current_title') or 'нет данных'}",
+        f"- Категория: {product.get('subject_name') or product.get('category_id') or 'нет данных'}",
+        f"- Бренд: {product.get('brand') or 'нет данных'}",
+        f"- Артикул/nm_id: {product.get('vendor_code') or 'нет данных'} / {product.get('nm_id') or 'нет данных'}",
+        "",
+        *_format_lines("Факты о товаре", evidence.get("key_facts") or [], limit=28),
+        "",
+        "Выбранные SEO-запросы:",
+        ", ".join(selected_queries) if selected_queries else "нет выбранных запросов",
+        "",
+        f"Главный запрос: {seo_targets.get('main_query_text') or query_set.get('main_query_text') or 'нет'}",
+        "",
+        "Приоритетные запросы для покрытия:",
+        ", ".join(focus_queries) if focus_queries else "используй выбранные SEO-запросы по порядку важности",
+        "",
+        "Голос бренда:",
+        str(policy.get("brand_voice") or "экспертный"),
+        "",
+        "Тон:",
+        "- Пиши живо: через настроение, сценарии использования и зрительные образы.",
+        "- Строй фразы вокруг конкретных моментов: утренний кофе, чай за рабочим столом, небольшой подарок в коробке, светло-розовый оттенок, рисунок зайки.",
+        "- Используй спокойный человеческий язык, как в описании товара другу по фото.",
+        "- Технические факты оставь для шестого блока, а блоки 1-5 делай сценами.",
+        "",
+        "Задача:",
+        "- Сгенерируй только название и описание.",
+        "- Работай с фактами о товаре из входа.",
+        "- Название должно быть до 60 символов.",
+        "- Описание должно быть до 5000 символов и состоять ровно из 6 блоков, разделённых пустой строкой.",
+        "- Используй выбранные SEO-запросы естественно, без перечисления всех вариантов подряд.",
+        "- Верни только секции из системного промпта.",
+    ]
     if retry_errors:
-        user_payload["previous_validation_errors"] = retry_errors
-        user_payload["retry_instruction"] = (
-            "Исправь только перечисленные ошибки и SEO-недочеты. Не добавляй новые факты. "
-            "Сохрани формат четырех секций. Используй только selected queries и product evidence из входа."
+        lines.extend(
+            [
+                "",
+                "Ошибки предыдущей попытки, которые нужно исправить:",
+                *[f"- {error}" for error in retry_errors],
+            ]
         )
+    return "\n".join(lines)
+
+
+def _render_reviewer_user_prompt(
+    brief: Mapping[str, Any],
+    *,
+    draft_text: str,
+    retry_errors: list[str] | None = None,
+) -> str:
+    product = brief.get("product") if isinstance(brief.get("product"), Mapping) else {}
+    evidence = brief.get("evidence") if isinstance(brief.get("evidence"), Mapping) else {}
+    seo_targets = brief.get("seo_targets") if isinstance(brief.get("seo_targets"), Mapping) else {}
+    priority_queries = _priority_query_names(brief)
+    lines: list[str] = [
+        "Проверь и исправь SEO-текст для карточки Wildberries.",
+        "",
+        "Товар:",
+        f"- Название сейчас: {product.get('current_title') or 'нет данных'}",
+        f"- Категория: {product.get('subject_name') or product.get('category_id') or 'нет данных'}",
+        f"- Бренд: {product.get('brand') or 'нет данных'}",
+        f"- Артикул/nm_id: {product.get('vendor_code') or 'нет данных'} / {product.get('nm_id') or 'нет данных'}",
+        "",
+        *_format_lines("Факты о товаре", evidence.get("key_facts") or [], limit=28),
+        "",
+        f"Главный запрос: {seo_targets.get('main_query_text') or 'нет'}",
+        "",
+        "Приоритетные запросы:",
+        ", ".join(priority_queries) if priority_queries else "нет приоритетных запросов",
+        "",
+        "Сгенерированный текст копирайтера:",
+        draft_text,
+        "",
+        "Верни только исправленный финальный текст в секциях из системного промпта.",
+    ]
+    if retry_errors:
+        lines.extend(
+            [
+                "",
+                "Ошибки предыдущей попытки, которые нужно исправить:",
+                *[f"- {error}" for error in retry_errors],
+            ]
+        )
+    return "\n".join(lines)
+
+
+def _build_messages(brief: Mapping[str, Any], *, retry_errors: list[str] | None = None) -> list[ChatMessage]:
     return [
         ChatMessage(role="system", content=_load_system_prompt()),
-        ChatMessage(role="user", content=_stable_json(user_payload)),
+        ChatMessage(role="user", content=_render_generation_user_prompt(brief, retry_errors=retry_errors)),
     ]
+
+
+def _build_reviewer_messages(
+    brief: Mapping[str, Any],
+    *,
+    draft_text: str,
+    retry_errors: list[str] | None = None,
+) -> list[ChatMessage]:
+    return [
+        ChatMessage(role="system", content=_load_reviewer_system_prompt()),
+        ChatMessage(
+            role="user",
+            content=_render_reviewer_user_prompt(brief, draft_text=draft_text, retry_errors=retry_errors),
+        ),
+    ]
+
+
+def _messages_payload(messages: Sequence[ChatMessage]) -> list[dict[str, str]]:
+    return [{"role": item.role, "content": item.content} for item in messages]
+
+
+def _parsed_result_for_single_pass(card: GeneratedCard) -> dict[str, Any]:
+    return {
+        "title": card.title,
+        "description": card.description,
+        "description_blocks": _description_blocks(card.description),
+        "report": dict(card.report or {}),
+    }
+
+
+def _status_from_single_pass_validation(validation: Mapping[str, Any]) -> str:
+    if validation.get("passed") is True:
+        return "completed"
+    if validation.get("format_errors"):
+        return "failed"
+    return "needs_review"
 
 
 def run_seo_generation(
@@ -1182,9 +1422,12 @@ def run_seo_generation(
     query_set_id: int | None = None,
     main_query_text: str | None = None,
     brand_voice: str = "экспертный",
-    allow_draft_query_set: bool = False,
+    strategy: str = SEO_GENERATION_TWO_PASS_STRATEGY,
     provider: ChatProvider | None = None,
 ) -> SeoGenerationRunResponse:
+    if strategy not in {SEO_GENERATION_TWO_PASS_STRATEGY, SEO_GENERATION_SINGLE_PASS_STRATEGY}:
+        raise SeoGenerationError(f"Unsupported SEO generation strategy: {strategy}")
+
     brief, query_set = _build_generation_brief(
         session,
         project_id=project_id,
@@ -1193,7 +1436,6 @@ def run_seo_generation(
         query_set_id=query_set_id,
         main_query_text=main_query_text,
         brand_voice=brand_voice,
-        allow_draft_query_set=allow_draft_query_set,
     )
 
     # Iteration 1: propagate upstream quality from the SKU's saved query set.
@@ -1203,27 +1445,69 @@ def run_seo_generation(
     upstream_degraded_reasons = list(getattr(query_set, "degraded_reasons", None) or [])
     upstream_matcher_run_id = getattr(query_set, "matcher_run_id", None)
     upstream_category_profile_version = getattr(query_set, "category_profile_version", None)
+    generation_params = {
+        "writer": {
+            "temperature": SEO_GENERATION_WRITER_TEMPERATURE,
+            "top_p": float(settings.SEO_GENERATION_TOP_P),
+            "max_tokens": int(settings.SEO_GENERATION_MAX_TOKENS),
+        },
+        "reviewer": {
+            "temperature": SEO_GENERATION_REVIEWER_TEMPERATURE,
+            "top_p": float(settings.SEO_GENERATION_TOP_P),
+            "max_tokens": int(settings.SEO_GENERATION_MAX_TOKENS),
+        },
+    }
+    if strategy == SEO_GENERATION_SINGLE_PASS_STRATEGY:
+        generation_params["single_pass_sonnet"] = dict(SEO_GENERATION_SINGLE_PASS_PARAMS)
+    primary_model = (
+        SEO_GENERATION_SINGLE_PASS_MODEL
+        if strategy == SEO_GENERATION_SINGLE_PASS_STRATEGY
+        else settings.SEO_GENERATION_PRIMARY_MODEL
+    )
 
     run = SeoGenerationRun(
         project_id=int(project_id),
         category_id=int(category_id),
         provider_name=settings.SEO_GENERATION_PROVIDER,
-        model_name=settings.SEO_GENERATION_PRIMARY_MODEL,
+        model_name=primary_model,
         status="running",
         request_payload={
             "nm_id": int(nm_id),
+            "strategy": strategy,
             "brief": brief,
             "prompt_version": GENERATION_PROMPT_VERSION,
+            "reviewer_prompt_version": (
+                GENERATION_REVIEWER_PROMPT_VERSION if strategy == SEO_GENERATION_TWO_PASS_STRATEGY else None
+            ),
             "validator_version": GENERATION_VALIDATOR_VERSION,
             "main_query_text": brief.get("query_set", {}).get("main_query_text") if isinstance(brief.get("query_set"), Mapping) else None,
-            "primary_model": settings.SEO_GENERATION_PRIMARY_MODEL,
-            "fallback_model": settings.SEO_GENERATION_FALLBACK_MODEL,
+            "primary_model": primary_model,
+            "fallback_model": settings.SEO_GENERATION_FALLBACK_MODEL if strategy == SEO_GENERATION_TWO_PASS_STRATEGY else None,
+            "openrouter_params": (
+                dict(SEO_GENERATION_SINGLE_PASS_PARAMS)
+                if strategy == SEO_GENERATION_SINGLE_PASS_STRATEGY
+                else dict(generation_params)
+            ),
         },
         response_payload={},
         matcher_run_id=int(upstream_matcher_run_id) if upstream_matcher_run_id is not None else None,
     )
     session.add(run)
     session.flush()
+
+    if strategy == SEO_GENERATION_SINGLE_PASS_STRATEGY:
+        return _run_single_pass_sonnet_generation(
+            session,
+            run=run,
+            brief=brief,
+            query_set=query_set,
+            nm_id=nm_id,
+            upstream_quality_mode=upstream_quality_mode,
+            upstream_degraded_reasons=upstream_degraded_reasons,
+            upstream_matcher_run_id=upstream_matcher_run_id,
+            upstream_category_profile_version=upstream_category_profile_version,
+            provider=provider,
+        )
 
     attempts: list[dict[str, Any]] = []
     last_errors: list[str] | None = None
@@ -1245,14 +1529,42 @@ def run_seo_generation(
 
     for attempt_index, model in enumerate(models, start=1):
         final_model = model
+        writer_messages = _build_messages(brief, retry_errors=last_errors)
+        writer_request_log = {
+            "provider": settings.SEO_GENERATION_PROVIDER,
+            "model": model,
+            "stage": "writer",
+            "messages": _messages_payload(writer_messages),
+            **generation_params["writer"],
+        }
+        reviewer_request_log: dict[str, Any] | None = None
         try:
-            response = _provider_for_model(model, provider).generate_chat(
-                _build_messages(brief, retry_errors=last_errors),
-                temperature=float(settings.SEO_GENERATION_TEMPERATURE),
-                top_p=float(settings.SEO_GENERATION_TOP_P),
-                max_tokens=int(settings.SEO_GENERATION_MAX_TOKENS),
+            resolved_provider = _provider_for_model(model, provider)
+            writer_response = resolved_provider.generate_chat(
+                writer_messages,
+                temperature=generation_params["writer"]["temperature"],
+                top_p=generation_params["writer"]["top_p"],
+                max_tokens=generation_params["writer"]["max_tokens"],
             )
-            card = parse_generated_card(response.content)
+            reviewer_messages = _build_reviewer_messages(
+                brief,
+                draft_text=writer_response.content,
+                retry_errors=last_errors,
+            )
+            reviewer_request_log = {
+                "provider": settings.SEO_GENERATION_PROVIDER,
+                "model": model,
+                "stage": "reviewer",
+                "messages": _messages_payload(reviewer_messages),
+                **generation_params["reviewer"],
+            }
+            reviewer_response = resolved_provider.generate_chat(
+                reviewer_messages,
+                temperature=generation_params["reviewer"]["temperature"],
+                top_p=generation_params["reviewer"]["top_p"],
+                max_tokens=generation_params["reviewer"]["max_tokens"],
+            )
+            card = parse_generated_card(reviewer_response.content)
             card = normalize_generated_card_report(card, brief)
             issues = validate_generated_card(card, brief)
             seo_relevance = build_seo_relevance_report(card, brief, issues)
@@ -1260,9 +1572,20 @@ def run_seo_generation(
             attempts.append(
                 {
                     "attempt": attempt_index,
-                    "model": response.model or model,
-                    "raw_response": response.raw_response,
-                    "content": response.content,
+                    "model": reviewer_response.model or model,
+                    "request": reviewer_request_log,
+                    "writer": {
+                        "request": writer_request_log,
+                        "raw_response": writer_response.raw_response,
+                        "content": writer_response.content,
+                    },
+                    "reviewer": {
+                        "request": reviewer_request_log,
+                        "raw_response": reviewer_response.raw_response,
+                        "content": reviewer_response.content,
+                    },
+                    "raw_response": reviewer_response.raw_response,
+                    "content": reviewer_response.content,
                     "parsed": card.model_dump(mode="json"),
                     "validation": [item.model_dump(mode="json") for item in issues],
                     # Relabeled: relevance is an internal lint, NOT a retry gate.
@@ -1275,14 +1598,23 @@ def run_seo_generation(
             final_issues = issues
             final_seo_relevance = seo_relevance
             final_seo_relevance_v2 = seo_relevance_v2
-            final_model = response.model or model
+            final_model = reviewer_response.model or model
             if not has_validation_errors:
                 # Accept the first validator-clean attempt. No relevance retry.
                 break
             # Validator-hard-error retry: only populate last_errors from errors.
             last_errors = [item.message for item in issues if item.severity == "error"]
         except Exception as exc:
-            attempts.append({"attempt": attempt_index, "model": model, "error": f"{type(exc).__name__}: {exc}"})
+            attempts.append(
+                {
+                    "attempt": attempt_index,
+                    "model": model,
+                    "request": reviewer_request_log or writer_request_log,
+                    "writer": {"request": writer_request_log},
+                    "reviewer": {"request": reviewer_request_log} if reviewer_request_log else None,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
             last_errors = [str(exc)]
 
     run.model_name = final_model
@@ -1398,6 +1730,313 @@ def run_seo_generation(
         mode_used=content_version.mode_used if content_version is not None else "research_preview",
         publishable=False,
         matcher_run_id=int(upstream_matcher_run_id) if upstream_matcher_run_id is not None else None,
+        strategy=SEO_GENERATION_TWO_PASS_STRATEGY,
+        single_pass_validation=None,
+    )
+
+
+def _run_single_pass_sonnet_generation(
+    session: Session,
+    *,
+    run: SeoGenerationRun,
+    brief: Mapping[str, Any],
+    query_set: SeoSkuQuerySet,
+    nm_id: int,
+    upstream_quality_mode: QualityMode | None,
+    upstream_degraded_reasons: list[Any],
+    upstream_matcher_run_id: Any,
+    upstream_category_profile_version: Any,
+    provider: ChatProvider | None,
+) -> SeoGenerationRunResponse:
+    messages = _build_messages(brief)
+    request_log = {
+        "provider": settings.SEO_GENERATION_PROVIDER,
+        "model": SEO_GENERATION_SINGLE_PASS_MODEL,
+        "stage": SEO_GENERATION_SINGLE_PASS_STRATEGY,
+        "messages": _messages_payload(messages),
+        **SEO_GENERATION_SINGLE_PASS_PARAMS,
+    }
+    final_card: GeneratedCard | None = None
+    final_issues: list[GenerationValidationIssue] = []
+    final_seo_relevance: SeoRelevanceReport | None = None
+    final_seo_relevance_v2: SeoRelevanceV2Report | None = None
+    single_pass_validation: dict[str, Any] | None = None
+    response_content = ""
+
+    try:
+        resolved_provider = _provider_for_model(SEO_GENERATION_SINGLE_PASS_MODEL, provider)
+        llm_response = resolved_provider.generate_chat(
+            messages,
+            temperature=SEO_GENERATION_SINGLE_PASS_PARAMS["temperature"],
+            top_p=SEO_GENERATION_SINGLE_PASS_PARAMS["top_p"],
+            max_tokens=SEO_GENERATION_SINGLE_PASS_PARAMS["max_tokens"],
+        )
+        response_content = llm_response.content
+        card = parse_generated_card(llm_response.content)
+        card = normalize_generated_card_report(card, brief)
+        parsed_result = _parsed_result_for_single_pass(card)
+        single_pass_validation = validate_single_pass_generation(
+            parsed_result,
+            _priority_query_names(brief),
+            str(
+                (brief.get("query_set") if isinstance(brief.get("query_set"), Mapping) else {}).get(
+                    "main_query_text"
+                )
+                or ""
+            ),
+        )
+        issues = validate_generated_card(card, brief)
+        seo_relevance = build_seo_relevance_report(card, brief, issues)
+        seo_relevance_v2 = build_seo_relevance_v2_report(card, brief, issues)
+        run_status = _status_from_single_pass_validation(single_pass_validation)
+        final_card = card
+        final_issues = issues
+        final_seo_relevance = seo_relevance
+        final_seo_relevance_v2 = seo_relevance_v2
+        run.model_name = llm_response.model or SEO_GENERATION_SINGLE_PASS_MODEL
+        run.response_payload = {
+            "run_id": int(run.id),
+            "nm_id": int(nm_id),
+            "strategy": SEO_GENERATION_SINGLE_PASS_STRATEGY,
+            "model_name": run.model_name,
+            "request": request_log,
+            "response": {
+                "raw_response": llm_response.raw_response,
+                "content": llm_response.content,
+                "parsed": parsed_result,
+            },
+            "validation": single_pass_validation,
+            "status": run_status,
+            "openrouter_params": dict(SEO_GENERATION_SINGLE_PASS_PARAMS),
+            "final_card": card.model_dump(mode="json"),
+            "generation_validation": [item.model_dump(mode="json") for item in issues],
+            "internal_lint_seo_relevance": seo_relevance.model_dump(mode="json"),
+            "internal_lint_seo_relevance_v2": seo_relevance_v2.model_dump(mode="json"),
+        }
+    except Exception as exc:
+        run.status = "failed"
+        run.error_text = f"{type(exc).__name__}: {exc}"
+        run.response_payload = {
+            "run_id": int(run.id),
+            "nm_id": int(nm_id),
+            "strategy": SEO_GENERATION_SINGLE_PASS_STRATEGY,
+            "model_name": SEO_GENERATION_SINGLE_PASS_MODEL,
+            "request": request_log,
+            "response": {"content": response_content},
+            "validation": {
+                "passed": False,
+                "format_errors": [str(exc)],
+                "keyword_coverage": {"covered": [], "missing": _priority_query_names(brief)},
+                "blacklist_hits": [],
+                "main_query_in_title": False,
+            },
+            "status": "failed",
+            "openrouter_params": dict(SEO_GENERATION_SINGLE_PASS_PARAMS),
+        }
+        gen_state = QualityState(
+            upstream_modes={"query_set": upstream_quality_mode}
+            if upstream_quality_mode is not None
+            else {},
+            evidence_signals={"validator_clean": False},
+            fallback_taken=True,
+        )
+        gen_quality_mode, gen_degraded_reasons = infer_quality_mode(gen_state)
+        merged_degraded = list(upstream_degraded_reasons) + [dict(r) for r in gen_degraded_reasons]
+        run.quality_mode = gen_quality_mode.value
+        run.degraded_reasons = merged_degraded or None
+        content_version: SeoContentVersion | None = None
+        if response_content.strip():
+            content_version = SeoContentVersion(
+                project_id=int(run.project_id),
+                category_id=int(run.category_id),
+                nm_id=int(nm_id),
+                content_kind="preview",
+                title=None,
+                description=response_content,
+                query_snapshot=dict(brief.get("query_set") or {}),
+                score_breakdown={
+                    "source": brief.get("source") or {},
+                    "generation_policy": brief.get("generation_policy") or {},
+                    "strategy": SEO_GENERATION_SINGLE_PASS_STRATEGY,
+                    "single_pass_validation": run.response_payload["validation"],
+                    "raw_response_saved": True,
+                },
+                status="needs_review",
+                quality_mode=gen_quality_mode.value,
+                degraded_reasons=merged_degraded or None,
+                mode_used="research_preview",
+                publishable=False,
+                matcher_run_id=int(upstream_matcher_run_id) if upstream_matcher_run_id is not None else None,
+                category_profile_version=(
+                    str(upstream_category_profile_version)
+                    if upstream_category_profile_version
+                    else None
+                ),
+            )
+            session.add(content_version)
+            session.flush()
+            run.content_version_id = int(content_version.id)
+        session.flush()
+        return SeoGenerationRunResponse(
+            project_id=int(run.project_id),
+            category_id=int(run.category_id),
+            nm_id=int(nm_id),
+            run_id=int(run.id),
+            query_set_id=int(query_set.id),
+            content_version_id=int(content_version.id) if content_version is not None else None,
+            status="failed",
+            content_status=content_version.status if content_version is not None else None,
+            provider_name=run.provider_name,
+            model_name=run.model_name,
+            attempts=1,
+            prompt_version=GENERATION_PROMPT_VERSION,
+            validator_version=GENERATION_VALIDATOR_VERSION,
+            generated_card=None,
+            validation_results=[],
+            seo_relevance=None,
+            seo_relevance_v2=None,
+            error_text=run.error_text,
+            quality_mode=gen_quality_mode.value,
+            degraded_reasons=merged_degraded,
+            mode_used="research_preview",
+            publishable=False,
+            matcher_run_id=int(upstream_matcher_run_id) if upstream_matcher_run_id is not None else None,
+            strategy=SEO_GENERATION_SINGLE_PASS_STRATEGY,
+            single_pass_validation=run.response_payload["validation"],
+        )
+
+    has_validator_errors = _has_errors(final_issues)
+    run_status = str(run.response_payload["status"])
+    gen_state = QualityState(
+        upstream_modes={"query_set": upstream_quality_mode}
+        if upstream_quality_mode is not None
+        else {},
+        evidence_signals={
+            "validator_clean": final_card is not None
+            and not has_validator_errors
+            and run_status == "completed",
+        },
+        extra_reasons=[
+            make_reason(
+                "single_pass_validation_needs_review",
+                {"validation": single_pass_validation or {}},
+            )
+        ]
+        if run_status != "completed"
+        else [],
+        fallback_taken=final_card is None,
+    )
+    gen_quality_mode, gen_degraded_reasons = infer_quality_mode(gen_state)
+    merged_degraded = list(upstream_degraded_reasons) + [dict(r) for r in gen_degraded_reasons]
+    run.quality_mode = gen_quality_mode.value
+    run.degraded_reasons = merged_degraded or None
+
+    content_version: SeoContentVersion | None = None
+    if final_card is not None:
+        content_version = SeoContentVersion(
+            project_id=int(run.project_id),
+            category_id=int(run.category_id),
+            nm_id=int(nm_id),
+            content_kind="preview",
+            title=final_card.title,
+            description=final_card.description,
+            query_snapshot=dict(brief.get("query_set") or {}),
+            score_breakdown={
+                "source": brief.get("source") or {},
+                "generation_policy": brief.get("generation_policy") or {},
+                "strategy": SEO_GENERATION_SINGLE_PASS_STRATEGY,
+                "single_pass_validation": single_pass_validation or {},
+                "validation": [item.model_dump(mode="json") for item in final_issues],
+                "internal_lint_seo_relevance": (
+                    final_seo_relevance.model_dump(mode="json") if final_seo_relevance is not None else None
+                ),
+                "internal_lint_seo_relevance_v2": (
+                    final_seo_relevance_v2.model_dump(mode="json") if final_seo_relevance_v2 is not None else None
+                ),
+            },
+            status="needs_review",
+            quality_mode=gen_quality_mode.value,
+            degraded_reasons=merged_degraded or None,
+            mode_used="research_preview"
+            if not bool(getattr(settings, "SEO_GENERATION_PREVIEW_ENABLED", False))
+            or gen_quality_mode != QualityMode.FULL
+            else "current",
+            publishable=False,
+            matcher_run_id=int(upstream_matcher_run_id) if upstream_matcher_run_id is not None else None,
+            category_profile_version=(
+                str(upstream_category_profile_version)
+                if upstream_category_profile_version
+                else None
+            ),
+        )
+        session.add(content_version)
+        session.flush()
+        run.content_version_id = int(content_version.id)
+    if run_status == "failed":
+        run.error_text = "; ".join((single_pass_validation or {}).get("format_errors") or ["generation failed"])
+    run.status = run_status
+    session.flush()
+
+    return SeoGenerationRunResponse(
+        project_id=int(run.project_id),
+        category_id=int(run.category_id),
+        nm_id=int(nm_id),
+        run_id=int(run.id),
+        query_set_id=int(query_set.id),
+        content_version_id=int(content_version.id) if content_version is not None else None,
+        status=run_status,  # type: ignore[arg-type]
+        content_status=content_version.status if content_version is not None else None,
+        provider_name=run.provider_name,
+        model_name=run.model_name,
+        attempts=1,
+        prompt_version=GENERATION_PROMPT_VERSION,
+        validator_version=GENERATION_VALIDATOR_VERSION,
+        generated_card=final_card,
+        validation_results=final_issues,
+        seo_relevance=final_seo_relevance,
+        seo_relevance_v2=final_seo_relevance_v2,
+        error_text=run.error_text,
+        quality_mode=gen_quality_mode.value,
+        degraded_reasons=merged_degraded,
+        mode_used=content_version.mode_used if content_version is not None else "research_preview",
+        publishable=False,
+        matcher_run_id=int(upstream_matcher_run_id) if upstream_matcher_run_id is not None else None,
+        strategy=SEO_GENERATION_SINGLE_PASS_STRATEGY,
+        single_pass_validation=single_pass_validation,
+    )
+
+
+def build_generation_prompt_preview(
+    session: Session,
+    *,
+    project_id: int,
+    category_id: int,
+    nm_id: int,
+    query_set_id: int | None = None,
+    main_query_text: str | None = None,
+    brand_voice: str = "экспертный",
+) -> SeoGenerationPromptPreviewResponse:
+    brief, query_set = _build_generation_brief(
+        session,
+        project_id=project_id,
+        category_id=category_id,
+        nm_id=nm_id,
+        query_set_id=query_set_id,
+        main_query_text=main_query_text,
+        brand_voice=brand_voice,
+    )
+    messages = _build_messages(brief)
+    return SeoGenerationPromptPreviewResponse(
+        project_id=int(project_id),
+        category_id=int(category_id),
+        nm_id=int(nm_id),
+        query_set_id=int(query_set.id),
+        query_set_status=str(query_set.status),
+        provider_name=settings.SEO_GENERATION_PROVIDER,
+        model_name=settings.SEO_GENERATION_PRIMARY_MODEL,
+        prompt_version=GENERATION_PROMPT_VERSION,
+        system_prompt=messages[0].content,
+        user_prompt=messages[1].content,
     )
 
 

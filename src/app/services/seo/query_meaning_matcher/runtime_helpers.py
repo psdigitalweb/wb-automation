@@ -9,16 +9,20 @@ isolated under ``query_meaning_matcher._legacy``.
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from app.models import SeoQueryClusterMembership, SeoQueryMeaning, SeoSkuQueryJudgment
+from app.services.seo.category_profile_rules import product_type_compatibility_reason
 from app.schemas.seo_query_meaning_matcher import MeaningAwareMatcherItem
 from app.services.seo.atoms.v1.matcher_v1 import match_atoms_v1
 from app.services.seo.atoms.v1.schemas import QueryAtoms
 from app.services.seo.query_pipeline import normalize_query_text
+
+if TYPE_CHECKING:
+    from app.services.seo.category_profile import CategoryProfile
 
 
 _WEAK_OVERLAP_TOKENS = {
@@ -267,17 +271,30 @@ def _apply_atoms_gate(
     ranking_value: float | None,
     sku_atoms: Any,
     query_atoms_payload: dict[str, Any] | None,
+    category_profile: "CategoryProfile | None" = None,
 ) -> tuple[str, float, list[str], list[str], list[str], list[str]]:
     if sku_atoms is None or not query_atoms_payload:
         return bucket, score, [], [], [], ["atoms gate skipped: missing SKU or query atoms"]
     try:
         query_atoms = QueryAtoms.model_validate(query_atoms_payload)
+        compatibility_reason = (
+            (
+                lambda query_type, sku_type: product_type_compatibility_reason(
+                    query_type,
+                    sku_type,
+                    profile=category_profile,
+                )
+            )
+            if category_profile is not None
+            else None
+        )
         atoms_result = match_atoms_v1(
             sku_atoms,
             query_atoms,
             query_text=query_display,
             cluster_key=str(row.cluster_key or ""),
             ranking_value_used=ranking_value,
+            product_type_compatibility_reason=compatibility_reason,
         )
     except Exception as exc:
         return bucket, score, [], [], [], [f"atoms gate skipped: {type(exc).__name__}: {exc}"]

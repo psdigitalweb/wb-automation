@@ -4,12 +4,10 @@ import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import { usePageTitle } from '@/hooks/usePageTitle'
 import {
-  getCategoryBootstrapStatus,
-  getWBProductSubjects,
-  type CategoryBootstrapStatusResponse,
-  type WBProductSubjectItem,
+  getSeoCategories,
+  type SeoCategoryListItem,
 } from '@/lib/apiClient'
-import { Card, SeoShell, StatusPill, buttonStyle, normalizeError } from '../_components/SeoShell'
+import { Card, Panel, SeoShell, StatusPill, buttonClass, normalizeError, seoStyles } from '../_components/SeoShell'
 
 function tone(status?: string | null): 'good' | 'warn' | 'bad' | 'neutral' {
   if (status === 'ready_for_matching') return 'good'
@@ -19,25 +17,20 @@ function tone(status?: string | null): 'good' | 'warn' | 'bad' | 'neutral' {
 }
 
 function label(status?: string | null) {
-  if (status === 'ready_for_matching') return 'Готова к подбору'
-  if (status === 'ready_with_fallback') return 'Можно подбирать'
-  if (status === 'building') return 'Обрабатывается'
-  if (status === 'failed') return 'Нужно повторить обработку'
-  return 'Загрузите запросы'
+  if (status === 'ready_for_matching') return 'готова'
+  if (status === 'ready_with_fallback') return 'fallback'
+  if (status === 'building') return 'обработка'
+  if (status === 'failed') return 'ошибка'
+  return 'нет CSV'
 }
 
-function hint(status?: string | null, item?: CategoryBootstrapStatusResponse) {
-  if (status === 'ready_for_matching') return `${item?.query_meanings_count ?? 0} смыслов запросов`
-  if (status === 'ready_with_fallback') return 'Смыслы построены без полного LLM-улучшения'
-  if (status === 'building') return 'Система готовит категорию в фоне'
-  if (status === 'failed') return 'Откройте категорию и повторите обработку'
-  return 'CSV с запросами еще не загружен'
+function formatCount(value?: number | null) {
+  return (value ?? 0).toLocaleString('ru-RU')
 }
 
 export default function SeoCategoriesPage({ params }: { params: { projectId: string } }) {
   const { projectId } = params
-  const [items, setItems] = useState<WBProductSubjectItem[]>([])
-  const [statuses, setStatuses] = useState<Record<number, CategoryBootstrapStatusResponse>>({})
+  const [items, setItems] = useState<SeoCategoryListItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   usePageTitle('SEO: категории', projectId)
@@ -45,21 +38,10 @@ export default function SeoCategoriesPage({ params }: { params: { projectId: str
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    getWBProductSubjects(projectId)
-      .then(async (subjects) => {
+    getSeoCategories(projectId)
+      .then((categories) => {
         if (cancelled) return
-        setItems(subjects)
-        const settled = await Promise.allSettled(
-          subjects.map((item) => getCategoryBootstrapStatus(projectId, { category_id: Number(item.subject_id) }))
-        )
-        if (cancelled) return
-        const next: Record<number, CategoryBootstrapStatusResponse> = {}
-        settled.forEach((result) => {
-          if (result.status === 'fulfilled') {
-            next[result.value.category_id] = result.value
-          }
-        })
-        setStatuses(next)
+        setItems(categories)
       })
       .catch((e) => setError(normalizeError(e)))
       .finally(() => setLoading(false))
@@ -68,38 +50,72 @@ export default function SeoCategoriesPage({ params }: { params: { projectId: str
     }
   }, [projectId])
 
+  const readyCount = items.filter((item) => item.readiness_status === 'ready_for_matching').length
+  const buildingCount = items.filter((item) => item.readiness_status === 'building').length
+  const totalProducts = items.reduce((sum, item) => sum + Number(item.skus_count || 0), 0)
+
   return (
-    <SeoShell projectId={projectId} title="Категории и запросы" subtitle="Управление корпусом поисковых запросов по категориям.">
-      {error && <Card><div style={{ color: '#b91c1c' }}>{error}</div></Card>}
+    <SeoShell projectId={projectId} title="Категории" subtitle="Готовность категорий к подбору запросов и ручной проверке.">
+      <div className={seoStyles.metricGrid}>
+        <div className={seoStyles.metricCard}><div className={seoStyles.metricLabel}>Категорий</div><div className={seoStyles.metricValue}>{items.length}</div></div>
+        <div className={seoStyles.metricCard}><div className={seoStyles.metricLabel}>Готовы к подбору</div><div className={seoStyles.metricValue}>{readyCount}</div></div>
+        <div className={seoStyles.metricCard}><div className={seoStyles.metricLabel}>В обработке</div><div className={seoStyles.metricValue}>{buildingCount}</div></div>
+        <div className={seoStyles.metricCard}><div className={seoStyles.metricLabel}>SKU в категориях</div><div className={seoStyles.metricValue}>{formatCount(totalProducts)}</div></div>
+      </div>
+
+      {error ? <Card><div style={{ color: 'var(--seo-danger)' }}>{error}</div></Card> : null}
       {loading ? (
         <Card>Загружаем категории...</Card>
       ) : (
-        <div style={{ display: 'grid', gap: 12 }}>
-          {items.map((item) => (
-            <Card key={item.subject_id}>
-              {(() => {
-                const status = statuses[Number(item.subject_id)]
-                const readiness = status?.readiness_status
-                return (
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'center' }}>
-                <div>
-                  <h2 style={{ margin: '0 0 6px' }}>{item.subject_name}</h2>
-                  <div style={{ color: '#64748b' }}>
-                    ID {item.subject_id} · {item.skus_count} товаров · {hint(readiness, status)}
-                  </div>
-                </div>
-                <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-                  <StatusPill label={label(readiness)} tone={tone(readiness)} />
-                  <Link href={`/app/project/${projectId}/seo/categories/${item.subject_id}/eval`} style={buttonStyle('light')}>Eval</Link>
-                  <Link href={`/app/project/${projectId}/seo/categories/${item.subject_id}`} style={buttonStyle('primary')}>Открыть</Link>
-                </div>
-              </div>
-                )
-              })()}
-            </Card>
-          ))}
-          {items.length === 0 && <Card>В проекте пока нет категорий с товарами.</Card>}
-        </div>
+        <Panel title="Категории" subtitle="Состояние query data, кластеров, prior и очереди проверки.">
+          <div className={seoStyles.tableWrap}>
+            <table className={seoStyles.table}>
+              <thead>
+                <tr>
+                  <th>Категория</th>
+                  <th>Статус</th>
+                  <th>Товаров</th>
+                  <th>Смыслов</th>
+                  <th>Query data</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((item) => {
+                  const readiness = item.readiness_status
+                  return (
+                    <tr key={item.category_id} className={seoStyles.clickable}>
+                      <td>
+                        <strong>{item.category_name}</strong>
+                        <div className={seoStyles.subtext}>WB subject_id {item.category_id}</div>
+                      </td>
+                      <td><StatusPill label={label(readiness)} tone={tone(readiness)} /></td>
+                      <td className={seoStyles.num}>{formatCount(item.skus_count)}</td>
+                      <td className={seoStyles.num}>{formatCount(item.query_meanings_count)}</td>
+                      <td>
+                        <span className={seoStyles.subtext}>
+                          {readiness === 'ready_for_matching'
+                            ? 'готова к matcher'
+                            : readiness === 'building'
+                              ? 'система готовит категорию'
+                              : item.has_query_corpus
+                                ? 'есть corpus, нужна обработка'
+                                : 'загрузите CSV и запустите обработку'}
+                        </span>
+                      </td>
+                      <td style={{ textAlign: 'right' }}>
+                        <Link className={buttonClass('primary')} href={`/app/project/${projectId}/seo/categories/${item.category_id}`}>
+                          Открыть
+                        </Link>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+          {items.length === 0 ? <div className={seoStyles.muted}>В проекте пока нет категорий с товарами.</div> : null}
+        </Panel>
       )}
     </SeoShell>
   )

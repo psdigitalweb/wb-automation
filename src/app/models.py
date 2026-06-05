@@ -660,6 +660,21 @@ class SeoSkuQuerySetItem(TimestampMixin, Base):
     reasons_payload = Column(JSON, nullable=False, default=dict)
 
 
+class SeoCategorySelectedQuery(SeoProjectCategoryScopedMixin, TimestampMixin, Base):
+    """Operator-maintained reusable query list for a category."""
+
+    __tablename__ = "seo_category_selected_queries"
+    __table_args__ = (
+        UniqueConstraint("project_id", "category_id", "query_text", name="uq_seo_category_selected_queries_scope_query"),
+        Index("ix_seo_category_selected_queries_scope_order", "project_id", "category_id", "sort_order"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    query_text = Column(Text, nullable=False)
+    sort_order = Column(Integer, nullable=False, server_default="0")
+    created_by = Column(String(128), nullable=True)
+
+
 class SeoSkuMeaningAuditEvent(SeoProjectCategoryScopedMixin, Base):
     """Append-only audit events for the SKU meaning annotation tool."""
 

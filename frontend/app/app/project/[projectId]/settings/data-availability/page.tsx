@@ -99,7 +99,7 @@ export default function ProjectDataAvailabilityPage({ params }: { params: { proj
   }
 
   return (
-    <div style={{ padding: 20 }}>
+    <div className="ec-settings-page">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
         <h1 style={{ margin: 0 }}>Наличие данных</h1>
         <Link href={`/app/project/${projectId}/settings`}>← Настройки проекта</Link>

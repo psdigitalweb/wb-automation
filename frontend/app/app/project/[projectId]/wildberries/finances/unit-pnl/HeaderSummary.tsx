@@ -2,6 +2,7 @@
 
 import React from 'react'
 import type { WBUnitPnlRow } from '@/lib/apiClient'
+import styles from './unit-pnl.module.css'
 
 function formatRUB(value: number, fractionDigits: number = 2): string {
   return new Intl.NumberFormat('ru-RU', {
@@ -78,91 +79,37 @@ export function HeaderSummary({ headerTotals, items }: HeaderSummaryProps) {
   const buyoutRateTotal =
     deliveriesTotal > 0 ? ((deliveriesTotal - returnsTotal) / deliveriesTotal) * 100 : 0
 
-  const blockStyle: React.CSSProperties = {
-    padding: 12,
-    borderRadius: 6,
-    backgroundColor: '#f8f9fa',
-    minWidth: 0,
-  }
-
-  const labelStyle: React.CSSProperties = { fontSize: 12, color: '#666', marginBottom: 2 }
-  const valueStyle: React.CSSProperties = { fontWeight: 600, fontSize: 15 }
-
   return (
-    <div
-      style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-        gap: 16,
-        fontSize: 13,
-      }}
-    >
-      {/* A) Продажи и выплаты */}
-      <div style={{ ...blockStyle }}>
-        <div style={{ fontWeight: 600, marginBottom: 8, color: '#333' }}>Продажи и выплаты</div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <div>
-            <div style={labelStyle}>Выручка (WB реализовал)</div>
-            <div style={valueStyle}>{fmtRub(sale)} ₽</div>
-          </div>
-          <div>
-            <div style={labelStyle}>К перечислению за товар</div>
-            <div style={valueStyle}>{fmtRub(transferForGoods)} ₽</div>
-          </div>
-          <div>
-            <div style={labelStyle}>Итого к оплате</div>
-            <div style={{ ...valueStyle, color: '#0d6efd' }}>{fmtRub(totalToPay)} ₽</div>
-          </div>
+    <div className={styles.summaryGrid}>
+      <div className={styles.summaryBlock}>
+        <div className={styles.summaryTitle}>Продажи и выплаты</div>
+        <div className={styles.summaryList}>
+          <SummaryPair label="Выручка (WB реализовал)" value={`${fmtRub(sale)} ₽`} />
+          <SummaryPair label="К перечислению за товар" value={`${fmtRub(transferForGoods)} ₽`} />
+          <SummaryPair label="Итого к оплате" value={`${fmtRub(totalToPay)} ₽`} accent />
         </div>
       </div>
 
-      {/* B) Затраты WB */}
-      <div style={{ ...blockStyle }}>
-        <div style={{ fontWeight: 600, marginBottom: 8, color: '#333' }}>Затраты WB</div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <div>
-            <div style={labelStyle}>Затраты WB, ₽</div>
-            <div style={valueStyle}>{fmtRub(wbTotalCost)}</div>
-          </div>
-          <div>
-            <div style={labelStyle}>Затраты WB, % от выручки</div>
-            <div style={valueStyle}>{formatPct(wbTotalCostPct)}%</div>
-          </div>
+      <div className={styles.summaryBlock}>
+        <div className={styles.summaryTitle}>Затраты WB</div>
+        <div className={styles.summaryList}>
+          <SummaryPair label="Затраты WB, ₽" value={fmtRub(wbTotalCost)} />
+          <SummaryPair label="Затраты WB, % от выручки" value={`${formatPct(wbTotalCostPct)}%`} />
         </div>
       </div>
 
-      {/* C) Детализация затрат */}
-      <div style={{ ...blockStyle }}>
-        <div style={{ fontWeight: 600, marginBottom: 8, color: '#333' }}>Детализация затрат</div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span style={labelStyle}>Логистика</span>
-              <span>{fmtRub(logisticsCost)}</span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span style={labelStyle}>Хранение</span>
-              <span>{fmtRub(storageCost)}</span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span style={labelStyle}>Приёмка</span>
-              <span>{fmtRub(acceptanceCost)}</span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span style={labelStyle}>Удержания</span>
-              <span>{fmtRub(otherWithholdings)}</span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span style={labelStyle}>Штрафы</span>
-              <span>{fmtRub(penalties)}</span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span style={{ ...labelStyle, fontStyle: 'italic' }}>Лояльность (справочно)</span>
-              <span>{fmtRub(loyaltyComp)}</span>
-            </div>
+      <div className={styles.summaryBlock}>
+        <div className={styles.summaryTitle}>Детализация затрат</div>
+        <div className={styles.summaryList}>
+          <SummaryPair label="Логистика" value={fmtRub(logisticsCost)} />
+          <SummaryPair label="Хранение" value={fmtRub(storageCost)} />
+          <SummaryPair label="Приёмка" value={fmtRub(acceptanceCost)} />
+          <SummaryPair label="Удержания" value={fmtRub(otherWithholdings)} />
+          <SummaryPair label="Штрафы" value={fmtRub(penalties)} />
+          <SummaryPair label="Лояльность (справочно)" value={fmtRub(loyaltyComp)} />
         </div>
       </div>
 
-      {/* D) Модель (РРЦ) — из backend header_totals.rrp_model */}
       {(() => {
         const rrp = headerTotals.rrp_model
         const rrpSalesModel = rrp?.rrp_sales_model ?? headerTotals.rrp_sales_model
@@ -170,50 +117,35 @@ export function HeaderSummary({ headerTotals, items }: HeaderSummaryProps) {
         const wbTookPct = rrp?.wb_took_from_rrp_pct ?? headerTotals.wb_take_pct_of_rrp
         const coveragePct = rrp?.rrp_coverage_qty_pct ?? headerTotals.rrp_coverage_pct
         return (
-          <div style={{ ...blockStyle }} title={!(rrpSalesModel != null && rrpSalesModel > 0) ? 'Нет Internal Data / РРЦ не найдено' : undefined}>
-            <div style={{ fontWeight: 600, marginBottom: 8, color: '#333' }}>Модель (РРЦ)</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <div>
-                <div style={labelStyle}>Продажи по РРЦ (модель)</div>
-                <div style={valueStyle}>
-                  {rrpSalesModel != null && rrpSalesModel > 0 ? `${formatRUB(rrpSalesModel)} ₽` : '—'}
-                </div>
-              </div>
-              <div>
-                <div style={labelStyle}>WB забрал от РРЦ, ₽</div>
-                <div style={valueStyle}>{wbTookRub != null ? `${formatRUB(wbTookRub)} ₽` : '—'}</div>
-              </div>
-              <div>
-                <div style={labelStyle}>WB забрал от РРЦ, %</div>
-                <div style={valueStyle}>{wbTookPct != null ? `${formatPct(wbTookPct)}%` : '—'}</div>
-              </div>
-              <div>
-                <div style={labelStyle}>Покрытие РРЦ</div>
-                <div style={valueStyle}>{coveragePct != null ? `${formatPct(coveragePct)}%` : '—'}</div>
-              </div>
+          <div className={styles.summaryBlock} title={!(rrpSalesModel != null && rrpSalesModel > 0) ? 'Нет Internal Data / РРЦ не найдено' : undefined}>
+            <div className={styles.summaryTitle}>Модель (РРЦ)</div>
+            <div className={styles.summaryList}>
+              <SummaryPair label="Продажи по РРЦ (модель)" value={rrpSalesModel != null && rrpSalesModel > 0 ? `${formatRUB(rrpSalesModel)} ₽` : '—'} />
+              <SummaryPair label="WB забрал от РРЦ, ₽" value={wbTookRub != null ? `${formatRUB(wbTookRub)} ₽` : '—'} />
+              <SummaryPair label="WB забрал от РРЦ, %" value={wbTookPct != null ? `${formatPct(wbTookPct)}%` : '—'} />
+              <SummaryPair label="Покрытие РРЦ" value={coveragePct != null ? `${formatPct(coveragePct)}%` : '—'} />
             </div>
           </div>
         )
       })()}
 
-      {/* E) Операции */}
-      <div style={{ ...blockStyle }}>
-        <div style={{ fontWeight: 600, marginBottom: 8, color: '#333' }}>Операции</div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <div>
-            <div style={labelStyle}>Доставки, шт</div>
-            <div style={valueStyle}>{formatQty(deliveriesTotal)}</div>
-          </div>
-          <div>
-            <div style={labelStyle}>Возвраты, шт</div>
-            <div style={valueStyle}>{formatQty(returnsTotal)}</div>
-          </div>
-          <div>
-            <div style={labelStyle}>Выкуп, %</div>
-            <div style={valueStyle}>{formatPct(buyoutRateTotal)}%</div>
-          </div>
+      <div className={styles.summaryBlock}>
+        <div className={styles.summaryTitle}>Операции</div>
+        <div className={styles.summaryList}>
+          <SummaryPair label="Доставки, шт" value={formatQty(deliveriesTotal)} />
+          <SummaryPair label="Возвраты, шт" value={formatQty(returnsTotal)} />
+          <SummaryPair label="Выкуп, %" value={`${formatPct(buyoutRateTotal)}%`} />
         </div>
       </div>
+    </div>
+  )
+}
+
+function SummaryPair({ label, value, accent = false }: { label: string; value: React.ReactNode; accent?: boolean }) {
+  return (
+    <div className={styles.summaryPair}>
+      <span className={styles.summaryLabel}>{label}</span>
+      <span className={`${styles.summaryValue} ${accent ? styles.summaryValueAccent : ''}`.trim()}>{value}</span>
     </div>
   )
 }

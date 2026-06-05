@@ -10,7 +10,7 @@ import {
   type FunnelSignalsResponse,
 } from '@/lib/apiClient'
 import { usePageTitle } from '@/hooks/usePageTitle'
-import PortalBackButton from '@/components/PortalBackButton'
+import styles from './funnel-signals.module.css'
 
 /* ----- Photo popover: same as price-discrepancies (hover zoom, size 36) ----- */
 function PhotoPopover({ photos, size = 36 }: { photos: string[]; size?: number }) {
@@ -242,6 +242,127 @@ function SeverityBadge({ severity }: { severity: string | null }) {
     >
       {labels[severity] ?? severity}
     </span>
+  )
+}
+
+interface WbCategoryPopoverProps {
+  categories: FunnelSignalsCategoryItem[]
+  value: string
+  loading: boolean
+  onChange: (value: string) => void
+}
+
+function WbCategoryPopover({ categories, value, loading, onChange }: WbCategoryPopoverProps) {
+  const [open, setOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const popoverRef = useRef<HTMLDivElement | null>(null)
+  const buttonRef = useRef<HTMLButtonElement | null>(null)
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (!open) return
+      const target = event.target as Node
+      if (
+        popoverRef.current &&
+        !popoverRef.current.contains(target) &&
+        buttonRef.current &&
+        !buttonRef.current.contains(target)
+      ) {
+        setOpen(false)
+        setSearchQuery('')
+      }
+    }
+
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [open])
+
+  useEffect(() => {
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key === 'Escape' && open) {
+        setOpen(false)
+        setSearchQuery('')
+      }
+    }
+
+    document.addEventListener('keydown', handleEscape)
+    return () => document.removeEventListener('keydown', handleEscape)
+  }, [open])
+
+  const filteredCategories = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase()
+    if (!query) return categories
+    return categories.filter((category) => category.wb_category.toLowerCase().includes(query))
+  }, [categories, searchQuery])
+
+  const selectedCount = value ? 1 : 0
+  const buttonText = selectedCount === 0 ? 'Категории: Все' : 'Категории: 1 выбрано'
+
+  const handleSelect = (category: string) => {
+    onChange(value === category ? '' : category)
+  }
+
+  const handleClear = () => {
+    onChange('')
+    setSearchQuery('')
+  }
+
+  return (
+    <div className={styles.categoryPopover}>
+      <button
+        ref={buttonRef}
+        type="button"
+        onClick={() => setOpen(!open)}
+        disabled={loading}
+        className={styles.categoryPopoverButton}
+      >
+        {buttonText}
+      </button>
+
+      {open && (
+        <div ref={popoverRef} className={styles.categoryPopoverPanel}>
+          <div className={styles.categorySearch}>
+            <input
+              type="text"
+              placeholder="Поиск категорий..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              autoFocus
+            />
+          </div>
+
+          <div className={styles.categoryList}>
+            {filteredCategories.length === 0 ? (
+              <div className={styles.categoryEmpty}>{searchQuery ? 'Категории не найдены' : 'Нет категорий'}</div>
+            ) : (
+              filteredCategories.map((category) => {
+                const isSelected = value === category.wb_category
+                return (
+                  <label key={category.wb_category} className={styles.categoryOption}>
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => handleSelect(category.wb_category)}
+                    />
+                    <span title={category.wb_category}>
+                      {category.wb_category} ({category.products_cnt})
+                    </span>
+                  </label>
+                )
+              })
+            )}
+          </div>
+
+          {selectedCount > 0 && (
+            <div className={styles.categoryFooter}>
+              <button type="button" onClick={handleClear}>
+                Сбросить
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -523,52 +644,66 @@ export default function FunnelSignalsPage() {
   ])
 
   return (
-    <div className="container">
-      <div style={{ marginBottom: 12 }}>
-        <PortalBackButton fallbackHref={`/app/project/${projectId}/dashboard`} />
-      </div>
-      <h1 style={{ marginTop: 0, marginBottom: 20 }}>Воронка: Сигналы</h1>
+    <div className={styles.page}>
+      <header className={styles.pageHeader}>
+        <div className={styles.titleBlock}>
+          <div className={styles.titleRow}>
+            <h1>Воронка: Сигналы</h1>
+            <span className={styles.marketplaceBadge}>
+              <span aria-hidden="true" />
+              WB
+            </span>
+          </div>
+          <p>Сигналы по карточкам Wildberries: трафик, корзины, заказы и потери в воронке.</p>
+        </div>
+        {meta && (
+          <div className={styles.headerMeta}>
+            <span>Товаров</span>
+            <strong>{formatInt(meta.total)}</strong>
+          </div>
+        )}
+      </header>
 
       {/* Form: row1 = даты, мин. открытий, сигнал, кнопка; row2 = Категория WB, чекбокс */}
-      <div className="card mb-5">
-        <div className="p-4">
-          <h3 className="m-0 mb-3 text-base font-semibold">Фильтры</h3>
-          <div className="unitpnl-grid unitpnl-grid--funnel-row1 grid grid-cols-1 gap-6 md:grid-cols-[140px_140px_100px_1fr_180px] items-end">
-            <div className="unitpnl-col flex flex-col min-w-0">
-              <label className="unitpnl-label block text-sm font-medium mb-1">Дата с</label>
+      <div className={styles.filterCard}>
+        <div className={styles.filterCardInner}>
+          <h3>Фильтры</h3>
+          <div className={styles.filterGrid}>
+            <div className={styles.field}>
+              <label className={styles.fieldLabel}>Дата с</label>
               <input
                 type="date"
                 value={periodFrom}
                 onChange={(e) => setPeriodFrom(e.target.value)}
-                className="unitpnl-control h-10 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm leading-5 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className={styles.control}
               />
             </div>
-            <div className="unitpnl-col flex flex-col min-w-0">
-              <label className="unitpnl-label block text-sm font-medium mb-1">Дата по</label>
+            <div className={styles.field}>
+              <label className={styles.fieldLabel}>Дата по</label>
               <input
                 type="date"
                 value={periodTo}
                 onChange={(e) => setPeriodTo(e.target.value)}
-                className="unitpnl-control h-10 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm leading-5 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className={styles.control}
               />
             </div>
-            <div className="unitpnl-col flex flex-col min-w-0">
-              <label className="unitpnl-label block text-sm font-medium mb-1">Мин. открытий</label>
+            <div className={styles.field}>
+              <label className={styles.fieldLabel}>Мин. открытий</label>
               <input
                 type="number"
                 min={1}
                 value={minOpens}
                 onChange={(e) => setMinOpens(parseInt(e.target.value, 10) || 200)}
                 placeholder="200"
-                className="unitpnl-control h-10 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm leading-5 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className={styles.control}
               />
             </div>
-            <div className="unitpnl-col flex flex-col min-w-0">
-              <label className="unitpnl-label block text-sm font-medium mb-1">Сигнал</label>
+            <div className={styles.field}>
+              <label className={styles.fieldLabel}>Сигнал</label>
               <select
                 value={signalFilter}
                 onChange={(e) => setSignalFilter(e.target.value)}
-                className="unitpnl-control h-10 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm leading-5 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className={styles.control}
               >
                 {SIGNAL_CODES.map((opt) => (
                   <option key={opt.value || 'any'} value={opt.value}>
@@ -577,83 +712,61 @@ export default function FunnelSignalsPage() {
                 ))}
               </select>
             </div>
-            <div className="unitpnl-col unitpnl-actions flex items-end md:justify-end">
+            <div className={styles.actionCell}>
               <button
                 type="button"
                 onClick={handleApplyFilters}
                 disabled={loading || !periodFrom || !periodTo}
-                className="unitpnl-btn funnel-side-button h-10 px-6 w-full rounded border border-gray-300 bg-white text-sm hover:bg-gray-50 disabled:opacity-50"
-                style={{ margin: 0 }}
+                className={styles.buttonPrimary}
               >
                 {loading ? 'Загрузка…' : 'Обновить'}
               </button>
             </div>
           </div>
-          <div
-            className="unitpnl-grid unitpnl-grid--funnel-row2 grid grid-cols-1 gap-6 md:grid-cols-[140px_140px_100px_1fr_180px] items-end"
-            style={{ marginTop: 15 }}
-          >
-            <div className="unitpnl-col flex flex-col min-w-0 funnel-row2-category">
-              <label className="unitpnl-label block text-sm font-medium mb-1">Категория WB</label>
-              <select
+          <div className={`${styles.filterGrid} ${styles.filterGridSecond}`}>
+            <div className={`${styles.field} ${styles.categoryField}`}>
+              <WbCategoryPopover
+                categories={categories}
                 value={wbCategory}
-                onChange={(e) => setWbCategory(e.target.value)}
-                className="unitpnl-control h-10 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm leading-5 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                disabled={categoriesLoading}
-              >
-                <option value="">Любая</option>
-                {categories.map((c) => (
-                  <option key={c.wb_category} value={c.wb_category}>
-                    {truncate(c.wb_category, 45)} ({c.products_cnt})
-                  </option>
-                ))}
-              </select>
+                loading={categoriesLoading}
+                onChange={setWbCategory}
+              />
             </div>
-            <div className="unitpnl-col funnel-row2-checks">
-              <label className="unitpnl-label block text-sm font-medium mb-1" style={{ visibility: 'hidden' }}>
-                ·
-              </label>
-              <div className="funnel-checkbox-row" style={{ width: '100%' }}>
-                <label className="funnel-checkbox">
+            <div className={styles.checksCell}>
+              <div className={styles.checkboxRow}>
+                <label className={styles.checkboxPill}>
                   <input
                     type="checkbox"
                     checked={onlyCartGt0}
                     onChange={(e) => setOnlyCartGt0(e.target.checked)}
-                    style={{ marginRight: 8 }}
                   />
                   Только товары с cart &gt; 0
                 </label>
-                <label className="funnel-checkbox">
+                <label className={styles.checkboxPill}>
                   <input
                     type="checkbox"
                     checked={onlyEnterpriseGt0}
                     onChange={(e) => setOnlyEnterpriseGt0(e.target.checked)}
-                    style={{ marginRight: 8 }}
                   />
                   Наличие склад &gt; 0
                 </label>
-                <label className="funnel-checkbox">
+                <label className={styles.checkboxPill}>
                   <input
                     type="checkbox"
                     checked={onlyFboGt0}
                     onChange={(e) => setOnlyFboGt0(e.target.checked)}
-                    style={{ marginRight: 8 }}
                   />
                   Наличие FBO &gt; 0
                 </label>
               </div>
             </div>
-            <div className="unitpnl-col funnel-row2-export">
-              <label className="unitpnl-label block text-sm font-medium mb-1" style={{ visibility: 'hidden' }}>
-                ·
-              </label>
+            <div className={styles.exportCell}>
               <button
                 type="button"
                 onClick={handleExportCsv}
                 disabled={exporting || loading || !periodFrom || !periodTo}
-                className="unitpnl-btn funnel-side-button h-10 px-6 w-full rounded border border-gray-300 bg-white text-sm hover:bg-gray-50 disabled:opacity-50"
+                className={styles.buttonSecondary}
                 title="Экспорт в CSV"
-                style={{ margin: 0 }}
               >
                 {exporting ? 'Экспорт…' : 'Экспорт CSV'}
               </button>
@@ -676,13 +789,13 @@ export default function FunnelSignalsPage() {
         </div>
       )}
 
-      {loading && !data && <p style={{ color: '#6b7280' }}>Загрузка…</p>}
+      {loading && !data && <p className={styles.loadingText}>Загрузка...</p>}
 
       {/* Table: 1:1 price-discrepancies (card, table, thead/th, tbody tr, PhotoPopover, styles) */}
       {!loading && data !== null && (
-        <div className="card">
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14, tableLayout: 'fixed' }}>
+        <div className={styles.tableCard}>
+          <div className={styles.tableScroll}>
+            <table className={styles.funnelTable}>
               <colgroup>
                 <col style={{ width: 48 }} />
                 <col style={{ width: 110 }} />
@@ -990,44 +1103,26 @@ export default function FunnelSignalsPage() {
 
       {drawerRow && (
         <div
+          className={styles.drawer}
           role="dialog"
           aria-modal="true"
           aria-label="Детали сигнала"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            zIndex: 50,
-            display: 'flex',
-            alignItems: 'stretch',
-            justifyContent: 'flex-end',
-          }}
         >
           <div
-            style={{
-              position: 'absolute',
-              inset: 0,
-              backgroundColor: 'rgba(0,0,0,0.3)',
-            }}
+            className={styles.drawerOverlay}
             onClick={() => setDrawerRow(null)}
             onKeyDown={(e) => e.key === 'Escape' && setDrawerRow(null)}
           />
           <div
-            style={{
-              width: '100%',
-              maxWidth: 400,
-              backgroundColor: '#fff',
-              boxShadow: '-4px 0 20px rgba(0,0,0,0.15)',
-              padding: 24,
-              overflowY: 'auto',
-            }}
+            className={styles.drawerPanel}
             onClick={(e) => e.stopPropagation()}
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-              <h2 style={{ margin: 0, fontSize: 18 }}>nm_id {formatNmId(drawerRow.nm_id)}</h2>
+            <div className={styles.drawerHeader}>
+              <h2>nm_id {formatNmId(drawerRow.nm_id)}</h2>
               <button
                 type="button"
                 onClick={() => setDrawerRow(null)}
-                className="unitpnl-btn h-10 px-4 rounded border border-gray-300 bg-white text-sm hover:bg-gray-50"
+                className={styles.buttonSecondary}
               >
                 Закрыть
               </button>
@@ -1041,7 +1136,7 @@ export default function FunnelSignalsPage() {
                 />
               </div>
             )}
-            <dl style={{ margin: 0, display: 'grid', gap: 8 }}>
+            <dl className={styles.drawerDetails}>
               {(drawerRow.vendor_code != null && drawerRow.vendor_code !== '') && (
                 <div>
                   <dt style={{ margin: 0, fontSize: 12, color: '#6b7280' }}>Артикул</dt>
@@ -1124,101 +1219,6 @@ export default function FunnelSignalsPage() {
           </div>
         </div>
       )}
-
-      <style jsx global>{`
-        .unitpnl-grid {
-          display: grid;
-          grid-template-columns: 1fr;
-          gap: 24px;
-          align-items: end;
-        }
-        .unitpnl-col {
-          min-width: 0;
-        }
-        .unitpnl-label {
-          display: block;
-          margin-bottom: 4px;
-          font-size: 14px;
-          line-height: 1.25;
-          font-weight: 500;
-        }
-        .unitpnl-control {
-          width: 100%;
-          height: 40px;
-          padding: 8px 12px;
-          line-height: 20px;
-        }
-        .unitpnl-control::placeholder {
-          color: #9ca3af;
-        }
-        .unitpnl-btn {
-          height: 40px;
-          padding: 0 24px;
-          width: 100%;
-          margin-right: 0;
-          margin-bottom: 0;
-          white-space: nowrap;
-        }
-        .unitpnl-actions {
-          align-items: end;
-        }
-        .unitpnl-checkbox-wrap {
-          align-items: center;
-          min-height: 40px;
-        }
-        .funnel-checkbox-row {
-          display: flex;
-          align-items: center;
-          gap: 20px;
-          height: 40px;
-          flex-wrap: nowrap;
-          width: 100%;
-          overflow: visible;
-        }
-        .funnel-checkbox {
-          display: flex;
-          align-items: center;
-          white-space: nowrap;
-          font-size: 14px;
-          line-height: 20px;
-          cursor: pointer;
-          user-select: none;
-          min-width: 0;
-        }
-        .funnel-side-button {
-          width: 180px !important;
-          min-width: 180px !important;
-          max-width: 180px !important;
-          height: 40px !important;
-          box-sizing: border-box;
-        }
-        @media (min-width: 768px) {
-          .unitpnl-grid--funnel-row1 {
-            grid-template-columns: minmax(120px, 140px) minmax(120px, 140px) minmax(80px, 100px) minmax(140px, 1fr) minmax(160px, 180px);
-          }
-          .unitpnl-grid--funnel-row2 {
-            grid-template-columns: minmax(120px, 140px) minmax(120px, 140px) minmax(80px, 100px) minmax(140px, 1fr) minmax(160px, 180px);
-          }
-          .funnel-row2-category {
-            grid-column: 1 / span 3;
-          }
-          .funnel-row2-checks {
-            grid-column: 4;
-          }
-          .funnel-row2-export {
-            grid-column: 5;
-          }
-          .unitpnl-actions {
-            justify-content: flex-end;
-          }
-          .unitpnl-btn {
-            width: auto;
-          }
-          .unitpnl-checkbox-wrap {
-            justify-content: flex-start;
-          }
-        }
-      `}</style>
     </div>
   )
 }

@@ -32,10 +32,22 @@ build/
 # Logs
 *.log
 logs/
+tmp/
 
 # Database
 pgdata/
 redisdata/
+*.sql
+*.sql.gz
+*.dump
+*.dump.gz
+
+# Generated SEO experiment artifacts
+tests/seo/phase1/category_*/
+tests/seo/phase1q/category_*/
+tests/seo/phase1q/multi_category_query_selection/
+tests/seo/phase1q/vision_prompt_contract/run_*/
+frontend/seo-*-ui*.png
 
 # IDE
 .DS_Store
@@ -54,7 +66,6 @@ nginx/letsencrypt-reports-zakka/
 
 .project_proxy_secret_key
 audit/
-*.dump
 celerybeat-schedule*
 infra/docker/*.dump
 backup_*.dump

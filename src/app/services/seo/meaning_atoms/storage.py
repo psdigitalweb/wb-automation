@@ -15,7 +15,7 @@ from app.models import SeoMeaningAtom, SeoQueryMeaning, SeoSkuMeaningAnnotation
 from app.services.seo.atoms.v1.guards import apply_query_guards, apply_sku_guards, append_atom_unique
 from app.services.seo.atoms.v1.llm_extractors import extract_query_atoms, extract_sku_atoms
 from app.services.seo.atoms.v1.schemas import MeaningAtom, QueryAtoms, SkuAtoms
-from app.services.seo.atoms.v1.vision import extract_vision_sku_atoms
+from app.services.seo.atoms.v1.vision import VISION_PROMPT_VERSION, extract_vision_sku_atoms, render_vision_prompt
 from app.services.seo.category_profile import CategoryProfile, load_active_profile
 from app.services.seo.query_meaning_matcher.canonical import listify, stable_hash
 
@@ -23,7 +23,7 @@ from app.services.seo.query_meaning_matcher.canonical import listify, stable_has
 ATOMS_SOURCE_VERSION = "production_atoms_v1_visual_motifs"
 QUERY_ATOMS_SOURCE_VERSION = "query_atoms_from_meaning_v0"
 SKU_ATOMS_SOURCE_VERSION = "sku_atoms_from_meaning_v0"
-VISION_ATOMS_SOURCE_VERSION = "sku_vision_atoms_v0"
+VISION_ATOMS_SOURCE_VERSION = VISION_PROMPT_VERSION
 
 
 def _atoms_table_exists(session: Session) -> bool:
@@ -397,10 +397,19 @@ def ensure_sku_atoms(
 
     vision_status = "not_run"
     if include_vision:
+        selected_image_urls = []
+        product_payload = evidence_payload.get("product") if isinstance(evidence_payload.get("product"), Mapping) else {}
+        if isinstance(product_payload, Mapping):
+            raw_selected = product_payload.get("selected_image_urls")
+            if raw_selected is None:
+                raw_selected = product_payload.get("pics")
+            if isinstance(raw_selected, list):
+                selected_image_urls = [str(url) for url in raw_selected if isinstance(url, str) and url.startswith("http")]
         vision_hash = stable_hash(
             {
                 "kind": "sku_vision_atoms",
                 "evidence_hash": evidence_payload.get("evidence_hash"),
+                "selected_image_urls": selected_image_urls,
                 "source_version": VISION_ATOMS_SOURCE_VERSION,
             }
         )
@@ -420,8 +429,14 @@ def ensure_sku_atoms(
                     evidence_payload,
                     cache_dir=_cache_dir() / "vision_atoms",
                     force_refresh=force_refresh,
+                    image_limit=max(1, min(4, len(selected_image_urls) or 1)),
                 )
                 useful = bool(vision_atoms.facts or vision_atoms.positive_atoms or vision_atoms.negative_fit_atoms)
+                vision_payload = vision_atoms.model_dump(mode="json")
+                vision_payload["input_prompt"] = render_vision_prompt(evidence_payload)
+                vision_payload["prompt_version"] = VISION_PROMPT_VERSION
+                if selected_image_urls:
+                    vision_payload["selected_image_urls"] = selected_image_urls
                 _upsert_atoms_record(
                     session,
                     project_id=project_id,
@@ -430,9 +445,9 @@ def ensure_sku_atoms(
                     entity_id=annotation_id,
                     nm_id=nm_id,
                     input_hash=vision_hash,
-                    atoms_payload=vision_atoms.model_dump(mode="json"),
+                    atoms_payload=vision_payload,
                     source_version=VISION_ATOMS_SOURCE_VERSION,
-                    prompt_version="sku_vision_atoms_v0",
+                    prompt_version=VISION_PROMPT_VERSION,
                     status="ready" if useful else "empty",
                 )
                 vision_status = "ready" if useful else "empty"
@@ -447,7 +462,7 @@ def ensure_sku_atoms(
                     input_hash=vision_hash,
                     atoms_payload={},
                     source_version=VISION_ATOMS_SOURCE_VERSION,
-                    prompt_version="sku_vision_atoms_v0",
+                    prompt_version=VISION_PROMPT_VERSION,
                     status="error",
                     error=str(exc),
                 )

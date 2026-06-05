@@ -8,7 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 BrandVoice = Literal["экспертный", "тёплый", "минималистичный", "игривый"]
-GenerationStatus = Literal["completed", "failed"]
+GenerationStrategy = Literal["two_pass", "single_pass_sonnet"]
+GenerationStatus = Literal["completed", "needs_review", "failed"]
 ValidationSeverity = Literal["error", "warning"]
 
 
@@ -17,8 +18,8 @@ class SeoGenerationRunRequest(BaseModel):
     query_set_id: int | None = None
     main_query_text: str | None = None
     brand_voice: BrandVoice = "экспертный"
+    strategy: GenerationStrategy = "two_pass"
     force_refresh: bool = False
-    allow_draft_query_set: bool = False
 
 
 class GeneratedCharacteristic(BaseModel):
@@ -129,6 +130,21 @@ class SeoGenerationRunResponse(BaseModel):
     mode_used: str | None = None
     publishable: bool = False
     matcher_run_id: int | None = None
+    strategy: GenerationStrategy = "two_pass"
+    single_pass_validation: dict[str, Any] | None = None
+
+
+class SeoGenerationPromptPreviewResponse(BaseModel):
+    project_id: int
+    category_id: int
+    nm_id: int
+    query_set_id: int
+    query_set_status: str
+    provider_name: str
+    model_name: str
+    prompt_version: str
+    system_prompt: str
+    user_prompt: str
 
 
 class SeoGenerationLatestResponse(BaseModel):

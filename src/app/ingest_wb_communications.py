@@ -513,6 +513,27 @@ def _incremental_all_nm_ids_meta(
     return meta
 
 
+def _backfill_state_has_active_run(state: Optional[Dict[str, Any]]) -> bool:
+    """Return whether a running range-state points at a currently active ingest run."""
+    if not state or state.get("status") != "running":
+        return False
+    try:
+        last_run_id = int(state.get("last_run_id") or 0)
+    except (TypeError, ValueError):
+        return False
+    if last_run_id <= 0:
+        return False
+    try:
+        from app.services.ingest.runs import get_run
+
+        run = get_run(last_run_id)
+    except Exception:
+        return True
+    if not run:
+        return False
+    return str(run.get("status") or "").lower() in ("queued", "running")
+
+
 async def _ingest_wb_communications_reviews_incremental_all_nm_ids(
     project_id: int,
     run_id: Optional[int],
@@ -549,7 +570,8 @@ async def _ingest_wb_communications_reviews_incremental_all_nm_ids(
         WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE,
         WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE,
     )
-    if state and state.get("status") == "running":
+    state_status = state.get("status") if state else None
+    if state_status == "running" and _backfill_state_has_active_run(state):
         return {
             "ok": True,
             "skipped": True,
@@ -576,7 +598,7 @@ async def _ingest_wb_communications_reviews_incremental_all_nm_ids(
     date_from_ts = 0
     date_to_ts = now_ts
 
-    if state and state.get("status") in ("paused", "failed"):
+    if state and state_status in ("running", "paused", "failed"):
         try:
             start_nm_index = max(0, int(state.get("cursor_nm_offset") or 0))
         except (TypeError, ValueError):
@@ -965,7 +987,8 @@ async def _ingest_wb_communications_reviews_full_sync(
         WB_COMMUNICATIONS_REVIEWS_FULL_SYNC_STATE_DATE,
         WB_COMMUNICATIONS_REVIEWS_FULL_SYNC_STATE_DATE,
     )
-    if state and state.get("status") == "running":
+    state_status = state.get("status") if state else None
+    if state_status == "running" and _backfill_state_has_active_run(state):
         return {
             "ok": True,
             "skipped": True,
@@ -987,7 +1010,7 @@ async def _ingest_wb_communications_reviews_full_sync(
     start_nm_index = 0
     start_source_idx = 0
     start_skip = 0
-    if state and state.get("status") in ("paused", "failed"):
+    if state and state_status in ("running", "paused", "failed"):
         try:
             start_nm_index = max(0, int(state.get("cursor_nm_offset") or 0))
         except (TypeError, ValueError):

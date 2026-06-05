@@ -359,6 +359,7 @@ def run_meaning_aware_matcher(
             ranking_value=ranking_value,
             sku_atoms=sku_atoms,
             query_atoms_payload=query_atoms_payload,
+            category_profile=active_profile,
         )
         if conflict_atoms:
             conflicts.extend(conflict_atoms)

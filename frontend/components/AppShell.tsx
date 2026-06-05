@@ -1,18 +1,22 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { usePathname, useRouter } from 'next/navigation'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { isAuthenticated } from '../lib/auth'
+import { resolveUiMode, type UiMode } from '../lib/uiMode'
 import Breadcrumbs from './Breadcrumbs'
 import Topbar from './Topbar'
+import AppShellV2 from './ui-v2/AppShellV2'
 import './Topbar.css'
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter()
   const pathname = usePathname() || '/'
+  const searchParams = useSearchParams()
   const [mounted, setMounted] = useState(false)
   const [isAuthed, setIsAuthed] = useState<boolean | null>(null)
   const [isReportsHost, setIsReportsHost] = useState(false)
+  const [uiMode, setUiMode] = useState<UiMode>('v1')
   const inApp = pathname.startsWith('/app')
 
   useEffect(() => {
@@ -23,6 +27,11 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     if (!mounted) return
     setIsReportsHost(typeof window !== 'undefined' && window.location.hostname === 'reports.zakka.ru')
   }, [mounted])
+
+  useEffect(() => {
+    if (!mounted) return
+    setUiMode(resolveUiMode())
+  }, [mounted, pathname, searchParams])
 
   useEffect(() => {
     if (!mounted) return
@@ -61,6 +70,14 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           {children}
         </main>
       </div>
+    )
+  }
+
+  if (uiMode === 'v2') {
+    return (
+      <AppShellV2>
+        {isAuthed === true ? children : null}
+      </AppShellV2>
     )
   }
 

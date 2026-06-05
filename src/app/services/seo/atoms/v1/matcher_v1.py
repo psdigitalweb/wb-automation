@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Callable
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -384,6 +385,12 @@ def _product_type_compatible(query_type: str, sku_type: str) -> bool:
     return False
 
 
+def _default_product_type_compatibility_reason(query_type: str, sku_type: str) -> str | None:
+    if _product_type_compatible(query_type, sku_type):
+        return f"product_type matched: {normalize_text(query_type)}"
+    return None
+
+
 def _numeric_match(query_atom: MeaningAtomV1, candidates: list[MeaningAtomV1]) -> tuple[bool, str | None]:
     try:
         expected = float(query_atom.value)
@@ -481,6 +488,7 @@ def match_atoms_v1(
     query_text: str,
     cluster_key: str | None = None,
     ranking_value_used: float | None = None,
+    product_type_compatibility_reason: Callable[[str, str], str | None] | None = None,
 ) -> AtomsMatchResult:
     sku_v1 = normalize_sku_atoms_v1(sku) if isinstance(sku, SkuAtoms) else sku
     query_v1 = normalize_query_atoms_v1(query, query_text=query_text) if isinstance(query, QueryAtoms) else query
@@ -497,12 +505,14 @@ def match_atoms_v1(
     audience_matches = 0
     strong_signal_matches = 0
 
+    compatibility_reason = product_type_compatibility_reason or _default_product_type_compatibility_reason
     query_product_type = query_v1.product_type or next((str(atom.value) for atom in query_v1.required_atoms if field_family(atom.field) == "product_type"), "")
-    if query_product_type and not _product_type_compatible(query_product_type, sku_v1.product_type):
+    product_type_reason = compatibility_reason(query_product_type, sku_v1.product_type) if query_product_type else None
+    if query_product_type and product_type_reason is None:
         conflicts.append(f"product_type conflict: query requires {query_product_type}, SKU is {sku_v1.product_type or 'unknown'}")
     elif query_product_type:
         matched.append(f"product_type:{query_product_type}")
-        reasons.append(f"product_type matched: {query_product_type}")
+        reasons.append(product_type_reason or f"product_type matched: {query_product_type}")
 
     for atom in query_v1.required_atoms:
         if field_family(atom.field) == "product_type":

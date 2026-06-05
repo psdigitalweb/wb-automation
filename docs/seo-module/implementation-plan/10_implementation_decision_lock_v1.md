@@ -60,15 +60,15 @@ Decisions clearly supported by the existing package. Locked unless leadership ex
 
 ### CD-9. No new category-specific logic in iteration 1; profile extraction is locked as the iteration 2 mechanism
 
-- **Decision:** Iteration 1 does not add any new category-specific logic (category-name literals, new hardcoded category dictionaries, per-category branches) to candidate modules — in particular `services/seo/matcher_v2/` and `services/seo/atoms/v1/`. Extraction of category-specific rules into `SeoCategoryProfile` is locked as the iteration 2 mechanism. Pre-existing category-calibrated dictionaries in the current matcher remain where they are until iteration 2 extracts them.
+- **Decision:** Iteration 1 must not introduce new category-specific logic into candidate modules — no fresh category-name literals, hardcoded category dictionaries, or per-category branches in `services/seo/matcher_v2/` or `services/seo/atoms/v1/`. Extraction of category-specific rules into `SeoCategoryProfile` is locked as the iteration 2 mechanism.
 - **Source:** `01_target_operating_model.md` §4; `03_workstreams_and_scope.md` WS-C; `07_iteration_plan.md` Iteration 2 scope; strategic clarification response on Q10.
-- **Consequence:** Iteration 1 refactors are structural (stage ordering, trace writing, atoms relocation) and must not introduce fresh category literals. `SeoCategoryProfile` table, loader, and 812 seed land in iteration 2 and are not treated as operational truth before then.
+- **Consequence:** Until iteration 2 lands, candidate-path refactors stay structural and must avoid adding fresh category literals or new hardcoded category dictionaries. `SeoCategoryProfile` is not treated as operational truth in iteration 1.
 
 ### CD-10. Labels are eval-only; not read by runtime decision paths; not introduced in iteration 1
 
-- **Decision:** `seo_eval_labels` is consumed by the eval harness only. No production decision path (matcher, query selection, generation) reads labels. The labels table and the one-time import of existing 191 labels for category 812 land in iteration 2, not iteration 1.
+- **Decision:** `seo_eval_labels` is eval-only. Runtime decision paths (matcher, query selection, generation) must not read labels.
 - **Source:** `04_data_model_and_state_changes.md` §1.4; `07_iteration_plan.md` Iteration 2 scope; strategic clarification response on Q2.
-- **Consequence:** Iteration 1 touches no labeling code, schema, or import. A CI check added in iteration 2 enforces the "no runtime reader of labels" rule.
+- **Consequence:** Labels land in iteration 2, not iteration 1. Iteration 1 touches no labeling code, label schema, label import, or runtime label readers.
 
 ### CD-11. Iteration 1 and iteration 2 each have a defined "what we can prove"
 

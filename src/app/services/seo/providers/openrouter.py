@@ -20,6 +20,7 @@ class OpenRouterProvider(ChatProvider, EmbeddingProvider):
     chat_model: str = settings.OPENROUTER_CHAT_MODEL
     embedding_model: str = settings.OPENROUTER_EMBEDDING_MODEL
     timeout_seconds: float = 30.0
+    response_format: dict[str, Any] | None = None
 
     def _build_headers(self) -> dict[str, str]:
         if not self.api_key:
@@ -59,6 +60,8 @@ class OpenRouterProvider(ChatProvider, EmbeddingProvider):
             payload["top_p"] = top_p
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
+        if self.response_format is not None:
+            payload["response_format"] = dict(self.response_format)
         data = self._post("/chat/completions", payload)
         choices = data.get("choices") or []
         message = choices[0].get("message") if choices and isinstance(choices[0], dict) else {}

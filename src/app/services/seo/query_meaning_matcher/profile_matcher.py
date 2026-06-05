@@ -10,6 +10,7 @@ from app.services.seo.category_profile_rules import (
     RuleFeatures,
     matches_primary_subject_text,
     predicate_matches,
+    product_type_compatibility_reason,
     product_type_alias_matches,
 )
 from app.services.seo.query_meaning_matcher._legacy.matcher import (
@@ -238,8 +239,14 @@ def _product_type_score(sku: _FeatureSet, query: _FeatureSet, *, profile: Catego
     compat_weight = float(weights.get("product_type_compat", 0.16))
     weak_weight = float(weights.get("product_type_weak", -0.18))
 
-    if sku.product_type and sku.product_type == query.product_type:
-        return match_weight, [f"product_type matched: {query.product_type}"]
+    compatibility_reason = product_type_compatibility_reason(
+        query.product_type,
+        sku.product_type,
+        profile=profile,
+    )
+    if compatibility_reason is not None:
+        score = match_weight if compatibility_reason.startswith("product_type matched") else compat_weight
+        return score, [compatibility_reason]
 
     query_rule = profile.product_type_aliases.get(query.product_type)
     if query_rule is not None and product_type_alias_matches(sku.canonical_text or sku.product_type, query_rule):

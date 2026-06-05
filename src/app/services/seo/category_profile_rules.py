@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Mapping
+from typing import TYPE_CHECKING, Mapping
 
 from app.services.seo.category_profile import ProductTypeAliasRule, ScoringProfile, SubjectProfile
+
+if TYPE_CHECKING:
+    from app.services.seo.category_profile import CategoryProfile
 
 
 _WORD_RE = re.compile(r"[0-9a-zA-Zа-яА-ЯёЁ]+", re.IGNORECASE)
@@ -93,3 +96,53 @@ def matches_primary_subject_text(text: object, subject: SubjectProfile) -> bool:
         return True
     normalized = normalize_text(text)
     return any(alias in normalized for alias in subject.primary_aliases)
+
+
+def product_type_compatibility_reason(
+    query_type: object,
+    sku_type: object,
+    *,
+    profile: "CategoryProfile",
+) -> str | None:
+    """Explain product-type compatibility using the active CategoryProfile.
+
+    This treats the profile primary subject and its aliases as one equivalence
+    group while preserving true conflicts with related or unrelated product
+    types.
+    """
+
+    query_norm = normalize_text(query_type)
+    sku_norm = normalize_text(sku_type)
+    if not query_norm:
+        return "product_type compatible: query has no product type requirement"
+    if query_norm == sku_norm:
+        return f"product_type matched: {query_norm}"
+
+    if _is_primary_subject_product_type(query_norm, profile) and _is_primary_subject_product_type(sku_norm, profile):
+        return f"product_type compatible via category profile alias: {query_norm}"
+
+    query_rule = profile.product_type_aliases.get(query_norm)
+    if query_rule is not None and product_type_alias_matches(sku_norm, query_rule):
+        return f"product_type compatible: {query_norm}"
+
+    return None
+
+
+def _is_primary_subject_product_type(value: str, profile: "CategoryProfile") -> bool:
+    normalized = normalize_text(value)
+    if not normalized:
+        return False
+
+    subject = profile.subject
+    primary_values = {
+        normalize_text(subject.primary),
+        *(normalize_text(alias) for alias in subject.primary_aliases),
+    }
+    if normalized in primary_values:
+        return True
+
+    primary_rule = profile.product_type_aliases.get(subject.primary)
+    if primary_rule is not None and product_type_alias_matches(normalized, primary_rule):
+        return True
+
+    return matches_primary_subject_text(normalized, subject)

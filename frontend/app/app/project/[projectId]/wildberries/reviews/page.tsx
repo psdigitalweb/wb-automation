@@ -11,8 +11,12 @@ import {
   type ReviewsSummaryResponse,
 } from '@/lib/apiClient'
 import { usePageTitle } from '@/hooks/usePageTitle'
-import PortalBackButton from '@/components/PortalBackButton'
 import WBProductLookupInput from '@/components/WBProductLookupInput'
+import { Badge } from '@/components/ui-v2/primitives/Badge'
+import { Button } from '@/components/ui-v2/primitives/Button'
+import { Card } from '@/components/ui-v2/primitives/Card'
+import { PageHeader } from '@/components/ui-v2/primitives/PageHeader'
+import styles from './reviews.module.css'
 
 const REVIEWS_PAGE_SIZE = 20
 
@@ -431,13 +435,14 @@ export default function ReviewsPage() {
   const showNewReviews = periodFrom.trim() !== '' && periodTo.trim() !== ''
 
   return (
-    <div className="container">
-      <div style={{ marginBottom: 12 }}>
-        <PortalBackButton fallbackHref={`/app/project/${projectId}/dashboard`} />
-      </div>
-      <h1 style={{ marginTop: 0, marginBottom: 20 }}>Отзывы Wildberries</h1>
+    <div className={styles.page}>
+      <PageHeader
+        title="Отзывы"
+        subtitle="Сводка по рейтингу, новым отзывам и деталям обратной связи по SKU."
+        marketplaceTag="wb"
+      />
 
-      <div className="card mb-5">
+      <Card className={styles.filterCard}>
         <div className="p-4">
           <div className="unitpnl-grid unitpnl-grid--reviews-row1 grid grid-cols-1 gap-6 items-end">
             <div className="unitpnl-col flex flex-col min-w-0">
@@ -486,15 +491,16 @@ export default function ReviewsPage() {
               />
             </div>
             <div className="unitpnl-col unitpnl-actions flex items-end md:justify-end">
-              <button
+              <Button
                 type="button"
                 onClick={load}
                 disabled={loading}
-                className="unitpnl-btn reviews-side-button h-10 px-6 w-full rounded border border-gray-300 bg-white text-sm hover:bg-gray-50 disabled:opacity-50"
-                style={{ margin: 0 }}
+                variant="primary"
+                size="lg"
+                className="unitpnl-btn reviews-side-button"
               >
                 {loading ? 'Загрузка…' : 'Обновить'}
-              </button>
+              </Button>
             </div>
           </div>
           <div
@@ -555,7 +561,7 @@ export default function ReviewsPage() {
             Если даты не заданы, показывается полная картина по SKU. Даты влияют на колонку новых отзывов и на раскрытый список отзывов по товару.
           </div>
         </div>
-      </div>
+      </Card>
 
       {error && (
         <div
@@ -574,8 +580,9 @@ export default function ReviewsPage() {
       {loading && !data && <p style={{ color: '#6b7280' }}>Loading...</p>}
 
       {!loading && data && (
-        <div className="card overflow-x-auto">
-          <table className="w-full border-collapse" style={{ fontSize: 14, tableLayout: 'fixed' }}>
+        <Card className={styles.tableCard}>
+          <div className={styles.tableScroll}>
+          <table className={styles.reviewsTable} style={{ tableLayout: 'fixed' }}>
             <colgroup>
               <col style={{ width: 52 }} />
               <col style={{ width: 132 }} />
@@ -650,22 +657,15 @@ export default function ReviewsPage() {
                               <div style={{ fontSize: 11, color: '#777', marginTop: 2 }}>{row.wb_category}</div>
                             )}
                             <div style={{ marginTop: 8 }}>
-                              <button
+                              <Button
                                 type="button"
                                 onClick={() => toggleReviews(row.nm_id)}
                                 disabled={reviewsState?.loadingMore}
-                                style={{
-                                  border: '1px solid #d1d5db',
-                                  background: '#fff',
-                                  borderRadius: 6,
-                                  padding: '6px 10px',
-                                  fontSize: 12,
-                                  color: '#1f2937',
-                                  cursor: 'pointer',
-                                }}
+                                variant="secondary"
+                                size="sm"
                               >
                                 {isExpanded ? 'Скрыть отзывы' : 'Показать отзывы'}
-                              </button>
+                              </Button>
                             </div>
                           </div>
                         </td>
@@ -758,43 +758,13 @@ export default function ReviewsPage() {
                                             {formatReviewDate(review.created_date)}
                                           </span>
                                           {review.is_archived && (
-                                            <span
-                                              style={{
-                                                fontSize: 11,
-                                                padding: '2px 8px',
-                                                borderRadius: 999,
-                                                background: '#f3f4f6',
-                                                color: '#4b5563',
-                                              }}
-                                            >
-                                              Архив
-                                            </span>
+                                            <Badge>Архив</Badge>
                                           )}
                                           {review.is_answered && (
-                                            <span
-                                              style={{
-                                                fontSize: 11,
-                                                padding: '2px 8px',
-                                                borderRadius: 999,
-                                                background: '#dcfce7',
-                                                color: '#166534',
-                                              }}
-                                            >
-                                              Есть ответ
-                                            </span>
+                                            <Badge tone="success">Есть ответ</Badge>
                                           )}
                                           {review.has_media && (
-                                            <span
-                                              style={{
-                                                fontSize: 11,
-                                                padding: '2px 8px',
-                                                borderRadius: 999,
-                                                background: '#dbeafe',
-                                                color: '#1d4ed8',
-                                              }}
-                                            >
-                                              Медиа
-                                            </span>
+                                            <Badge tone="info">Медиа</Badge>
                                           )}
                                         </div>
                                         <div>{renderReviewRating(review.rating)}</div>
@@ -867,7 +837,7 @@ export default function ReviewsPage() {
 
                               {reviewsHasMore && (
                                 <div style={{ marginTop: 12, display: 'flex', justifyContent: 'center' }}>
-                                  <button
+                                  <Button
                                     type="button"
                                     onClick={() =>
                                       loadReviews(row.nm_id, {
@@ -876,20 +846,10 @@ export default function ReviewsPage() {
                                       })
                                     }
                                     disabled={reviewsState.loadingMore}
-                                    style={{
-                                      border: '1px solid #d1d5db',
-                                      background: '#fff',
-                                      color: '#1f2937',
-                                      borderRadius: 8,
-                                      padding: '8px 14px',
-                                      fontSize: 13,
-                                      lineHeight: 1.2,
-                                      cursor: reviewsState.loadingMore ? 'not-allowed' : 'pointer',
-                                      opacity: reviewsState.loadingMore ? 0.7 : 1,
-                                    }}
+                                    variant="secondary"
                                   >
                                     {reviewsState.loadingMore ? 'Загружаем…' : 'Показать ещё отзывы'}
-                                  </button>
+                                  </Button>
                                 </div>
                               )}
                             </div>
@@ -902,106 +862,9 @@ export default function ReviewsPage() {
               )}
             </tbody>
           </table>
-        </div>
+          </div>
+        </Card>
       )}
-
-      <style jsx global>{`
-        .unitpnl-grid {
-          display: grid;
-          grid-template-columns: 1fr;
-          gap: 24px;
-          align-items: end;
-        }
-        .unitpnl-col {
-          min-width: 0;
-        }
-        .unitpnl-label {
-          display: block;
-          margin-bottom: 4px;
-          font-size: 14px;
-          line-height: 1.25;
-          font-weight: 500;
-        }
-        .unitpnl-control {
-          width: 100%;
-          height: 40px;
-          padding: 8px 12px;
-          line-height: 20px;
-        }
-        .unitpnl-control::placeholder {
-          color: #9ca3af;
-        }
-        .unitpnl-btn {
-          height: 40px;
-          padding: 0 24px;
-          width: 100%;
-          margin-right: 0;
-          margin-bottom: 0;
-          white-space: nowrap;
-        }
-        .unitpnl-actions {
-          align-items: end;
-          min-width: 0;
-        }
-        .reviews-checkbox-row {
-          display: flex;
-          align-items: center;
-          gap: 20px;
-          height: 40px;
-          width: 100%;
-          flex-wrap: nowrap;
-          overflow: visible;
-        }
-        .reviews-checkbox {
-          display: flex;
-          align-items: center;
-          white-space: nowrap;
-          font-size: 14px;
-          line-height: 20px;
-          cursor: pointer;
-          user-select: none;
-          min-width: 0;
-        }
-        .reviews-side-button {
-          height: 40px !important;
-          box-sizing: border-box;
-        }
-        @media (min-width: 768px) {
-          .unitpnl-grid--reviews-row1 {
-            grid-template-columns:
-              minmax(120px, 140px)
-              minmax(120px, 140px)
-              minmax(160px, 180px)
-              minmax(220px, 1fr)
-              minmax(150px, 160px);
-          }
-          .unitpnl-grid--reviews-row2 {
-            grid-template-columns:
-              minmax(120px, 140px)
-              minmax(120px, 140px)
-              minmax(160px, 180px)
-              minmax(220px, 1fr)
-              minmax(150px, 160px);
-          }
-          .reviews-row2-category {
-            grid-column: 1 / span 3;
-          }
-          .reviews-row2-checks {
-            grid-column: 4 / span 2;
-          }
-          .reviews-side-button {
-            width: 160px !important;
-            min-width: 160px !important;
-            max-width: 160px !important;
-          }
-          .unitpnl-actions {
-            justify-content: flex-end;
-          }
-          .unitpnl-btn {
-            width: auto;
-          }
-        }
-      `}</style>
     </div>
   )
 }

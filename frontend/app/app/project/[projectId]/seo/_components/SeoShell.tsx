@@ -1,7 +1,8 @@
 'use client'
 
 import Link from 'next/link'
-import type { ReactNode } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
+import styles from './SeoShell.module.css'
 
 export function normalizeError(error: unknown): string {
   const maybe = error as { detail?: string; message?: string }
@@ -13,7 +14,6 @@ export function SeoShell({
   title,
   subtitle,
   children,
-  extraTabs,
 }: {
   projectId: string
   title: string
@@ -21,68 +21,94 @@ export function SeoShell({
   children: ReactNode
   extraTabs?: Array<[string, string]>
 }) {
-  const tabs: Array<[string, string]> = [
-    ['Категории', `/app/project/${projectId}/seo/categories`],
-    ['Товары', `/app/project/${projectId}/seo/products`],
-    ['Eval 812', `/app/project/${projectId}/seo/categories/812/eval`],
-    ...(extraTabs || []),
-  ]
   return (
-    <main style={{ maxWidth: 1280, margin: '0 auto', padding: 24 }}>
-      <nav style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 18, color: '#64748b' }}>
-        <Link href={`/app/project/${projectId}`}>Проект</Link>
-        <span>/</span>
-        <Link href={`/app/project/${projectId}/seo`}>SEO</Link>
-      </nav>
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'flex-start', marginBottom: 22 }}>
-        <div>
-          <h1 style={{ margin: 0, fontSize: 34, lineHeight: 1.15 }}>{title}</h1>
-          {subtitle && <p style={{ margin: '8px 0 0', color: '#64748b', fontSize: 16 }}>{subtitle}</p>}
+    <div className={styles.shell}>
+      <div className={styles.content}>
+        <div className={styles.pageTop}>
+          <div>
+            <div className={styles.eyebrow}>SEO · WILDBERRIES</div>
+            <h1 className={styles.title}>{title}</h1>
+            {subtitle ? <div className={styles.lead}>{subtitle}</div> : null}
+          </div>
+          <div className={styles.pageActions}>
+            <Link className={`${styles.button} ${styles.buttonGhost}`} href={`/app/project/${projectId}`}>
+              К проекту
+            </Link>
+          </div>
         </div>
-        <Link href={`/app/project/${projectId}`} style={buttonStyle('light')}>В проект</Link>
+        {children}
       </div>
-      <div style={{ display: 'flex', gap: 10, marginBottom: 24, flexWrap: 'wrap' }}>
-        {tabs.map(([label, href]) => (
-          <Link key={href} href={href} style={buttonStyle('light')}>{label}</Link>
-        ))}
-        <Link href={`/app/project/${projectId}/seo/sku-meaning`} style={buttonStyle('ghost')}>Техническая диагностика</Link>
-      </div>
-      {children}
-    </main>
+    </div>
   )
 }
 
-export function Card({ children }: { children: ReactNode }) {
-  return <section style={{ border: '1px solid #e2e8f0', borderRadius: 8, padding: 18, background: '#fff' }}>{children}</section>
+export function Card({ children, className = '', style }: { children: ReactNode; className?: string; style?: CSSProperties }) {
+  return <section className={`${styles.card} ${className}`.trim()} style={style}>{children}</section>
 }
 
-export function StatusPill({ label, tone = 'neutral' }: { label: string; tone?: 'good' | 'warn' | 'bad' | 'neutral' }) {
-  const colors = {
-    good: ['#ecfdf5', '#047857'],
-    warn: ['#fffbeb', '#b45309'],
-    bad: ['#fef2f2', '#b91c1c'],
-    neutral: ['#f1f5f9', '#334155'],
-  }[tone]
-  return <span style={{ display: 'inline-flex', background: colors[0], color: colors[1], borderRadius: 999, padding: '5px 10px', fontSize: 13, fontWeight: 700 }}>{label}</span>
+export function Panel({
+  title,
+  subtitle,
+  actions,
+  children,
+}: {
+  title?: string
+  subtitle?: ReactNode
+  actions?: ReactNode
+  children: ReactNode
+}) {
+  return (
+    <section className={styles.panel}>
+      {(title || actions) && (
+        <div className={styles.panelHead}>
+          <div>
+            {title ? <h2>{title}</h2> : null}
+            {subtitle ? <div className={styles.subtext}>{subtitle}</div> : null}
+          </div>
+          {actions ? <div>{actions}</div> : null}
+        </div>
+      )}
+      <div className={styles.panelBody}>{children}</div>
+    </section>
+  )
+}
+
+export function StatusPill({ label, tone = 'neutral' }: { label: string; tone?: 'good' | 'warn' | 'bad' | 'neutral' | 'info' }) {
+  const toneClass = tone === 'good' ? styles.good : tone === 'warn' ? styles.warn : tone === 'bad' ? styles.bad : tone === 'info' ? styles.info : ''
+  return <span className={`${styles.badge} ${toneClass}`.trim()}>{label}</span>
+}
+
+export function buttonClass(kind: 'primary' | 'light' | 'ghost' | 'danger' = 'primary') {
+  const kindClass = {
+    primary: styles.buttonPrimary,
+    light: styles.buttonLight,
+    ghost: styles.buttonGhost,
+    danger: styles.buttonDanger,
+  }[kind]
+  return `${styles.button} ${kindClass}`
 }
 
 export function buttonStyle(kind: 'primary' | 'light' | 'ghost' | 'danger' = 'primary') {
-  const styles = {
-    primary: { background: '#111827', color: '#fff', border: '1px solid #111827' },
-    light: { background: '#fff', color: '#111827', border: '1px solid #cbd5e1' },
-    ghost: { background: '#f8fafc', color: '#334155', border: '1px solid #e2e8f0' },
-    danger: { background: '#991b1b', color: '#fff', border: '1px solid #991b1b' },
-  }[kind]
-  return {
-    ...styles,
-    borderRadius: 8,
-    padding: '10px 14px',
-    fontWeight: 700,
+  const base: CSSProperties = {
+    borderRadius: 6,
+    padding: '0 10px',
+    minHeight: 32,
+    fontWeight: 600,
     textDecoration: 'none',
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 40,
+    gap: 6,
     cursor: 'pointer',
-  } as const
+    whiteSpace: 'nowrap',
+  }
+  const stylesByKind: Record<typeof kind, CSSProperties> = {
+    primary: { background: 'oklch(38% 0.10 155)', color: '#fff', border: '0.5px solid oklch(38% 0.10 155)' },
+    light: { background: '#fff', color: 'oklch(22% 0.03 260)', border: '0.5px solid oklch(22% 0.03 260 / 0.15)' },
+    ghost: { background: 'transparent', color: 'oklch(42% 0.02 260)', border: '0.5px solid transparent' },
+    danger: { background: 'oklch(56% 0.20 22)', color: '#fff', border: '0.5px solid oklch(56% 0.20 22)' },
+  }
+  return { ...base, ...stylesByKind[kind] } as const
 }
+
+export { styles as seoStyles }

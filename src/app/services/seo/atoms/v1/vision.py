@@ -19,7 +19,23 @@ from app.services.seo.atoms.v1.schemas import MeaningAtom, SkuAtoms
 from app.services.seo.query_meaning_matcher.canonical import stable_hash
 
 
-VISION_PROMPT_VERSION = "meaning_atoms_vision_audience_v1"
+VISION_PROMPT_VERSION = "ai_vision_visual_prompt_v1"
+VISION_PROMPT_TEMPLATE_PATH = Path(__file__).resolve().parents[6] / "config" / "seo" / "prompts" / "AI_VISION_VISUAL_PROMPT_V1.txt"
+
+
+def _string_value(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _read_prompt_template() -> str:
+    return VISION_PROMPT_TEMPLATE_PATH.read_text(encoding="utf-8")
+
+
+def _render_prompt_template(template: str, values: Mapping[str, str]) -> str:
+    rendered = template
+    for key, value in values.items():
+        rendered = rendered.replace("{" + key + "}", value)
+    return rendered
 
 
 def image_urls_from_evidence(evidence_payload: Mapping[str, Any], *, limit: int = 1) -> list[str]:
@@ -89,42 +105,23 @@ def _write_cache(
     _cache_path(cache_dir, key).write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
 
 
-def _prompt(evidence_payload: Mapping[str, Any]) -> str:
+def render_vision_prompt(evidence_payload: Mapping[str, Any]) -> str:
     product = evidence_payload.get("product") if isinstance(evidence_payload.get("product"), Mapping) else {}
-    context = {
-        "nm_id": evidence_payload.get("nm_id"),
-        "title": product.get("title") if isinstance(product, Mapping) else None,
-        "brand": product.get("brand") if isinstance(product, Mapping) else None,
-        "subject_name": product.get("subject_name") if isinstance(product, Mapping) else None,
-        "description": product.get("description") if isinstance(product, Mapping) else None,
-        "characteristics": product.get("characteristics") if isinstance(product, Mapping) else None,
-    }
-    return (
-        "Ты извлекаешь покупательские смыслы товара по фото маркетплейса для SEO matching experiment. "
-        "Верни только JSON. Значения atom.value по возможности пиши на русском.\n\n"
-        "Основной формат ответа должен совпадать со SkuAtoms: product_type, product_identity, facts, positive_atoms, "
-        "negative_fit_atoms, confidence, evidence_refs. facts, positive_atoms и negative_fit_atoms всегда массивы atom-объектов.\n\n"
-        "Atom fields: type, field, value, operator, importance, source, confidence. "
-        "Используй source='vision_audience'. Все audience/occasion/style гипотезы должны быть soft, не hard.\n\n"
-        "Извлеки:\n"
-        "1. visual facts: print/design, color, transparency, visible motifs, lid, saucer, gift box/package, set/multiple items, shape/form.\n"
-        "2. OCR/text: видимые надписи на товаре/упаковке, если читаются.\n"
-        "3. audience_hypotheses: кому визуально подходит товар: подруга, девушка, любимая, ребенок, подросток, коллега, фанат k-pop, себе, универсальный подарок и т.п.\n"
-        "4. occasion_hypotheses: день рождения, новый год, 8 марта, просто так, романтический подарок, офис, уютный дом.\n"
-        "5. style_archetypes: милая, красивая, эстетичная/pinterest, уютная, смешная/прикольная, мемная, праздничная, минималистичная, корейская/k-pop.\n"
-        "6. supported_query_intents: какие типы запросов фото поддерживает.\n"
-        "7. negative_query_intents: под какие запросы товар визуально не стоит оптимизировать, например без рисунка, прозрачная, строгий мужской подарок, термокружка.\n\n"
-        "Ограничения: не выводи объем, материал, кофемашину, термо-свойства, СВЧ/посудомойку, если это не написано или не видно явно. "
-        "Если вывод является гипотезой по стилю/аудитории, укажи confidence 0.45-0.8, не 0.95. "
-        "Если не уверен, лучше помести смысл в positive_atoms с низкой confidence или в uncertain_or_not_visible.\n\n"
-        "Примеры atom:\n"
-        "{\"type\":\"visual\",\"field\":\"design\",\"value\":\"print\",\"importance\":\"soft\",\"source\":\"vision_audience\",\"confidence\":0.9}\n"
-        "{\"type\":\"recipient\",\"field\":\"recipient\",\"value\":\"подруга\",\"importance\":\"soft\",\"source\":\"vision_audience\",\"confidence\":0.65}\n"
-        "{\"type\":\"expressive\",\"field\":\"expressive\",\"value\":\"милая\",\"importance\":\"soft\",\"source\":\"vision_audience\",\"confidence\":0.75}\n"
-        "{\"type\":\"occasion\",\"field\":\"occasion\",\"value\":\"новый год\",\"importance\":\"soft\",\"source\":\"vision_audience\",\"confidence\":0.8}\n"
-        "{\"type\":\"attribute\",\"field\":\"negative\",\"value\":\"без рисунка\",\"importance\":\"soft\",\"source\":\"vision_audience\",\"confidence\":0.9}\n\n"
-        f"Product context:\n{json.dumps(context, ensure_ascii=False, indent=2, default=str)}"
+    category_name = _string_value(product.get("subject_name") if isinstance(product, Mapping) else "")
+    if not category_name:
+        category_name = _string_value(evidence_payload.get("category_name") or evidence_payload.get("category_id"))
+    return _render_prompt_template(
+        _read_prompt_template(),
+        {
+            "category_name": category_name,
+            "title": _string_value(product.get("title") if isinstance(product, Mapping) else ""),
+            "description": _string_value(product.get("description") if isinstance(product, Mapping) else ""),
+        },
     )
+
+
+def _prompt(evidence_payload: Mapping[str, Any]) -> str:
+    return render_vision_prompt(evidence_payload)
 
 
 def _atom_from_pair(key: str, value: Any, *, positive: bool) -> dict[str, Any]:
@@ -213,6 +210,73 @@ def _coerce_named_atoms(raw: Any, *, atom_type: str, field: str, source: str = "
     return result
 
 
+def _visual_schema_atoms(raw: Mapping[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    facts: list[dict[str, Any]] = []
+    positives: list[dict[str, Any]] = []
+    negatives: list[dict[str, Any]] = []
+
+    product_type = raw.get("visible_product_type")
+    if isinstance(product_type, Mapping) and product_type.get("value"):
+        facts.append(
+            {
+                "type": "visual",
+                "field": "product_type",
+                "value": product_type.get("value"),
+                "importance": "soft",
+                "source": "vision_audience",
+                "confidence": product_type.get("confidence", 0.8),
+            }
+        )
+    for item in _coerce_named_atoms(raw.get("colors"), atom_type="attribute", field="color", source="vision_audience", confidence=0.75):
+        facts.append(item)
+    for item in _coerce_named_atoms(raw.get("visible_design"), atom_type="visual", field="design", source="vision_audience", confidence=0.75):
+        facts.append(item)
+    for item in _coerce_named_atoms(raw.get("visible_text"), atom_type="visual", field="ocr_text", source="vision_audience", confidence=0.75):
+        facts.append(item)
+    for item in _coerce_named_atoms(raw.get("visual_style"), atom_type="expressive", field="expressive", source="vision_audience", confidence=0.65):
+        positives.append(item)
+    audience = raw.get("visual_audience")
+    if isinstance(audience, list):
+        for item in audience:
+            if not isinstance(item, Mapping):
+                continue
+            group = item.get("group")
+            if not group:
+                continue
+            positives.append(
+                {
+                    "type": "recipient",
+                    "field": "recipient",
+                    "value": group,
+                    "importance": "soft",
+                    "source": "vision_audience",
+                    "confidence": item.get("confidence", 0.6),
+                }
+            )
+    audience_fit = raw.get("audience_fit")
+    if isinstance(audience_fit, list):
+        for item in audience_fit:
+            if not isinstance(item, Mapping):
+                continue
+            audience_name = item.get("audience")
+            if not audience_name:
+                continue
+            fit = str(item.get("fit") or "").strip().lower()
+            atom = {
+                "type": "recipient",
+                "field": "recipient",
+                "value": audience_name,
+                "importance": "soft",
+                "source": str(item.get("evidence_type") or "vision_audience"),
+                "confidence": item.get("confidence", 0.55),
+            }
+            if fit in {"high", "medium"}:
+                positives.append(atom)
+            elif fit in {"low", "not_supported"}:
+                negatives.append(atom)
+    return facts, positives, negatives
+
+
 def parse_vision_sku_atoms_response(
     content: str,
     *,
@@ -226,10 +290,13 @@ def parse_vision_sku_atoms_response(
         if isinstance(wrapped, Mapping):
             raw = dict(wrapped)
             break
+    visual_facts, visual_positives, visual_negatives = _visual_schema_atoms(raw)
     facts = _coerce_atom_list(raw.get("facts"), positive=False)
+    facts.extend(visual_facts)
     facts.extend(_coerce_atom_list(raw.get("visual_facts"), positive=False))
     facts.extend(_coerce_named_atoms(raw.get("ocr_text"), atom_type="visual", field="ocr_text", confidence=0.75))
     positives = _coerce_atom_list(raw.get("positive_atoms"), positive=True)
+    positives.extend(visual_positives)
     positives.extend(_coerce_named_atoms(raw.get("audience_hypotheses"), atom_type="recipient", field="recipient", confidence=0.6))
     positives.extend(_coerce_named_atoms(raw.get("recipient_fit"), atom_type="recipient", field="recipient", confidence=0.65))
     positives.extend(_coerce_named_atoms(raw.get("occasion_hypotheses"), atom_type="occasion", field="occasion", confidence=0.6))
@@ -237,6 +304,7 @@ def parse_vision_sku_atoms_response(
     positives.extend(_coerce_named_atoms(raw.get("style_archetypes"), atom_type="expressive", field="expressive", confidence=0.65))
     positives.extend(_coerce_named_atoms(raw.get("supported_query_intents"), atom_type="use_case", field="query_intent", confidence=0.55))
     negatives = _coerce_atom_list(raw.get("negative_fit_atoms"), positive=False)
+    negatives.extend(visual_negatives)
     negatives.extend(_coerce_named_atoms(raw.get("negative_query_intents"), atom_type="attribute", field="negative", confidence=0.7))
     raw["facts"] = facts
     raw["positive_atoms"] = positives

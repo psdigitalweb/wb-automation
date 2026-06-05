@@ -967,7 +967,7 @@ export default function AdditionalCostsPage() {
   }
 
   return (
-    <div className={[s.root, 'container'].join(' ')}>
+    <div className={[s.root, 'container', 'ec-settings-page'].join(' ')}>
       <h1>Управление расходами</h1>
       <Link href={`/app/project/${projectId}/settings`} className={s.linkAsButton}>
         ← Назад к настройкам

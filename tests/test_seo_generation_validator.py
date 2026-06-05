@@ -3,6 +3,7 @@ from app.services.seo.generation.service import (
     SEO_RELEVANCE_RETRY_SCORE,
     _apply_main_query,
     _build_messages,
+    _human_product_facts,
     _seo_target_items_from_groups,
     build_seo_relevance_report,
     build_seo_relevance_v2_report,
@@ -166,6 +167,25 @@ def test_seo_targets_prioritize_promoted_main_query() -> None:
     assert {item["query"] for item in targets} >= {"кружка милая подруге", "кружка на день рождения"}
 
 
+def test_product_facts_drop_conflicting_visual_motif_characteristic() -> None:
+    facts = _human_product_facts(
+        {
+            "title": 'Кружка керамическая "И что?"',
+            "description": "Керамическая кружка с забавным принтом кота и милым котиком на боку.",
+            "characteristics": [
+                {"name": "Рисунок", "value": ["капибара"]},
+                {"name": "Цвет", "value": ["розовый"]},
+                {"name": "Хрупкость", "value": ["хрупкое"]},
+            ],
+        }
+    )
+
+    assert "Рисунок: капибара" not in facts
+    assert "Рисунок: кот" in facts
+    assert "Цвет: розовый" in facts
+    assert "Хрупкость: хрупкое" not in facts
+
+
 def test_seo_relevance_report_scores_query_coverage() -> None:
     card = _valid_card(
         title="Кружка подруге керамическая",
@@ -318,4 +338,4 @@ def test_retry_message_mentions_low_seo_score() -> None:
     )
 
     assert "SEO score" in messages[-1].content
-    assert "четырех секций" in messages[-1].content
+    assert "секции из системного промпта" in messages[-1].content

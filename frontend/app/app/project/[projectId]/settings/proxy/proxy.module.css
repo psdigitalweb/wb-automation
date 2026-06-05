@@ -1,0 +1,100 @@
+.proxyGrid {
+  max-width: 1040px;
+  display: grid;
+  grid-template-columns: 240px 240px 360px 140px;
+  gap: 18px 16px;
+  align-items: start;
+}
+
+.field {
+  min-width: 0;
+  display: grid;
+  grid-template-rows: auto 38px;
+  gap: 8px;
+  align-items: start;
+}
+
+.field label {
+  min-height: 18px;
+  display: flex;
+  align-items: center;
+}
+
+.field input:not([type='checkbox']),
+.field select {
+  width: 100% !important;
+  height: 38px !important;
+}
+
+.checkboxRow {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.checkboxRow input,
+.field input[type='checkbox'] {
+  width: 16px !important;
+  height: 16px !important;
+  flex: 0 0 16px;
+}
+
+.fullWidth {
+  grid-column: 1 / -1;
+}
+
+.fullWidth > div {
+  align-self: start;
+}
+
+.footerRow {
+  max-width: 1040px;
+  margin-top: 22px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: end;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+@media (max-width: 1280px) {
+  .proxyGrid {
+    grid-template-columns: 220px minmax(220px, 1fr) 140px;
+  }
+
+  .proxyGrid .field:nth-child(3),
+  .proxyGrid .field:nth-child(5) {
+    grid-column: span 2;
+  }
+}
+
+@media (max-width: 980px) {
+  .proxyGrid {
+    grid-template-columns: repeat(2, minmax(220px, 1fr));
+  }
+
+  .proxyGrid .field:nth-child(3),
+  .proxyGrid .field:nth-child(5) {
+    grid-column: auto;
+  }
+
+  .footerRow {
+    grid-template-columns: 1fr;
+  }
+
+  .actions {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 680px) {
+  .proxyGrid {
+    grid-template-columns: 1fr;
+  }
+}

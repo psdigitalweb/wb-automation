@@ -14,6 +14,7 @@ from app.deps import allow_local_debug_read
 from app.models import SeoContentVersion
 from app.schemas.seo_generation import (
     SeoGenerationLatestResponse,
+    SeoGenerationPromptPreviewResponse,
     SeoGenerationRunRequest,
     SeoGenerationRunResponse,
 )
@@ -24,6 +25,7 @@ from app.services.seo.generation.promotion import (
 )
 from app.services.seo.generation.service import (
     SeoGenerationError,
+    build_generation_prompt_preview,
     get_latest_generation,
     recalculate_latest_seo_relevance_v2,
     run_seo_generation,
@@ -66,6 +68,24 @@ async def get_seo_feature_flags_endpoint(
     )
 
 
+@router.get(
+    "/projects/{project_id}/seo/feature-flags",
+    response_model=SeoFeatureFlags,
+)
+async def get_project_seo_feature_flags_endpoint(
+    project_id: int = Path(...),
+    membership: dict = Depends(allow_local_debug_read),
+):
+    del project_id, membership
+    return SeoFeatureFlags(
+        generation_preview_enabled=bool(
+            getattr(app_settings, "SEO_GENERATION_PREVIEW_ENABLED", False)
+        ),
+        generation_max_attempts=int(getattr(app_settings, "SEO_GENERATION_MAX_ATTEMPTS", 1)),
+        generation_publishable=False,
+    )
+
+
 @router.post(
     "/projects/{project_id}/seo/products/{nm_id}/generation/run",
     response_model=SeoGenerationRunResponse,
@@ -95,7 +115,7 @@ async def post_seo_generation_run_endpoint(
             query_set_id=request.query_set_id,
             main_query_text=request.main_query_text,
             brand_voice=request.brand_voice,
-            allow_draft_query_set=bool(request.allow_draft_query_set),
+            strategy=request.strategy,
         )
         session.commit()
         return response
@@ -104,6 +124,36 @@ async def post_seo_generation_run_endpoint(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
         session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        session.close()
+
+
+@router.post(
+    "/projects/{project_id}/seo/products/{nm_id}/generation/prompt-preview",
+    response_model=SeoGenerationPromptPreviewResponse,
+)
+async def post_seo_generation_prompt_preview_endpoint(
+    request: SeoGenerationRunRequest,
+    project_id: int = Path(...),
+    nm_id: int = Path(...),
+    membership: dict = Depends(allow_local_debug_read),
+):
+    del membership
+    session = SessionLocal()
+    try:
+        return build_generation_prompt_preview(
+            session,
+            project_id=int(project_id),
+            category_id=int(request.category_id),
+            nm_id=int(nm_id),
+            query_set_id=request.query_set_id,
+            main_query_text=request.main_query_text,
+            brand_voice=request.brand_voice,
+        )
+    except SeoGenerationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     finally:
         session.close()

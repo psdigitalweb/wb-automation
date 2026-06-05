@@ -1,0 +1,347 @@
+.page {
+  width: 100%;
+  margin: 0 auto;
+  padding: 16px 20px 36px;
+  color: var(--color-text, #111827);
+  font-family: var(--font-sans, Inter, system-ui, sans-serif);
+  font-feature-settings: "cv11", "ss01", "ss03";
+}
+
+.pageHeader {
+  margin-bottom: 16px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.titleBlock {
+  min-width: 0;
+}
+
+.eyebrow {
+  color: var(--color-text-3, #6b7280);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1.3;
+  text-transform: uppercase;
+}
+
+.titleRow {
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.titleRow h1 {
+  margin: 0;
+  color: var(--color-text, #111827);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1.12;
+}
+
+.pageHeader p {
+  margin: 5px 0 0;
+  color: var(--color-text-2, #4b5563);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.marketplaceBadge {
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--color-mp-wb-bg, oklch(96% 0.025 330));
+  color: var(--color-mp-wb, oklch(58% 0.16 330));
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.marketplaceBadge span {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.inlineButton {
+  border: 0;
+  background: transparent;
+  color: var(--color-accent-text, #166534);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.metricGrid {
+  margin-bottom: 12px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.metricCard,
+.filterToolbar,
+.tableCard,
+.emptyCard,
+.errorCard {
+  border: 0.5px solid var(--color-border, rgba(31, 41, 55, 0.15));
+  border-radius: 10px;
+  background: var(--color-surface, #fff);
+  box-shadow: var(--shadow-sm, 0 1px 2px rgba(15, 23, 42, 0.08));
+}
+
+.metricCard {
+  min-height: 76px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.metricCard span {
+  color: var(--color-text-2, #4b5563);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.metricCard strong {
+  color: var(--color-text, #111827);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 24px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+}
+
+.filterToolbar {
+  min-height: 54px;
+  margin-bottom: 12px;
+  padding: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.searchControl {
+  min-width: 280px;
+  height: 30px;
+  padding: 0 10px;
+  border: 0.5px solid var(--color-border, rgba(31, 41, 55, 0.18));
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1 1 320px;
+  background: var(--color-surface, #fff);
+  color: var(--color-text-3, #6b7280);
+  font-size: 13px;
+}
+
+.searchInputWrap {
+  min-width: 0;
+  flex: 1;
+}
+
+.searchInputWrap input {
+  width: 100%;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--color-text, #111827);
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.searchInputWrap input::placeholder {
+  color: var(--color-text-3, #6b7280);
+}
+
+.tableCard {
+  overflow: hidden;
+}
+
+.tableWrap {
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.stockTable {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: separate;
+  border-spacing: 0;
+  background: var(--color-surface, #fff);
+}
+
+.stockTable th,
+.stockTable td {
+  height: 42px;
+  padding: 9px 14px;
+  border-bottom: 0.5px solid var(--color-border, rgba(31, 41, 55, 0.15));
+  color: var(--color-text, #111827);
+  font-size: 13px;
+  line-height: 1.3;
+  vertical-align: top;
+}
+
+.stockTable th {
+  height: 34px;
+  background: var(--color-surface-2, #f8fafc);
+  color: var(--color-text-3, #6b7280);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-align: left;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.stockTable tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.stockTable tbody tr:hover td {
+  background: var(--color-surface-2, #f8fafc);
+}
+
+.nmLink {
+  color: var(--color-accent-text, #166534);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.nmLink::after {
+  content: "↗";
+  margin-left: 4px;
+  color: var(--color-text-3, #6b7280);
+  font-size: 10px;
+}
+
+.nmLink:hover {
+  text-decoration: underline;
+}
+
+.skuCell,
+.numericCell,
+.stockValue,
+.warehouseSingle strong,
+.warehouseRow strong {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-variant-numeric: tabular-nums;
+}
+
+.numericCell {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.stockValue {
+  color: var(--color-text, #111827);
+  font-weight: 700;
+}
+
+.muted {
+  color: var(--color-text-3, #6b7280);
+}
+
+.warehouseDetails {
+  display: grid;
+  gap: 8px;
+}
+
+.warehouseSingle,
+.warehouseRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.warehouseSingle {
+  max-width: 320px;
+}
+
+.warehouseSingle span,
+.warehouseRow span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text-2, #4b5563);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.warehouseList {
+  max-width: 420px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  display: grid;
+  gap: 6px;
+  background: var(--color-surface-2, #f8fafc);
+}
+
+.warehouseRow {
+  font-size: 12px;
+}
+
+.loadingText {
+  margin: 10px 0;
+  color: var(--color-text-2, #4b5563);
+  font-size: 13px;
+}
+
+.emptyCard,
+.errorCard {
+  padding: 14px;
+}
+
+.emptyCard p,
+.errorCard p {
+  margin: 0;
+  color: var(--color-text-2, #4b5563);
+  font-size: 13px;
+}
+
+.errorCard {
+  border-color: oklch(56% 0.2 22 / 0.26);
+  background: var(--color-danger-bg, #fef2f2);
+}
+
+.errorCard p {
+  color: var(--color-danger, #b91c1c);
+}
+
+@media (max-width: 840px) {
+  .page {
+    padding: 14px 12px 28px;
+  }
+
+  .pageHeader {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .metricGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .searchControl {
+    min-width: 100%;
+  }
+}

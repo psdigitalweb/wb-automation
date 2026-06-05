@@ -127,6 +127,59 @@ def test_reviews_full_sync_progress_saved_after_nm_batch():
     assert len(paused_calls) == 1
 
 
+def test_reviews_full_sync_resumes_stale_running_state():
+    """A running range-state with a non-active run_id must not block manual resume."""
+    class StubClient:
+        def __init__(self):
+            self.calls = []
+
+        async def list_feedbacks(self, **kwargs):
+            self.calls.append(kwargs)
+            return {"data": {"feedbacks": []}}
+
+        async def list_feedbacks_archive(self, **kwargs):
+            self.calls.append(kwargs)
+            return {"data": {"feedbacks": []}}
+
+    client = StubClient()
+    state = {
+        "status": "running",
+        "cursor_nm_offset": 1,
+        "last_run_id": 1065,
+        "meta_json": {"source_idx": 0, "skip": 0, "nm_id": 202},
+    }
+
+    def _get_run(run_id):
+        if run_id == 1065:
+            return {"id": 1065, "status": "timeout"}
+        return {"id": run_id, "status": "running"}
+
+    with patch("app.utils.get_project_marketplace_token.get_wb_token_for_project", return_value="token"):
+        with patch("app.ingest_wb_communications.get_wb_nm_ids_for_project", return_value=[101, 202, 303]):
+            with patch("app.ingest_wb_communications.get_backfill_state", return_value=state):
+                with patch("app.services.ingest.runs.get_run", side_effect=_get_run):
+                    with patch("app.ingest_wb_communications.ensure_backfill_state_created"):
+                        with patch("app.ingest_wb_communications.upsert_backfill_state_running"):
+                            with patch("app.ingest_wb_communications.mark_backfill_state_paused"):
+                                with patch("app.ingest_wb_communications.mark_backfill_state_completed"):
+                                    with patch("app.ingest_wb_communications._get_use_sandbox", return_value=False):
+                                        with patch("app.ingest_wb_communications.WBCommunicationsClient", return_value=client):
+                                            result = asyncio.run(ingest_wb_communications(
+                                                project_id=1,
+                                                run_id=2000,
+                                                params={
+                                                    "mode": "reviews_full_sync",
+                                                    "max_nm_ids_per_run": 1,
+                                                    "max_seconds": 999,
+                                                },
+                                            ))
+
+    assert result.get("reason") == "progress_saved"
+    assert result.get("reason") != "already_running_full_sync"
+    assert client.calls
+    assert client.calls[0]["nm_id"] == 202
+
+
 def test_reviews_incremental_all_nm_ids_early_exit_no_project_nm_ids():
     """With mode=reviews_incremental_all_nm_ids and no project nm_ids, ingest skips with reason no_project_nm_ids."""
     with patch("app.utils.get_project_marketplace_token.get_wb_token_for_project", return_value="token"):

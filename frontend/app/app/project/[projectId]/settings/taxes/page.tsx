@@ -50,7 +50,7 @@ export default function TaxesSettingsPage() {
   }
 
   return (
-    <div className="container">
+    <div className="container ec-settings-page">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
         <h1>Налоги</h1>
         <Link href={`/app/project/${projectId}/settings`}>← Настройки проекта</Link>
