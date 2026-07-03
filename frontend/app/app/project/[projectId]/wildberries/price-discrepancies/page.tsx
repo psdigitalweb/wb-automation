@@ -1210,7 +1210,7 @@ function PriceApplyModal({ projectId, item, onClose, onApplied }: PriceApplyModa
           <span className={status === 'sending' ? styles.statusActive : undefined}>Отправляем цену</span>
           <span className={status === 'awaiting_response' ? styles.statusActive : undefined}>Ждем ответ WB</span>
           <span className={status === 'success' ? styles.statusSuccess : status === 'error' ? styles.statusError : undefined}>
-            {status === 'error' ? 'Ошибка' : 'Успех'}
+            Результат
           </span>
         </div>
 
