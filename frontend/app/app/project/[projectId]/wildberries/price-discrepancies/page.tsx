@@ -1479,7 +1479,7 @@ function RrpReportTable({ items, meta, showAll, loading, onToggleShowAll, onPage
                         disabled={!item.nm_id}
                         title="Установить рекомендованную цену на WB"
                       >
-                        <div>{formatCurrency(recommended)}</div>
+                        <div className={styles.recommendPrice}>{formatCurrency(recommended)}</div>
                         {deltaRecommended !== null && deltaRecommended !== 0 && (
                           <span>{deltaRecommended > 0 ? `+${deltaRecommended.toFixed(0)} ₽` : `${deltaRecommended.toFixed(0)} ₽`}</span>
                         )}

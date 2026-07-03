@@ -642,8 +642,21 @@
 }
 
 .recommendButton:hover {
-  color: var(--color-accent, #2563eb);
-  text-decoration: underline;
+  color: inherit;
+  text-decoration: none;
+}
+
+.recommendPrice {
+  display: inline-block;
+  text-decoration-line: underline;
+  text-decoration-style: dashed;
+  text-decoration-color: transparent;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.recommendButton:hover .recommendPrice {
+  text-decoration-color: currentColor;
 }
 
 .recommendButton:disabled {
