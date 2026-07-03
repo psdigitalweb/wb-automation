@@ -96,7 +96,7 @@ interface FrontSnapshotOption {
 }
 
 type PriceApplyMode = 'base' | 'size'
-type PriceApplyStatus = 'idle' | 'loading' | 'ready' | 'submitting' | 'waiting' | 'applied' | 'error'
+type PriceApplyStatus = 'idle' | 'loading' | 'ready' | 'sending' | 'awaiting_response' | 'success' | 'error'
 
 interface PriceApplySizeItem {
   size_id: number
@@ -1142,12 +1142,20 @@ function PriceApplyModal({ projectId, item, onClose, onApplied }: PriceApplyModa
 
   if (!item || !nmId) return null
 
-  const submitDisabled = status === 'loading' || status === 'submitting' || status === 'waiting' || !preview
+  const requestInProgress = status === 'sending' || status === 'awaiting_response'
+  const submitDisabled = status === 'loading' || requestInProgress || !preview
 
   const handleSubmit = async () => {
     if (!preview) return
-    setStatus('submitting')
-    setMessage('Отправляем задачу в WB...')
+    let responseReceived = false
+    setStatus('sending')
+    setMessage('Отправляем цену на WB...')
+    window.setTimeout(() => {
+      if (!responseReceived) {
+        setStatus('awaiting_response')
+        setMessage('Ждем ответ WB...')
+      }
+    }, 300)
     try {
       const body =
         preview.pricing_mode === 'base'
@@ -1168,16 +1176,18 @@ function PriceApplyModal({ projectId, item, onClose, onApplied }: PriceApplyModa
         `/api/v1/projects/${projectId}/wildberries/price-discrepancies/${nmId}/price-apply`,
         body,
       )
+      responseReceived = true
       if (data.upload_id) {
-        setStatus('applied')
+        setStatus('success')
         setMessage('WB принял задачу обновления цены. Цена обычно применяется в ЛК в течение нескольких секунд.')
         onApplied()
       } else {
-        setStatus('applied')
+        setStatus('success')
         setMessage('WB принял задачу обновления цены.')
         onApplied()
       }
     } catch (e: any) {
+      responseReceived = true
       setStatus('error')
       setMessage(getErrorMessage(e, 'Не удалось отправить цену в WB'))
     }
@@ -1197,10 +1207,10 @@ function PriceApplyModal({ projectId, item, onClose, onApplied }: PriceApplyModa
         </div>
 
         <div className={styles.statusRail}>
-          <span className={status === 'submitting' ? styles.statusActive : undefined}>Запрос на WB</span>
-          <span className={status === 'waiting' ? styles.statusActive : undefined}>Ожидание</span>
-          <span className={status === 'applied' ? styles.statusSuccess : status === 'error' ? styles.statusError : undefined}>
-            {status === 'error' ? 'Ошибка' : 'Цена установлена'}
+          <span className={status === 'sending' ? styles.statusActive : undefined}>Отправляем цену</span>
+          <span className={status === 'awaiting_response' ? styles.statusActive : undefined}>Ждем ответ WB</span>
+          <span className={status === 'success' ? styles.statusSuccess : status === 'error' ? styles.statusError : undefined}>
+            {status === 'error' ? 'Ошибка' : 'Успех'}
           </span>
         </div>
 
@@ -1251,7 +1261,7 @@ function PriceApplyModal({ projectId, item, onClose, onApplied }: PriceApplyModa
             Закрыть
           </button>
           <button type="button" className={styles.buttonPrimary} onClick={handleSubmit} disabled={submitDisabled}>
-            {status === 'submitting' || status === 'waiting' ? 'Устанавливаем...' : 'Установить цену'}
+            {requestInProgress ? 'Отправляем...' : 'Установить цену'}
           </button>
         </div>
       </div>
