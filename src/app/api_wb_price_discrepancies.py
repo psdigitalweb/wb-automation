@@ -23,12 +23,15 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
-from fastapi import APIRouter, Depends, Path, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
+from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from app.db import engine
-from app.deps import allow_client_portal_read, get_current_active_user, get_project_membership
+from app.deps import allow_client_portal_read, get_current_active_user, get_project_membership, require_project_admin
 from app.services.wb_storefront_brands import get_project_frontend_brand_id_strings
+from app.utils.get_project_marketplace_token import get_wb_token_for_project
+from app.wb.client import WBClient
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +51,20 @@ SortKey = Literal[
     "nm_id_desc",
     "nm_id_asc",
 ]
+
+PriceApplyMode = Literal["base", "size"]
+
+
+class WbPriceApplySizeInput(BaseModel):
+    size_id: int = Field(..., gt=0)
+    price: int = Field(..., gt=0)
+
+
+class WbPriceApplyRequest(BaseModel):
+    pricing_mode: PriceApplyMode
+    price: Optional[int] = Field(None, gt=0)
+    discount: Optional[int] = Field(None, ge=0, le=99)
+    sizes: List[WbPriceApplySizeInput] = Field(default_factory=list)
 
 
 def _parse_sort(sort: Optional[str]) -> SortKey:
@@ -469,6 +486,120 @@ def _row_to_item(row: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _get_price_discrepancy_item(project_id: int, nm_id: int) -> Optional[Dict[str, Any]]:
+    filters = DiscrepancyFilters(
+        q=str(nm_id),
+        category_ids=[],
+        only_below_rrp=False,
+        has_wb_stock="any",
+        has_enterprise_stock="any",
+        front_snapshot_at=None,
+        sort="nm_id_asc",
+        page=1,
+        page_size=5,
+    )
+    sql, params = _build_discrepancies_sql(project_id, filters)
+    with engine.connect() as conn:
+        rows = conn.execute(text(sql), params).mappings().all()
+    for row in rows:
+        row_dict = dict(row)
+        if int(row_dict.get("nm_id") or 0) == nm_id:
+            return _row_to_item(row_dict)
+    return None
+
+
+def _get_latest_price_raw(project_id: int, nm_id: int) -> Dict[str, Any]:
+    with engine.connect() as conn:
+        raw = conn.execute(
+            text(
+                """
+                SELECT raw
+                FROM price_snapshots
+                WHERE project_id = :project_id
+                  AND nm_id = :nm_id
+                ORDER BY created_at DESC
+                LIMIT 1
+                """
+            ),
+            {"project_id": project_id, "nm_id": nm_id},
+        ).scalar()
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            import json
+
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _coerce_int_price(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        rounded = int(round(float(value)))
+    except (TypeError, ValueError):
+        return None
+    return rounded if rounded > 0 else None
+
+
+def _build_price_apply_preview(project_id: int, nm_id: int) -> Dict[str, Any]:
+    item = _get_price_discrepancy_item(project_id, nm_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Товар не найден в отчете расхождений цен")
+
+    recommended_price = _coerce_int_price(item["computed"].get("recommended_wb_admin_price"))
+    if recommended_price is None:
+        raise HTTPException(status_code=400, detail="Для товара нет рассчитанной рекомендованной цены")
+
+    raw_price = _get_latest_price_raw(project_id, nm_id)
+    editable_size_price = bool(raw_price.get("editableSizePrice"))
+    raw_sizes = raw_price.get("sizes") if isinstance(raw_price.get("sizes"), list) else []
+    mode: PriceApplyMode = "size" if editable_size_price else "base"
+
+    sizes: List[Dict[str, Any]] = []
+    for raw_size in raw_sizes:
+        if not isinstance(raw_size, dict):
+            continue
+        size_id = raw_size.get("sizeID")
+        try:
+            size_id_int = int(size_id)
+        except (TypeError, ValueError):
+            continue
+        sizes.append(
+            {
+                "size_id": size_id_int,
+                "tech_size_name": raw_size.get("techSizeName"),
+                "current_price": _coerce_int_price(raw_size.get("price")),
+                "discounted_price": raw_size.get("discountedPrice"),
+                "target_price": recommended_price,
+            }
+        )
+
+    return {
+        "item": item,
+        "pricing_mode": mode,
+        "editable_size_price": editable_size_price,
+        "recommended_price": recommended_price,
+        "default_discount": _coerce_int_price(item["discounts"].get("wb_discount_percent")) or 0,
+        "sizes": sizes,
+    }
+
+
+def _extract_upload_id(payload: Dict[str, Any]) -> Optional[int]:
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict):
+        return None
+    upload_id = data.get("id") or data.get("uploadID")
+    try:
+        return int(upload_id)
+    except (TypeError, ValueError):
+        return None
+
+
 def _get_latest_front_snapshot_at(project_id: int) -> Optional[datetime]:
     """Return the latest WB frontend (showcase) snapshot_at for project storefront brands."""
     brand_ids = get_project_frontend_brand_id_strings(project_id)
@@ -546,6 +677,139 @@ def _get_updated_at(project_id: int, front_snapshot_at: Optional[datetime] = Non
             latest = latest.replace(tzinfo=timezone.utc)
         return latest.isoformat()
     return datetime.now(timezone.utc).isoformat()
+
+
+@router.get("/{project_id}/wildberries/price-discrepancies/{nm_id}/price-apply-preview")
+async def get_wb_price_apply_preview(
+    project_id: int = Path(..., description="Project ID"),
+    nm_id: int = Path(..., description="WB nmID"),
+    _current_user: dict = Depends(get_current_active_user),
+    _membership: dict = Depends(require_project_admin),
+):
+    """Return editable price-apply defaults for a report row."""
+    return _build_price_apply_preview(project_id, nm_id)
+
+
+@router.post("/{project_id}/wildberries/price-discrepancies/{nm_id}/price-apply")
+async def apply_wb_recommended_price(
+    body: WbPriceApplyRequest,
+    project_id: int = Path(..., description="Project ID"),
+    nm_id: int = Path(..., description="WB nmID"),
+    _current_user: dict = Depends(get_current_active_user),
+    _membership: dict = Depends(require_project_admin),
+):
+    """Create a WB price upload task from the report recommendation modal."""
+    preview = _build_price_apply_preview(project_id, nm_id)
+    expected_mode = preview["pricing_mode"]
+    if body.pricing_mode != expected_mode:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Для товара доступен режим {expected_mode}, а не {body.pricing_mode}",
+        )
+
+    token = get_wb_token_for_project(project_id)
+    if not token:
+        raise HTTPException(status_code=400, detail="Для проекта не настроен токен Wildberries")
+
+    client = WBClient(token)
+    if body.pricing_mode == "base":
+        if body.price is None:
+            raise HTTPException(status_code=400, detail="Укажите цену для установки")
+        discount = body.discount
+        if discount is None:
+            discount = int(preview.get("default_discount") or 0)
+        wb_payload = [{"nmID": nm_id, "price": int(body.price), "discount": int(discount)}]
+        response_payload = await client.upload_price_task(wb_payload)
+    else:
+        known_sizes = {int(size["size_id"]) for size in preview.get("sizes", [])}
+        if not body.sizes:
+            raise HTTPException(status_code=400, detail="Укажите цены для размеров")
+        unknown_sizes = [item.size_id for item in body.sizes if item.size_id not in known_sizes]
+        if unknown_sizes:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Размеры не найдены у товара: {', '.join(str(size_id) for size_id in unknown_sizes)}",
+            )
+        wb_payload = [
+            {"nmID": nm_id, "sizeID": int(item.size_id), "price": int(item.price)}
+            for item in body.sizes
+        ]
+        response_payload = await client.upload_size_price_task(wb_payload)
+
+    upload_id = _extract_upload_id(response_payload)
+    if response_payload.get("error"):
+        raise HTTPException(
+            status_code=502,
+            detail=response_payload.get("errorText") or "Wildberries не принял задачу обновления цены",
+        )
+
+    return {
+        "status": "accepted",
+        "pricing_mode": body.pricing_mode,
+        "upload_id": upload_id,
+        "already_exists": bool((response_payload.get("data") or {}).get("alreadyExists"))
+        if isinstance(response_payload.get("data"), dict)
+        else False,
+        "wb_status_code": client.last_response_status,
+        "wb_response": response_payload,
+    }
+
+
+@router.get("/{project_id}/wildberries/price-discrepancies/price-apply-status")
+async def get_wb_price_apply_status(
+    project_id: int = Path(..., description="Project ID"),
+    upload_id: int = Query(..., gt=0, description="WB price upload ID"),
+    _current_user: dict = Depends(get_current_active_user),
+    _membership: dict = Depends(require_project_admin),
+):
+    """Return a compact status for a WB price upload task."""
+    token = get_wb_token_for_project(project_id)
+    if not token:
+        raise HTTPException(status_code=400, detail="Для проекта не настроен токен Wildberries")
+
+    client = WBClient(token)
+    buffer_state = await client.get_price_upload_state(upload_id, processed=False)
+    if not buffer_state.get("error") and buffer_state.get("data"):
+        buffer_goods = await client.get_price_upload_goods(upload_id, processed=False, limit=1000)
+        return {
+            "status": "waiting",
+            "upload_id": upload_id,
+            "state": buffer_state.get("data"),
+            "goods": (buffer_goods.get("data") or {}).get("bufferGoods")
+            if isinstance(buffer_goods.get("data"), dict)
+            else [],
+            "wb_response": buffer_state,
+        }
+
+    history_state = await client.get_price_upload_state(upload_id, processed=True)
+    if history_state.get("error"):
+        raise HTTPException(
+            status_code=502,
+            detail=history_state.get("errorText") or "Не удалось получить статус задачи Wildberries",
+        )
+
+    history_goods = await client.get_price_upload_goods(upload_id, processed=True, limit=1000)
+    goods = []
+    if isinstance(history_goods.get("data"), dict):
+        goods = history_goods["data"].get("historyGoods") or []
+    errored_goods = [
+        item for item in goods if isinstance(item, dict) and item.get("errorText")
+    ]
+    state = history_state.get("data") if isinstance(history_state.get("data"), dict) else {}
+    overall = int(state.get("overAllGoodsNumber") or len(goods) or 0)
+    success = int(state.get("successGoodsNumber") or 0)
+    compact_status = "error" if errored_goods else "applied"
+    if compact_status == "applied" and overall and success < overall:
+        compact_status = "waiting"
+
+    return {
+        "status": compact_status,
+        "upload_id": upload_id,
+        "state": state,
+        "goods": goods,
+        "errors": errored_goods,
+        "wb_response": history_state,
+    }
 
 
 @router.get("/{project_id}/wildberries/price-discrepancies")

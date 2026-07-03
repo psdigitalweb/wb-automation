@@ -95,6 +95,39 @@ interface FrontSnapshotOption {
   items_count: number
 }
 
+type PriceApplyMode = 'base' | 'size'
+type PriceApplyStatus = 'idle' | 'loading' | 'ready' | 'submitting' | 'waiting' | 'applied' | 'error'
+
+interface PriceApplySizeItem {
+  size_id: number
+  tech_size_name: string | null
+  current_price: number | null
+  discounted_price: number | null
+  target_price: number
+}
+
+interface PriceApplyPreview {
+  item: PriceDiscrepancyItem
+  pricing_mode: PriceApplyMode
+  editable_size_price: boolean
+  recommended_price: number
+  default_discount: number
+  sizes: PriceApplySizeItem[]
+}
+
+interface PriceApplyResponse {
+  status: 'accepted'
+  pricing_mode: PriceApplyMode
+  upload_id: number | null
+  already_exists: boolean
+}
+
+interface PriceApplyStatusResponse {
+  status: 'waiting' | 'applied' | 'error'
+  upload_id: number
+  errors?: Array<{ errorText?: string | null }>
+}
+
 interface FiltersState {
   q: string
   categoryIds: number[]
@@ -1051,13 +1084,230 @@ interface RrpReportTableProps {
   loading: boolean
   onToggleShowAll: () => void
   onPageChange: (page: number) => void
+  onOpenPriceApply: (item: PriceDiscrepancyItem) => void
 }
 
 function getItemKey(item: PriceDiscrepancyItem, index: number): string {
   return `${item.nm_id ?? 'nm'}-${item.article ?? 'article'}-${index}`
 }
 
-function RrpReportTable({ items, meta, showAll, loading, onToggleShowAll, onPageChange }: RrpReportTableProps) {
+interface PriceApplyModalProps {
+  projectId: string
+  item: PriceDiscrepancyItem | null
+  onClose: () => void
+  onApplied: () => void
+}
+
+function getErrorMessage(error: any, fallback: string): string {
+  return error?.detail || error?.message || fallback
+}
+
+function PriceApplyModal({ projectId, item, onClose, onApplied }: PriceApplyModalProps) {
+  const [preview, setPreview] = useState<PriceApplyPreview | null>(null)
+  const [status, setStatus] = useState<PriceApplyStatus>('idle')
+  const [message, setMessage] = useState<string | null>(null)
+  const [basePrice, setBasePrice] = useState('')
+  const [discount, setDiscount] = useState('')
+  const [sizePrices, setSizePrices] = useState<Record<number, string>>({})
+  const [uploadId, setUploadId] = useState<number | null>(null)
+
+  const nmId = item?.nm_id
+
+  useEffect(() => {
+    let cancelled = false
+    setPreview(null)
+    setMessage(null)
+    setUploadId(null)
+    setStatus(nmId ? 'loading' : 'idle')
+    setSizePrices({})
+
+    async function loadPreview() {
+      if (!nmId) return
+      try {
+        const resp = await apiGetData<PriceApplyPreview>(
+          `/api/v1/projects/${projectId}/wildberries/price-discrepancies/${nmId}/price-apply-preview`,
+        )
+        if (cancelled) return
+        setPreview(resp)
+        setBasePrice(String(resp.recommended_price))
+        setDiscount(String(resp.default_discount ?? 0))
+        setSizePrices(
+          Object.fromEntries(resp.sizes.map((size) => [size.size_id, String(size.target_price)])),
+        )
+        setStatus('ready')
+      } catch (e: any) {
+        if (cancelled) return
+        setMessage(getErrorMessage(e, 'Не удалось подготовить установку цены'))
+        setStatus('error')
+      }
+    }
+
+    loadPreview()
+    return () => {
+      cancelled = true
+    }
+  }, [projectId, nmId])
+
+  useEffect(() => {
+    if (!uploadId || status !== 'waiting') return
+    let cancelled = false
+    let attempts = 0
+
+    const timer = window.setInterval(async () => {
+      attempts += 1
+      try {
+        const resp = await apiGetData<PriceApplyStatusResponse>(
+          `/api/v1/projects/${projectId}/wildberries/price-discrepancies/price-apply-status?upload_id=${uploadId}`,
+        )
+        if (cancelled) return
+        if (resp.status === 'applied') {
+          setStatus('applied')
+          setMessage('Цена установлена на WB.')
+          onApplied()
+          window.clearInterval(timer)
+        } else if (resp.status === 'error') {
+          const firstError = resp.errors?.find((err) => err?.errorText)?.errorText
+          setStatus('error')
+          setMessage(firstError || 'WB вернул ошибку при установке цены')
+          window.clearInterval(timer)
+        } else if (attempts >= 12) {
+          setMessage('WB принял задачу, она еще обрабатывается. Отчет можно обновить позже.')
+          window.clearInterval(timer)
+        }
+      } catch (e: any) {
+        if (cancelled) return
+        setStatus('error')
+        setMessage(getErrorMessage(e, 'Не удалось получить статус задачи WB'))
+        window.clearInterval(timer)
+      }
+    }, 2500)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [projectId, uploadId, status, onApplied])
+
+  if (!item || !nmId) return null
+
+  const submitDisabled = status === 'loading' || status === 'submitting' || status === 'waiting' || !preview
+
+  const handleSubmit = async () => {
+    if (!preview) return
+    setStatus('submitting')
+    setMessage('Отправляем задачу в WB...')
+    try {
+      const body =
+        preview.pricing_mode === 'base'
+          ? {
+              pricing_mode: 'base',
+              price: Number(basePrice),
+              discount: Number(discount || 0),
+            }
+          : {
+              pricing_mode: 'size',
+              sizes: preview.sizes.map((size) => ({
+                size_id: size.size_id,
+                price: Number(sizePrices[size.size_id]),
+              })),
+            }
+
+      const { data } = await apiPost<PriceApplyResponse>(
+        `/api/v1/projects/${projectId}/wildberries/price-discrepancies/${nmId}/price-apply`,
+        body,
+      )
+      if (data.upload_id) {
+        setUploadId(data.upload_id)
+        setStatus('waiting')
+        setMessage('WB принял задачу. Ждем применение цены...')
+      } else {
+        setStatus('applied')
+        setMessage('WB принял задачу обновления цены.')
+        onApplied()
+      }
+    } catch (e: any) {
+      setStatus('error')
+      setMessage(getErrorMessage(e, 'Не удалось отправить цену в WB'))
+    }
+  }
+
+  return (
+    <div className={styles.modalOverlay} role="presentation" onMouseDown={onClose}>
+      <div className={styles.modalDialog} role="dialog" aria-modal="true" aria-label="Установка цены WB" onMouseDown={(event) => event.stopPropagation()}>
+        <div className={styles.modalHeader}>
+          <div>
+            <h2>Установка цены WB</h2>
+            <span>{item.article || item.title || `nmID ${nmId}`}</span>
+          </div>
+          <button type="button" className={styles.modalClose} onClick={onClose} aria-label="Закрыть">
+            ×
+          </button>
+        </div>
+
+        <div className={styles.statusRail}>
+          <span className={status === 'submitting' ? styles.statusActive : undefined}>Запрос на WB</span>
+          <span className={status === 'waiting' ? styles.statusActive : undefined}>Ожидание</span>
+          <span className={status === 'applied' ? styles.statusSuccess : status === 'error' ? styles.statusError : undefined}>
+            {status === 'error' ? 'Ошибка' : 'Цена установлена'}
+          </span>
+        </div>
+
+        {status === 'loading' && <p className={styles.modalMessage}>Готовим данные товара...</p>}
+        {message && <p className={`${styles.modalMessage} ${status === 'error' ? styles.modalError : ''}`}>{message}</p>}
+
+        {preview && (
+          <div className={styles.modalBody}>
+            <div className={styles.modeLine}>
+              <strong>{preview.pricing_mode === 'size' ? 'Размерный режим' : 'Базовый режим'}</strong>
+              <span>{preview.pricing_mode === 'size' ? 'Цена задается отдельно по размерам.' : 'Цена задается для товара.'}</span>
+            </div>
+
+            {preview.pricing_mode === 'base' ? (
+              <div className={styles.priceFormGrid}>
+                <label>
+                  <span>Цена</span>
+                  <input type="number" min="1" value={basePrice} onChange={(event) => setBasePrice(event.target.value)} />
+                </label>
+                <label>
+                  <span>Скидка WB, %</span>
+                  <input type="number" min="0" max="99" value={discount} onChange={(event) => setDiscount(event.target.value)} />
+                </label>
+              </div>
+            ) : (
+              <div className={styles.sizePriceTable}>
+                {preview.sizes.map((size) => (
+                  <label key={size.size_id}>
+                    <span>{size.tech_size_name || `Размер ${size.size_id}`}</span>
+                    <small>Сейчас {formatCurrency(size.current_price)}</small>
+                    <input
+                      type="number"
+                      min="1"
+                      value={sizePrices[size.size_id] ?? ''}
+                      onChange={(event) =>
+                        setSizePrices((prev) => ({ ...prev, [size.size_id]: event.target.value }))
+                      }
+                    />
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className={styles.modalActions}>
+          <button type="button" className={styles.buttonSecondary} onClick={onClose}>
+            Закрыть
+          </button>
+          <button type="button" className={styles.buttonPrimary} onClick={handleSubmit} disabled={submitDisabled}>
+            {status === 'submitting' || status === 'waiting' ? 'Устанавливаем...' : 'Установить цену'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function RrpReportTable({ items, meta, showAll, loading, onToggleShowAll, onPageChange, onOpenPriceApply }: RrpReportTableProps) {
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set())
   const totalPages = meta ? Math.max(1, Math.ceil(meta.total_count / meta.page_size)) : 1
 
@@ -1221,12 +1471,18 @@ function RrpReportTable({ items, meta, showAll, loading, onToggleShowAll, onPage
                   </td>
                   <td className={`${styles.num} ${styles.recommend}`}>
                     {recommended !== null ? (
-                      <>
+                      <button
+                        type="button"
+                        className={styles.recommendButton}
+                        onClick={() => onOpenPriceApply(item)}
+                        disabled={!item.nm_id}
+                        title="Установить рекомендованную цену на WB"
+                      >
                         <div>{formatCurrency(recommended)}</div>
                         {deltaRecommended !== null && deltaRecommended !== 0 && (
                           <span>{deltaRecommended > 0 ? `+${deltaRecommended.toFixed(0)} ₽` : `${deltaRecommended.toFixed(0)} ₽`}</span>
                         )}
-                      </>
+                      </button>
                     ) : (
                       '—'
                     )}
@@ -1298,6 +1554,7 @@ export default function WbPriceDiscrepanciesPage() {
   const [rrpBuildMessage, setRrpBuildMessage] = useState<string | null>(null)
   const [reloadToken, setReloadToken] = useState(0)
   const [isReportsHost, setIsReportsHost] = useState(false)
+  const [priceApplyItem, setPriceApplyItem] = useState<PriceDiscrepancyItem | null>(null)
   const loadRequestSeqRef = useRef(0)
 
   useEffect(() => {
@@ -1630,8 +1887,18 @@ export default function WbPriceDiscrepanciesPage() {
           onPageChange={(page) => {
             updateQuery({ page }, false)
           }}
+          onOpenPriceApply={setPriceApplyItem}
         />
       )}
+      <PriceApplyModal
+        projectId={projectId}
+        item={priceApplyItem}
+        onClose={() => setPriceApplyItem(null)}
+        onApplied={() => {
+          window.setTimeout(() => setReloadToken((x) => x + 1), 2500)
+          window.setTimeout(() => setReloadToken((x) => x + 1), 8000)
+        }}
+      />
     </div>
   )
 }

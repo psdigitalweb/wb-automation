@@ -176,6 +176,100 @@ class WBClient:
         
         return []
 
+    async def _prices_api_request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: Optional[Dict[str, Any]] = None,
+        json_body: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Call Wildberries Prices and Discounts API and return raw JSON."""
+        if (self.token or "").upper() == "MOCK":
+            return {
+                "data": {"id": 0, "alreadyExists": False},
+                "error": False,
+                "errorText": "",
+                "mock": True,
+            }
+
+        self.last_response_status = None
+        self.last_error_text = None
+
+        url = f"{self.prices_base_url}{path}"
+        headers = {"Authorization": f"Bearer {self.token}" if self.token else ""}
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await self._request_with_retry(
+                client,
+                method,
+                url,
+                headers=headers,
+                params=params,
+                json=json_body,
+            )
+
+        if not response:
+            self.last_error_text = "WB API did not return a response"
+            return {"data": None, "error": True, "errorText": self.last_error_text}
+
+        self.last_response_status = response.status_code
+        response_text = response.text[:1000] if response.text else ""
+        try:
+            payload = response.json()
+        except Exception:
+            payload = {"data": None, "error": True, "errorText": response_text}
+
+        if not isinstance(payload, dict):
+            payload = {"data": payload, "error": response.status_code >= 400, "errorText": response_text}
+
+        if response.status_code >= 400:
+            self.last_error_text = payload.get("errorText") or response_text
+            payload.setdefault("error", True)
+            payload.setdefault("errorText", self.last_error_text)
+        return payload
+
+    async def upload_price_task(self, items: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Create a WB price/discount upload task."""
+        return await self._prices_api_request(
+            "POST",
+            "/api/v2/upload/task",
+            json_body={"data": items},
+        )
+
+    async def upload_size_price_task(self, items: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Create a WB size-based price upload task."""
+        return await self._prices_api_request(
+            "POST",
+            "/api/v2/upload/task/size",
+            json_body={"data": items},
+        )
+
+    async def get_price_upload_state(self, upload_id: int, processed: bool) -> Dict[str, Any]:
+        """Read WB price upload state from processed history or processing buffer."""
+        path = "/api/v2/history/tasks" if processed else "/api/v2/buffer/tasks"
+        return await self._prices_api_request(
+            "GET",
+            path,
+            params={"uploadID": upload_id},
+        )
+
+    async def get_price_upload_goods(
+        self,
+        upload_id: int,
+        *,
+        processed: bool,
+        limit: int = 1000,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        """Read WB price upload goods details from processed history or processing buffer."""
+        path = "/api/v2/history/goods/task" if processed else "/api/v2/buffer/goods/task"
+        return await self._prices_api_request(
+            "GET",
+            path,
+            params={"uploadID": upload_id, "limit": limit, "offset": offset},
+        )
+
     async def get_prices(self, nm_ids: list[int]) -> dict[int, dict]:
         """Fetch prices for given nm_ids from WB Content API.
         
