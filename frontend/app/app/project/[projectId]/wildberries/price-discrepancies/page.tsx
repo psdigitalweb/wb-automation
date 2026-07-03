@@ -128,6 +128,27 @@ interface PriceApplyResponse {
   already_exists: boolean
 }
 
+interface BulkPriceApplyItem {
+  nm_id: number
+  article: string | null
+  title?: string | null
+  current_price?: number | null
+  recommended_price?: number | null
+  discount?: number | null
+  reason?: string
+  message?: string
+}
+
+interface BulkPriceApplyResponse {
+  status: 'accepted' | 'skipped'
+  upload_id: number | null
+  already_exists: boolean
+  accepted_count: number
+  skipped_count: number
+  ready: BulkPriceApplyItem[]
+  skipped: BulkPriceApplyItem[]
+}
+
 interface FiltersState {
   q: string
   categoryIds: number[]
@@ -1108,6 +1129,7 @@ interface RrpReportTableProps {
   onToggleShowAll: () => void
   onPageChange: (page: number) => void
   onOpenPriceApply: (item: PriceDiscrepancyItem) => void
+  onOpenBulkPriceApply: (items: PriceDiscrepancyItem[]) => void
 }
 
 function getItemKey(item: PriceDiscrepancyItem, index: number): string {
@@ -1117,6 +1139,13 @@ function getItemKey(item: PriceDiscrepancyItem, index: number): string {
 interface PriceApplyModalProps {
   projectId: string
   item: PriceDiscrepancyItem | null
+  onClose: () => void
+  onApplied: () => void
+}
+
+interface BulkPriceApplyModalProps {
+  projectId: string
+  items: PriceDiscrepancyItem[]
   onClose: () => void
   onApplied: () => void
 }
@@ -1331,7 +1360,139 @@ function PriceApplyModal({ projectId, item, onClose, onApplied }: PriceApplyModa
   )
 }
 
-function RrpReportTable({ items, meta, showAll, loading, onToggleShowAll, onPageChange, onOpenPriceApply }: RrpReportTableProps) {
+function getBulkPrecheck(item: PriceDiscrepancyItem): { status: 'ready' | 'skip'; label: string } {
+  if (!item.nm_id) {
+    return { status: 'skip', label: 'нет nmID' }
+  }
+  if (item.staleness?.showcase_price_stale) {
+    return { status: 'skip', label: 'ждем витрину' }
+  }
+  const recommended = item.computed.recommended_wb_admin_price
+  if (recommended === null || recommended === undefined || Number.isNaN(recommended)) {
+    return { status: 'skip', label: 'нет рекомендации' }
+  }
+  return { status: 'ready', label: 'готово' }
+}
+
+function BulkPriceApplyModal({ projectId, items, onClose, onApplied }: BulkPriceApplyModalProps) {
+  const [status, setStatus] = useState<'ready' | 'sending' | 'success' | 'error'>('ready')
+  const [message, setMessage] = useState<string | null>(null)
+  const [result, setResult] = useState<BulkPriceApplyResponse | null>(null)
+
+  if (!items.length) return null
+
+  const nmIds = Array.from(
+    new Set(items.map((item) => item.nm_id).filter((nmId): nmId is number => Boolean(nmId))),
+  )
+  const prechecked = items.map((item) => ({ item, precheck: getBulkPrecheck(item) }))
+  const precheckReadyCount = prechecked.filter(({ precheck }) => precheck.status === 'ready').length
+  const requestInProgress = status === 'sending'
+  const submitDisabled = requestInProgress || status === 'success' || !nmIds.length || precheckReadyCount === 0
+
+  const handleSubmit = async () => {
+    setStatus('sending')
+    setMessage('Отправляем выбранные цены на WB одним запросом...')
+    setResult(null)
+    try {
+      const { data } = await apiPost<BulkPriceApplyResponse>(
+        `/api/v1/projects/${projectId}/wildberries/price-discrepancies/price-apply/bulk`,
+        { nm_ids: nmIds },
+      )
+      setResult(data)
+      if (data.accepted_count > 0) {
+        setStatus('success')
+        setMessage('WB принял задачу массового обновления. Отчет будет ждать обновления витрины.')
+        onApplied()
+      } else {
+        setStatus('error')
+        setMessage('Нет товаров, готовых к массовой отправке.')
+      }
+    } catch (e: any) {
+      setStatus('error')
+      setMessage(getErrorMessage(e, 'Не удалось отправить цены в WB'))
+    }
+  }
+
+  return (
+    <div className={styles.modalOverlay} role="presentation" onMouseDown={onClose}>
+      <div
+        className={`${styles.modalDialog} ${styles.bulkModalDialog}`}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Массовая установка цен WB"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className={styles.modalHeader}>
+          <div>
+            <h2>Массовая установка цен WB</h2>
+            <span>Выбрано товаров: {items.length}</span>
+          </div>
+          <button type="button" className={styles.modalClose} onClick={onClose} aria-label="Закрыть">
+            ×
+          </button>
+        </div>
+
+        {status === 'success' && (
+          <div className={styles.modalSuccessResult}>
+            <strong>Цены успешно отправлены на WB</strong>
+            <span>{message}</span>
+          </div>
+        )}
+        {message && status !== 'success' && (
+          <p className={`${styles.modalMessage} ${status === 'error' ? styles.modalError : ''}`}>{message}</p>
+        )}
+
+        <div className={styles.bulkSummary}>
+          <span>К отправке: {result ? result.accepted_count : precheckReadyCount}</span>
+          <span>Пропущено: {result ? result.skipped_count : items.length - precheckReadyCount}</span>
+          <span>Запросов к WB: {result?.accepted_count || precheckReadyCount ? 1 : 0}</span>
+        </div>
+
+        <div className={styles.bulkList}>
+          {prechecked.map(({ item, precheck }) => {
+            const resultSkipped = result?.skipped.find((skipped) => skipped.nm_id === item.nm_id)
+            const resultReady = result?.ready.find((ready) => ready.nm_id === item.nm_id)
+            const label = resultSkipped?.message || (resultReady ? 'отправлено' : precheck.label)
+            const rowReady = Boolean(resultReady) || (!result && precheck.status === 'ready')
+            return (
+              <div key={`${item.nm_id}-${item.article}`} className={styles.bulkListRow}>
+                <div>
+                  <strong>{item.article || `nmID ${item.nm_id}`}</strong>
+                  <span>{item.title || item.nm_id}</span>
+                </div>
+                <div className={styles.bulkListPrices}>
+                  <span>{formatCurrency(item.prices.wb_admin_price)}</span>
+                  <strong>{formatCurrency(item.computed.recommended_wb_admin_price)}</strong>
+                </div>
+                <span className={rowReady ? styles.bulkStatusReady : styles.bulkStatusSkipped}>{label}</span>
+              </div>
+            )
+          })}
+        </div>
+
+        <div className={styles.modalActions}>
+          <button type="button" className={styles.buttonSecondary} onClick={onClose}>
+            Закрыть
+          </button>
+          <button type="button" className={styles.buttonPrimary} onClick={handleSubmit} disabled={submitDisabled}>
+            {status === 'success' ? 'Цены отправлены' : requestInProgress ? 'Отправляем...' : 'Отправить цены на WB'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function RrpReportTable({
+  items,
+  meta,
+  showAll,
+  loading,
+  onToggleShowAll,
+  onPageChange,
+  onOpenPriceApply,
+  onOpenBulkPriceApply,
+}: RrpReportTableProps) {
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set())
   const totalPages = meta ? Math.max(1, Math.ceil(meta.total_count / meta.page_size)) : 1
 
@@ -1348,6 +1509,8 @@ function RrpReportTable({ items, meta, showAll, loading, onToggleShowAll, onPage
   }
 
   const allRowsSelected = items.length > 0 && items.every((item, index) => selectedRows.has(getItemKey(item, index)))
+  const selectedItems = items.filter((item, index) => selectedRows.has(getItemKey(item, index)))
+  const selectedNmItems = selectedItems.filter((item) => item.nm_id)
 
   const toggleAll = () => {
     if (allRowsSelected) {
@@ -1374,9 +1537,19 @@ function RrpReportTable({ items, meta, showAll, loading, onToggleShowAll, onPage
       {selectedRows.size > 0 && (
         <div className={styles.bulkBar}>
           <span>{selectedRows.size} товаров выбрано</span>
-          <button type="button" onClick={() => setSelectedRows(new Set())}>
-            Снять
-          </button>
+          <div className={styles.bulkActions}>
+            <button
+              type="button"
+              className={styles.buttonPrimary}
+              onClick={() => onOpenBulkPriceApply(selectedNmItems)}
+              disabled={!selectedNmItems.length}
+            >
+              Установить рекомендованные цены
+            </button>
+            <button type="button" onClick={() => setSelectedRows(new Set())}>
+              Снять
+            </button>
+          </div>
         </div>
       )}
       <div className={styles.tableWrap}>
@@ -1584,6 +1757,7 @@ export default function WbPriceDiscrepanciesPage() {
   const [reloadToken, setReloadToken] = useState(0)
   const [isReportsHost, setIsReportsHost] = useState(false)
   const [priceApplyItem, setPriceApplyItem] = useState<PriceDiscrepancyItem | null>(null)
+  const [bulkPriceApplyItems, setBulkPriceApplyItems] = useState<PriceDiscrepancyItem[]>([])
   const loadRequestSeqRef = useRef(0)
 
   useEffect(() => {
@@ -1924,12 +2098,21 @@ export default function WbPriceDiscrepanciesPage() {
             updateQuery({ page }, false)
           }}
           onOpenPriceApply={setPriceApplyItem}
+          onOpenBulkPriceApply={setBulkPriceApplyItems}
         />
       )}
       <PriceApplyModal
         projectId={projectId}
         item={priceApplyItem}
         onClose={() => setPriceApplyItem(null)}
+        onApplied={() => {
+          setReloadToken((x) => x + 1)
+        }}
+      />
+      <BulkPriceApplyModal
+        projectId={projectId}
+        items={bulkPriceApplyItems}
+        onClose={() => setBulkPriceApplyItems([])}
         onApplied={() => {
           setReloadToken((x) => x + 1)
         }}

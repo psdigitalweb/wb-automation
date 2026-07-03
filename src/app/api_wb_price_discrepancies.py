@@ -68,6 +68,10 @@ class WbPriceApplyRequest(BaseModel):
     sizes: List[WbPriceApplySizeInput] = Field(default_factory=list)
 
 
+class WbBulkPriceApplyRequest(BaseModel):
+    nm_ids: List[int] = Field(..., min_length=1, max_length=1000)
+
+
 def _parse_sort(sort: Optional[str]) -> SortKey:
     """Parse sort string into an internal sort key with sane default."""
     default: SortKey = "diff_percent_desc"
@@ -772,6 +776,148 @@ def _get_updated_at(project_id: int, front_snapshot_at: Optional[datetime] = Non
             latest = latest.replace(tzinfo=timezone.utc)
         return latest.isoformat()
     return datetime.now(timezone.utc).isoformat()
+
+
+@router.post("/{project_id}/wildberries/price-discrepancies/price-apply/bulk")
+async def apply_wb_recommended_prices_bulk(
+    body: WbBulkPriceApplyRequest,
+    project_id: int = Path(..., description="Project ID"),
+    _current_user: dict = Depends(get_current_active_user),
+    _membership: dict = Depends(require_project_admin),
+):
+    """Create one WB price upload task for selected report rows."""
+    seen: set[int] = set()
+    nm_ids: List[int] = []
+    for raw_nm_id in body.nm_ids:
+        try:
+            nm_id = int(raw_nm_id)
+        except (TypeError, ValueError):
+            continue
+        if nm_id <= 0 or nm_id in seen:
+            continue
+        seen.add(nm_id)
+        nm_ids.append(nm_id)
+
+    if not nm_ids:
+        raise HTTPException(status_code=400, detail="Не выбраны товары для установки цен")
+
+    ready: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+
+    for nm_id in nm_ids:
+        item = _get_price_discrepancy_item(project_id, nm_id)
+        if not item:
+            skipped.append({"nm_id": nm_id, "reason": "not_found", "message": "Товар не найден в отчете"})
+            continue
+
+        recommended_price = _coerce_int_price(item["computed"].get("recommended_wb_admin_price"))
+        if recommended_price is None:
+            skipped.append(
+                {
+                    "nm_id": nm_id,
+                    "article": item.get("article"),
+                    "reason": "no_recommended_price",
+                    "message": "Нет рекомендованной цены",
+                }
+            )
+            continue
+
+        if (item.get("staleness") or {}).get("showcase_price_stale"):
+            skipped.append(
+                {
+                    "nm_id": nm_id,
+                    "article": item.get("article"),
+                    "reason": "awaiting_showcase_refresh",
+                    "message": "Ждем обновления витрины",
+                }
+            )
+            continue
+
+        raw_price = _get_latest_price_raw(project_id, nm_id)
+        if bool(raw_price.get("editableSizePrice")):
+            skipped.append(
+                {
+                    "nm_id": nm_id,
+                    "article": item.get("article"),
+                    "reason": "size_price",
+                    "message": "Размерная цена, нужен отдельный режим",
+                }
+            )
+            continue
+
+        discount = _coerce_int_price(item["discounts"].get("wb_discount_percent")) or 0
+        ready.append(
+            {
+                "nm_id": nm_id,
+                "article": item.get("article"),
+                "title": item.get("title"),
+                "current_price": item["prices"].get("wb_admin_price"),
+                "recommended_price": recommended_price,
+                "discount": discount,
+            }
+        )
+
+    if not ready:
+        return {
+            "status": "skipped",
+            "upload_id": None,
+            "already_exists": False,
+            "accepted_count": 0,
+            "skipped_count": len(skipped),
+            "ready": [],
+            "skipped": skipped,
+            "wb_response": None,
+        }
+
+    token = get_wb_token_for_project(project_id)
+    if not token:
+        raise HTTPException(status_code=400, detail="Для проекта не настроен токен Wildberries")
+
+    wb_payload = [
+        {"nmID": item["nm_id"], "price": item["recommended_price"], "discount": item["discount"]}
+        for item in ready
+    ]
+    client = WBClient(token)
+    response_payload = await client.upload_price_task(wb_payload)
+    upload_id = _extract_upload_id(response_payload)
+
+    if response_payload.get("error"):
+        status_code = int(response_payload.get("statusCode") or 502)
+        retry_after = (response_payload.get("rateLimit") or {}).get("retry_after")
+        if status_code == 429:
+            retry_text = f" Повторите через {retry_after} сек." if retry_after else ""
+            raise HTTPException(
+                status_code=429,
+                detail=f"Wildberries ограничил частоту запросов к API цен.{retry_text}",
+            )
+        raise HTTPException(
+            status_code=502,
+            detail=response_payload.get("errorText") or "Wildberries не принял задачу массового обновления цен",
+        )
+
+    for item in ready:
+        _insert_manual_price_snapshot(
+            project_id=project_id,
+            nm_id=int(item["nm_id"]),
+            wb_price=int(item["recommended_price"]),
+            wb_discount=int(item["discount"]),
+            response_payload=response_payload,
+            pricing_mode="base",
+        )
+
+    return {
+        "status": "accepted",
+        "upload_id": upload_id,
+        "already_exists": bool((response_payload.get("data") or {}).get("alreadyExists"))
+        if isinstance(response_payload.get("data"), dict)
+        else False,
+        "accepted_count": len(ready),
+        "skipped_count": len(skipped),
+        "ready": ready,
+        "skipped": skipped,
+        "wb_status_code": client.last_response_status,
+        "wb_response": response_payload,
+    }
 
 
 @router.get("/{project_id}/wildberries/price-discrepancies/{nm_id}/price-apply-preview")
