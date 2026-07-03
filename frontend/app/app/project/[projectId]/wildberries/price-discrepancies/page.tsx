@@ -165,7 +165,7 @@ function parseFiltersFromSearchParams(searchParams: URLSearchParams): FiltersSta
   const onlyBelowRrp = onlyBelowRrpParam === null ? true : onlyBelowRrpParam === 'true'
   const showAll = searchParams.get('show_all') === 'true'
   const frontSnapshotAt = searchParams.get('front_snapshot_at') || ''
-  const sort = searchParams.get('sort') || 'diff_rub_desc'
+  const sort = searchParams.get('sort') || 'diff_percent_desc'
   const page = Number(searchParams.get('page') || '1')
   const pageSize = Number(searchParams.get('page_size') || '25')
 
@@ -1082,6 +1082,8 @@ function RrpFilterToolbar({
         <label className={styles.sortControl}>
           <span>Сортировка:</span>
           <select value={filters.sort} onChange={(event) => onChange({ sort: event.target.value, page: 1 }, true)}>
+            <option value="diff_percent_desc">↕ Δ % ↓</option>
+            <option value="diff_percent_asc">↕ Δ % ↑</option>
             <option value="diff_rub_desc">↕ Δ ₽ ↓</option>
             <option value="diff_rub_asc">↕ Δ ₽ ↑</option>
             <option value="rrp_price_desc">РРЦ ↓</option>

@@ -70,7 +70,7 @@ class WbPriceApplyRequest(BaseModel):
 
 def _parse_sort(sort: Optional[str]) -> SortKey:
     """Parse sort string into an internal sort key with sane default."""
-    default: SortKey = "diff_rub_desc"
+    default: SortKey = "diff_percent_desc"
     if not sort:
         return default
     sort_normalized = sort.strip().lower()
@@ -112,7 +112,7 @@ def _sort_to_order_clause(sort: SortKey) -> str:
     if sort == "nm_id_asc":
         return "nm_id ASC"
     # Fallback – should not be hit if mapping is exhaustive
-    return "diff_rub DESC NULLS LAST, nm_id"
+    return "diff_percent DESC NULLS LAST, nm_id"
 
 
 @dataclass
@@ -957,8 +957,8 @@ async def get_wb_price_discrepancies(
         "any", description="Filter by enterprise (1C/XML) stock quantity"
     ),
     sort: Optional[str] = Query(
-        "diff_rub_desc",
-        description="Sort key, e.g. diff_rub_desc, diff_percent_desc, nm_id_asc",
+        "diff_percent_desc",
+        description="Sort key, e.g. diff_percent_desc, diff_rub_desc, nm_id_asc",
     ),
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=200),
@@ -1619,8 +1619,8 @@ async def export_wb_price_discrepancies_csv(
         "any", description="Filter by enterprise (1C/XML) stock quantity"
     ),
     sort: Optional[str] = Query(
-        "diff_rub_desc",
-        description="Sort key, e.g. diff_rub_desc, diff_percent_desc, nm_id_asc",
+        "diff_percent_desc",
+        description="Sort key, e.g. diff_percent_desc, diff_rub_desc, nm_id_asc",
     ),
     _auth: dict = Depends(allow_client_portal_read),
 ):
