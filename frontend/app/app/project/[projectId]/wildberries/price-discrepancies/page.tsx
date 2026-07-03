@@ -1882,8 +1882,7 @@ export default function WbPriceDiscrepanciesPage() {
         item={priceApplyItem}
         onClose={() => setPriceApplyItem(null)}
         onApplied={() => {
-          window.setTimeout(() => setReloadToken((x) => x + 1), 2500)
-          window.setTimeout(() => setReloadToken((x) => x + 1), 8000)
+          setReloadToken((x) => x + 1)
         }}
       />
     </div>
