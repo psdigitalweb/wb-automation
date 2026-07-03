@@ -1096,6 +1096,21 @@ function getErrorMessage(error: any, fallback: string): string {
   return error?.detail || error?.message || fallback
 }
 
+function buildImmediatePricePreview(item: PriceDiscrepancyItem): PriceApplyPreview | null {
+  const recommended = item.computed.recommended_wb_admin_price
+  if (recommended === null || recommended === undefined || Number.isNaN(recommended)) {
+    return null
+  }
+  return {
+    item,
+    pricing_mode: 'base',
+    editable_size_price: false,
+    recommended_price: Math.round(recommended),
+    default_discount: Math.round(item.discounts.wb_discount_percent ?? 0),
+    sizes: [],
+  }
+}
+
 function PriceApplyModal({ projectId, item, onClose, onApplied }: PriceApplyModalProps) {
   const [preview, setPreview] = useState<PriceApplyPreview | null>(null)
   const [status, setStatus] = useState<PriceApplyStatus>('idle')
@@ -1108,10 +1123,18 @@ function PriceApplyModal({ projectId, item, onClose, onApplied }: PriceApplyModa
 
   useEffect(() => {
     let cancelled = false
-    setPreview(null)
     setMessage(null)
-    setStatus(nmId ? 'loading' : 'idle')
     setSizePrices({})
+    const immediatePreview = item ? buildImmediatePricePreview(item) : null
+    if (immediatePreview) {
+      setPreview(immediatePreview)
+      setBasePrice(String(immediatePreview.recommended_price))
+      setDiscount(String(immediatePreview.default_discount ?? 0))
+      setStatus('ready')
+    } else {
+      setPreview(null)
+      setStatus(nmId ? 'loading' : 'idle')
+    }
 
     async function loadPreview() {
       if (!nmId) return
@@ -1129,8 +1152,10 @@ function PriceApplyModal({ projectId, item, onClose, onApplied }: PriceApplyModa
         setStatus('ready')
       } catch (e: any) {
         if (cancelled) return
-        setMessage(getErrorMessage(e, 'Не удалось подготовить установку цены'))
-        setStatus('error')
+        if (!immediatePreview) {
+          setMessage(getErrorMessage(e, 'Не удалось подготовить установку цены'))
+          setStatus('error')
+        }
       }
     }
 
@@ -1138,7 +1163,7 @@ function PriceApplyModal({ projectId, item, onClose, onApplied }: PriceApplyModa
     return () => {
       cancelled = true
     }
-  }, [projectId, nmId])
+  }, [projectId, nmId, item])
 
   if (!item || !nmId) return null
 
