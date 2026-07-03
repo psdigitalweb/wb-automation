@@ -1197,7 +1197,7 @@ function PriceApplyModal({ projectId, item, onClose, onApplied }: PriceApplyModa
   if (!item || !nmId) return null
 
   const requestInProgress = status === 'sending' || status === 'awaiting_response'
-  const submitDisabled = status === 'loading' || requestInProgress || !preview
+  const submitDisabled = status === 'loading' || requestInProgress || status === 'success' || !preview
 
   const handleSubmit = async () => {
     if (!preview) return
@@ -1233,11 +1233,11 @@ function PriceApplyModal({ projectId, item, onClose, onApplied }: PriceApplyModa
       responseReceived = true
       if (data.upload_id) {
         setStatus('success')
-        setMessage('WB принял задачу обновления цены. Цена обычно применяется в ЛК в течение нескольких секунд.')
+        setMessage('WB принял задачу обновления цены. Отчет будет ждать обновления витрины.')
         onApplied()
       } else {
         setStatus('success')
-        setMessage('WB принял задачу обновления цены.')
+        setMessage('WB принял задачу обновления цены. Отчет будет ждать обновления витрины.')
         onApplied()
       }
     } catch (e: any) {
@@ -1269,7 +1269,15 @@ function PriceApplyModal({ projectId, item, onClose, onApplied }: PriceApplyModa
         </div>
 
         {status === 'loading' && <p className={styles.modalMessage}>Готовим данные товара...</p>}
-        {message && <p className={`${styles.modalMessage} ${status === 'error' ? styles.modalError : ''}`}>{message}</p>}
+        {status === 'success' && (
+          <div className={styles.modalSuccessResult}>
+            <strong>Цена успешно отправлена на WB</strong>
+            <span>{message}</span>
+          </div>
+        )}
+        {message && status !== 'success' && (
+          <p className={`${styles.modalMessage} ${status === 'error' ? styles.modalError : ''}`}>{message}</p>
+        )}
 
         {preview && (
           <div className={styles.modalBody}>
@@ -1315,7 +1323,7 @@ function PriceApplyModal({ projectId, item, onClose, onApplied }: PriceApplyModa
             Закрыть
           </button>
           <button type="button" className={styles.buttonPrimary} onClick={handleSubmit} disabled={submitDisabled}>
-            {requestInProgress ? 'Отправляем...' : 'Установить цену'}
+            {status === 'success' ? 'Цена отправлена' : requestInProgress ? 'Отправляем...' : 'Установить цену'}
           </button>
         </div>
       </div>
