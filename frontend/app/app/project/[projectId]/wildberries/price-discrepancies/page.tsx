@@ -205,6 +205,22 @@ function formatDate(value: string | null | undefined): string {
   }
 }
 
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
+async function loadPriceDiscrepancyResponse(url: string): Promise<PriceDiscrepancyResponse> {
+  try {
+    return await apiGetData<PriceDiscrepancyResponse>(url)
+  } catch (error: any) {
+    if (error?.status === 0) {
+      await delay(1200)
+      return await apiGetData<PriceDiscrepancyResponse>(url)
+    }
+    throw error
+  }
+}
+
 interface PhotoPopoverProps {
   photos: string[]
   size?: number
@@ -1626,7 +1642,7 @@ export default function WbPriceDiscrepanciesPage() {
             qs.set('page', String(page))
             qs.set('page_size', String(pageSize))
             const url = `/api/v1/projects/${projectId}/wildberries/price-discrepancies?${qs.toString()}`
-            const pageResp = await apiGetData<PriceDiscrepancyResponse>(url)
+            const pageResp = await loadPriceDiscrepancyResponse(url)
             if (cancelled) return
 
             if (page === 1) {
@@ -1656,7 +1672,7 @@ export default function WbPriceDiscrepanciesPage() {
           qs.set('page', String(filters.page))
           qs.set('page_size', String(filters.pageSize))
           const url = `/api/v1/projects/${projectId}/wildberries/price-discrepancies?${qs.toString()}`
-          resp = await apiGetData<PriceDiscrepancyResponse>(url)
+          resp = await loadPriceDiscrepancyResponse(url)
         }
 
         if (cancelled || requestSeq !== loadRequestSeqRef.current) return
@@ -1667,14 +1683,20 @@ export default function WbPriceDiscrepanciesPage() {
       } catch (e: any) {
         if (cancelled || requestSeq !== loadRequestSeqRef.current) return
         console.error('Failed to load price discrepancies', e)
-        setError(e?.detail || e?.message || 'Не удалось загрузить данные')
-        setData([])
-        setMeta({
-          total_count: 0,
-          page: filters.page,
-          page_size: filters.pageSize,
-          updated_at: new Date().toISOString(),
-        })
+        setError(
+          e?.status === 0
+            ? 'Соединение с сервером было прервано. Попробуйте обновить отчет.'
+            : e?.detail || e?.message || 'Не удалось загрузить данные',
+        )
+        if (e?.status !== 0) {
+          setData([])
+          setMeta({
+            total_count: 0,
+            page: filters.page,
+            page_size: filters.pageSize,
+            updated_at: new Date().toISOString(),
+          })
+        }
       } finally {
         if (!cancelled && requestSeq === loadRequestSeqRef.current) {
           setLoading(false)
