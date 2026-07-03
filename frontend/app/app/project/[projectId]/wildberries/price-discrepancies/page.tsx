@@ -1218,8 +1218,9 @@ function PriceApplyModal({ projectId, item, onClose, onApplied }: PriceApplyModa
       )
       if (data.upload_id) {
         setUploadId(data.upload_id)
-        setStatus('waiting')
-        setMessage('WB принял задачу. Ждем применение цены...')
+        setStatus('applied')
+        setMessage('WB принял задачу обновления цены. Цена обычно применяется в ЛК в течение нескольких секунд.')
+        onApplied()
       } else {
         setStatus('applied')
         setMessage('WB принял задачу обновления цены.')
