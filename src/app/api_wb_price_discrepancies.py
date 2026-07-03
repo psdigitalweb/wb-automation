@@ -19,6 +19,7 @@ in SQL so that filtering and sorting are correct at the database layer.
 from __future__ import annotations
 
 import logging
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional, Tuple
@@ -600,6 +601,76 @@ def _extract_upload_id(payload: Dict[str, Any]) -> Optional[int]:
         return None
 
 
+def _price_snapshots_has_raw_column() -> bool:
+    with engine.connect() as conn:
+        return (
+            conn.execute(
+                text(
+                    """
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_name = 'price_snapshots'
+                      AND column_name = 'raw'
+                    LIMIT 1
+                    """
+                )
+            ).scalar()
+            is not None
+        )
+
+
+def _insert_manual_price_snapshot(
+    *,
+    project_id: int,
+    nm_id: int,
+    wb_price: int,
+    wb_discount: int,
+    response_payload: Dict[str, Any],
+    pricing_mode: PriceApplyMode,
+) -> None:
+    customer_price = round(float(wb_price) * (1 - float(wb_discount) / 100), 2)
+    created_at = datetime.now(timezone.utc)
+    raw_payload = {
+        "source": "price_discrepancy_manual_apply",
+        "pricing_mode": pricing_mode,
+        "nmID": nm_id,
+        "price": wb_price,
+        "discount": wb_discount,
+        "wb_response": response_payload,
+    }
+    params = {
+        "project_id": project_id,
+        "nm_id": nm_id,
+        "wb_price": wb_price,
+        "wb_discount": wb_discount,
+        "spp": 0,
+        "customer_price": customer_price,
+        "rrc": wb_price,
+        "created_at": created_at,
+        "raw": json.dumps(raw_payload, ensure_ascii=False),
+    }
+    if _price_snapshots_has_raw_column():
+        sql = text(
+            """
+            INSERT INTO price_snapshots
+                (nm_id, wb_price, wb_discount, spp, customer_price, rrc, raw, project_id, created_at)
+            VALUES
+                (:nm_id, :wb_price, :wb_discount, :spp, :customer_price, :rrc, CAST(:raw AS jsonb), :project_id, :created_at)
+            """
+        )
+    else:
+        sql = text(
+            """
+            INSERT INTO price_snapshots
+                (nm_id, wb_price, wb_discount, spp, customer_price, rrc, project_id, created_at)
+            VALUES
+                (:nm_id, :wb_price, :wb_discount, :spp, :customer_price, :rrc, :project_id, :created_at)
+            """
+        )
+    with engine.begin() as conn:
+        conn.execute(sql, params)
+
+
 def _get_latest_front_snapshot_at(project_id: int) -> Optional[datetime]:
     """Return the latest WB frontend (showcase) snapshot_at for project storefront brands."""
     brand_ids = get_project_frontend_brand_id_strings(project_id)
@@ -712,13 +783,17 @@ async def apply_wb_recommended_price(
         raise HTTPException(status_code=400, detail="Для проекта не настроен токен Wildberries")
 
     client = WBClient(token)
+    applied_price: int
+    applied_discount: int
     if body.pricing_mode == "base":
         if body.price is None:
             raise HTTPException(status_code=400, detail="Укажите цену для установки")
         discount = body.discount
         if discount is None:
             discount = int(preview.get("default_discount") or 0)
-        wb_payload = [{"nmID": nm_id, "price": int(body.price), "discount": int(discount)}]
+        applied_price = int(body.price)
+        applied_discount = int(discount)
+        wb_payload = [{"nmID": nm_id, "price": applied_price, "discount": applied_discount}]
         response_payload = await client.upload_price_task(wb_payload)
     else:
         known_sizes = {int(size["size_id"]) for size in preview.get("sizes", [])}
@@ -734,6 +809,8 @@ async def apply_wb_recommended_price(
             {"nmID": nm_id, "sizeID": int(item.size_id), "price": int(item.price)}
             for item in body.sizes
         ]
+        applied_price = min(int(item.price) for item in body.sizes)
+        applied_discount = int(preview.get("default_discount") or 0)
         response_payload = await client.upload_size_price_task(wb_payload)
 
     upload_id = _extract_upload_id(response_payload)
@@ -750,6 +827,15 @@ async def apply_wb_recommended_price(
             status_code=502,
             detail=response_payload.get("errorText") or "Wildberries не принял задачу обновления цены",
         )
+
+    _insert_manual_price_snapshot(
+        project_id=project_id,
+        nm_id=nm_id,
+        wb_price=applied_price,
+        wb_discount=applied_discount,
+        response_payload=response_payload,
+        pricing_mode=body.pricing_mode,
+    )
 
     return {
         "status": "accepted",
