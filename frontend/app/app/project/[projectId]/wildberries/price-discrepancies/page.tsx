@@ -210,15 +210,20 @@ function delay(ms: number): Promise<void> {
 }
 
 async function loadPriceDiscrepancyResponse(url: string): Promise<PriceDiscrepancyResponse> {
-  try {
-    return await apiGetData<PriceDiscrepancyResponse>(url)
-  } catch (error: any) {
-    if (error?.status === 0) {
-      await delay(1200)
+  const retryDelaysMs = [800, 1600, 2600]
+
+  for (let attempt = 0; attempt <= retryDelaysMs.length; attempt += 1) {
+    try {
       return await apiGetData<PriceDiscrepancyResponse>(url)
+    } catch (error: any) {
+      if (error?.status !== 0 || attempt === retryDelaysMs.length) {
+        throw error
+      }
+      await delay(retryDelaysMs[attempt])
     }
-    throw error
   }
+
+  throw new Error('Не удалось загрузить данные')
 }
 
 interface PhotoPopoverProps {
@@ -1548,6 +1553,7 @@ export default function WbPriceDiscrepanciesPage() {
   const [meta, setMeta] = useState<PriceDiscrepancyResponse['meta'] | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [loadWarning, setLoadWarning] = useState<string | null>(null)
   const [categories, setCategories] = useState<CategoryOption[]>([])
   const [frontSnapshots, setFrontSnapshots] = useState<FrontSnapshotOption[]>([])
   const [frontSnapshotsLoading, setFrontSnapshotsLoading] = useState(false)
@@ -1613,6 +1619,7 @@ export default function WbPriceDiscrepanciesPage() {
     async function loadData() {
       setLoading(true)
       setError(null)
+      setLoadWarning(null)
       try {
         const buildBaseQuery = () => {
           const qs = new URLSearchParams()
@@ -1680,15 +1687,14 @@ export default function WbPriceDiscrepanciesPage() {
         setMeta(resp.meta)
         setDiagnosticInfo(resp.diagnostic || null)
         setError(null)
+        setLoadWarning(null)
       } catch (e: any) {
         if (cancelled || requestSeq !== loadRequestSeqRef.current) return
         console.error('Failed to load price discrepancies', e)
-        setError(
-          e?.status === 0
-            ? 'Соединение с сервером было прервано. Попробуйте обновить отчет.'
-            : e?.detail || e?.message || 'Не удалось загрузить данные',
-        )
-        if (e?.status !== 0) {
+        if (e?.status === 0) {
+          setLoadWarning('Не удалось обновить отчет из-за краткого обрыва соединения. Текущие данные оставлены на экране.')
+        } else {
+          setError(e?.detail || e?.message || 'Не удалось загрузить данные')
           setData([])
           setMeta({
             total_count: 0,
@@ -1879,6 +1885,7 @@ export default function WbPriceDiscrepanciesPage() {
       />
 
       {loading && <p className={styles.loadingText}>Загрузка данных…</p>}
+      {loadWarning && <div className={styles.infoBar}>{loadWarning}</div>}
       {error && (
         <div className={styles.errorCard}>
           <p>
