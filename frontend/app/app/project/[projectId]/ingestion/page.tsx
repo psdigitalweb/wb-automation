@@ -67,7 +67,7 @@ export default function ProjectIngestionPage() {
 
   const [activeTab, setActiveTab] = useState<TabKey>('schedules')
   const [frontendPricesProxyEnabled, setFrontendPricesProxyEnabled] = useState(false)
-  const [frontendPricesBrandCount, setFrontendPricesBrandCount] = useState<number>(1)
+  const [frontendPricesBrandCount, setFrontendPricesBrandCount] = useState<number>(0)
 
   const [schedules, setSchedules] = useState<Schedule[]>([])
   const [loadingSchedules, setLoadingSchedules] = useState(false)
@@ -141,9 +141,9 @@ export default function ProjectIngestionPage() {
         const n = Array.isArray(brands)
           ? brands.filter((b: any) => b.enabled !== false).length
           : s?.brand_id != null ? 1 : 0
-        setFrontendPricesBrandCount(n > 0 ? n : 1)
+        setFrontendPricesBrandCount(n)
       })
-      .catch(() => setFrontendPricesBrandCount(1))
+      .catch(() => setFrontendPricesBrandCount(0))
   }, [projectId])
 
   useEffect(() => {
@@ -1361,7 +1361,7 @@ export default function ProjectIngestionPage() {
                                 fontWeight: 600,
                               }}
                             >
-                              Брендов: {frontendPricesBrandCount}
+                              {frontendPricesBrandCount > 0 ? `Брендов: ${frontendPricesBrandCount}` : 'Бренды не настроены'}
                             </span>
                           )}
                           {s.job_code === 'frontend_prices' && frontendPricesProxyEnabled && (
@@ -1651,7 +1651,7 @@ export default function ProjectIngestionPage() {
                                 fontWeight: 600,
                               }}
                             >
-                              Брендов: {frontendPricesBrandCount}
+                              {frontendPricesBrandCount > 0 ? `Брендов: ${frontendPricesBrandCount}` : 'Бренды не настроены'}
                             </span>
                           )}
                           {r.job_code === 'frontend_prices' && frontendPricesProxyEnabled && (

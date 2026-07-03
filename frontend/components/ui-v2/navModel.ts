@@ -30,8 +30,6 @@ export type RailItemConfig = {
   match: (pathname: string) => boolean
   hasSubNav?: boolean
   requiresProject?: boolean
-  indicator?: 'green' | 'purple'
-  badge?: boolean
   marketplaceCode?: 'wildberries' | 'ozon'
 }
 
@@ -71,7 +69,6 @@ export const railItems: Array<RailItemConfig | { divider: true }> = [
       !/^\/app\/project\/\d+\/wildberries\/hypothesis-lab(?:\/|$)/.test(pathname),
     requiresProject: true,
     hasSubNav: true,
-    indicator: 'green',
     marketplaceCode: 'wildberries',
   },
   {
@@ -93,7 +90,6 @@ export const railItems: Array<RailItemConfig | { divider: true }> = [
       /^\/app\/project\/\d+\/(seo|wildberries\/hypothesis-lab|tests|supplies|design)(?:\/|$)/.test(pathname),
     requiresProject: true,
     hasSubNav: true,
-    indicator: 'purple',
   },
   { divider: true },
   {
@@ -111,7 +107,6 @@ export const railItems: Array<RailItemConfig | { divider: true }> = [
     href: (projectId) => (projectId ? `/app/project/${projectId}/wildberries/funnel-signals` : '/app/projects'),
     match: () => false,
     requiresProject: true,
-    badge: true,
   },
   {
     id: 'expenses',

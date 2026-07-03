@@ -33,6 +33,7 @@ from app.schemas.marketplaces import (
     WBConnectResponse,
     WBMarketplaceStatus,
     WBMarketplaceStatusV2,
+    WBTokenValidationResponse,
     WBCredentialsStatus,
     WBSettingsStatus,
     WBMarketplaceUpdate,
@@ -55,6 +56,7 @@ from app.schemas.marketplaces import (
     WBUnitPnlDetailsResponse,
 )
 from app.utils.wb_token_validator import validate_wb_token
+from app.utils.get_project_marketplace_token import get_wb_token_for_project
 from app.deps import (
     get_current_active_user,
     get_project_membership,
@@ -64,11 +66,21 @@ from app.deps import (
 )
 from app.settings import ALLOW_UNAUTH_LOCAL
 from app.db_marketplace_tariffs import get_latest_snapshot
+from app.services.wb_storefront_brands import (
+    extract_frontend_brand_ids,
+    extract_legacy_brand_id,
+    normalize_settings_json,
+)
 
 router = APIRouter(prefix="/api/v1", tags=["marketplaces"])
 
 # Note: Schema creation and seeding should happen at startup, not at import time
 # This prevents DB queries during module import when tables may not exist yet
+
+
+def _wb_storefront_status_from_settings(settings: object) -> tuple[int | None, list[int]]:
+    legacy_brand_id = extract_legacy_brand_id(settings)
+    return legacy_brand_id, extract_frontend_brand_ids(settings)
 
 
 @router.get("/system/marketplaces", response_model=List[SystemMarketplacePublicStatus])
@@ -248,37 +260,30 @@ async def get_wb_marketplace_status_endpoint(
     is_enabled = False
     has_token = False
     brand_id = None
+    storefront_brand_ids: list[int] = []
     updated_at = datetime.now()
     
     if pm:
         is_enabled = pm.get("is_enabled", False)
         has_token = bool(pm.get("api_token_encrypted"))
         
-        # Read brand_id from settings_json
         settings = pm.get("settings_json")
-        if settings:
-            if isinstance(settings, str):
-                import json
-                settings = json.loads(settings)
-            
-            brand_id_raw = settings.get("brand_id")
-            if brand_id_raw is not None:
-                try:
-                    brand_id = int(brand_id_raw)
-                except (ValueError, TypeError):
-                    brand_id = None
+        brand_id, storefront_brand_ids = _wb_storefront_status_from_settings(settings)
         
         pm_updated_at = pm.get("updated_at")
         if isinstance(pm_updated_at, datetime):
             updated_at = pm_updated_at
     
-    connected = is_enabled and has_token and brand_id is not None and brand_id > 0
+    connected = bool(is_enabled and has_token)
     
     return WBMarketplaceStatus(
         is_enabled=is_enabled,
         has_token=has_token,
         brand_id=brand_id,
         connected=connected,
+        storefront_configured=bool(storefront_brand_ids),
+        storefront_brand_ids=storefront_brand_ids,
+        legacy_brand_id=brand_id,
         updated_at=updated_at,
     )
 
@@ -307,41 +312,25 @@ async def get_wb_marketplace_status_v2_endpoint(
     has_token = bool(pm.get("api_token_encrypted")) if pm else False
 
     brand_id = None
-    has_brands = False
+    storefront_brand_ids: list[int] = []
     updated_at = datetime.now()
     if pm:
         settings = pm.get("settings_json")
-        if settings:
-            if isinstance(settings, str):
-                import json
-                settings = json.loads(settings)
-            if isinstance(settings, dict):
-                brand_id_raw = settings.get("brand_id")
-                if brand_id_raw is not None:
-                    try:
-                        brand_id = int(brand_id_raw)
-                        has_brands = True
-                    except (ValueError, TypeError):
-                        pass
-                fp = settings.get("frontend_prices")
-                if isinstance(fp, dict) and isinstance(fp.get("brands"), list):
-                    for b in fp["brands"]:
-                        if isinstance(b, dict) and b.get("enabled", True):
-                            has_brands = True
-                            break
-        if not has_brands and brand_id is not None:
-            has_brands = True
+        brand_id, storefront_brand_ids = _wb_storefront_status_from_settings(settings)
         pm_updated_at = pm.get("updated_at")
         if isinstance(pm_updated_at, datetime):
             updated_at = pm_updated_at
 
-    is_configured = bool(has_token and has_brands)
+    is_configured = bool(is_enabled and has_token)
 
     return WBMarketplaceStatusV2(
         is_enabled=is_enabled,
         is_configured=is_configured,
         credentials=WBCredentialsStatus(api_token=has_token),
         settings=WBSettingsStatus(brand_id=brand_id),
+        storefront_configured=bool(storefront_brand_ids),
+        storefront_brand_ids=storefront_brand_ids,
+        legacy_brand_id=brand_id,
         updated_at=updated_at,
     )
 
@@ -360,7 +349,7 @@ async def update_wb_marketplace_endpoint(
     - If is_enabled=false: disables only, does NOT erase token/brand_id.
     - If api_token not provided: do not change api_token_encrypted.
     - brand_id saved to settings_json.brand_id.
-    - connected=true only if is_enabled=true AND token exists AND brand_id exists (>0).
+    - is_configured=true only if is_enabled=true AND token exists.
     """
     # Get WB marketplace by code
     wb_marketplace = get_marketplace_by_code("wildberries")
@@ -394,10 +383,7 @@ async def update_wb_marketplace_endpoint(
     # Prepare settings_json (merge with existing if any)
     settings_update = None
     if pm and pm.get("settings_json"):
-        existing_settings = pm.get("settings_json")
-        if isinstance(existing_settings, str):
-            import json
-            existing_settings = json.loads(existing_settings)
+        existing_settings = normalize_settings_json(pm.get("settings_json"))
         if isinstance(existing_settings, dict):
             settings_update = {**existing_settings}
     
@@ -434,41 +420,53 @@ async def update_wb_marketplace_endpoint(
     has_token = bool(updated_pm.get("api_token_encrypted"))
 
     settings = updated_pm.get("settings_json")
-    brand_id = None
-    has_brands = False
-    if settings:
-        if isinstance(settings, str):
-            import json
-            settings = json.loads(settings)
-        if isinstance(settings, dict):
-            brand_id_raw = settings.get("brand_id")
-            if brand_id_raw is not None:
-                try:
-                    brand_id = int(brand_id_raw)
-                    has_brands = True
-                except (ValueError, TypeError):
-                    pass
-            fp = settings.get("frontend_prices")
-            if isinstance(fp, dict) and isinstance(fp.get("brands"), list):
-                for b in fp["brands"]:
-                    if isinstance(b, dict) and b.get("enabled", True):
-                        has_brands = True
-                        break
-    if not has_brands and brand_id is not None:
-        has_brands = True
+    brand_id, storefront_brand_ids = _wb_storefront_status_from_settings(settings)
 
     updated_at = updated_pm.get("updated_at")
     if not isinstance(updated_at, datetime):
         updated_at = datetime.now()
 
-    is_configured = bool(has_token and has_brands)
+    is_configured = bool(is_enabled and has_token)
 
     return WBMarketplaceStatusV2(
         is_enabled=is_enabled,
         is_configured=is_configured,
         credentials=WBCredentialsStatus(api_token=has_token),
         settings=WBSettingsStatus(brand_id=brand_id),
+        storefront_configured=bool(storefront_brand_ids),
+        storefront_brand_ids=storefront_brand_ids,
+        legacy_brand_id=brand_id,
         updated_at=updated_at,
+    )
+
+
+@router.post(
+    "/projects/{project_id}/marketplaces/wildberries/token/validate",
+    response_model=WBTokenValidationResponse,
+)
+async def validate_wb_marketplace_token_endpoint(
+    project_id: int = Path(..., description="Project ID"),
+    current_user: dict = Depends(get_current_active_user),
+    membership: dict = Depends(require_project_admin),
+):
+    """Validate the stored Wildberries token against WB API without exposing it."""
+
+    token = get_wb_token_for_project(project_id)
+    checked_at = datetime.now()
+    if not token:
+        return WBTokenValidationResponse(
+            valid=False,
+            has_token=False,
+            message="WB token is not saved or Wildberries is disabled for this project",
+            checked_at=checked_at,
+        )
+
+    is_valid, error_message = await validate_wb_token(token)
+    return WBTokenValidationResponse(
+        valid=is_valid,
+        has_token=True,
+        message=error_message,
+        checked_at=checked_at,
     )
 
 

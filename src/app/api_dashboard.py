@@ -5,6 +5,7 @@ from sqlalchemy import text
 
 from app.db import engine
 from app.deps import get_current_active_user, get_project_membership
+from app.services.wb_storefront_brands import get_project_frontend_brand_id_strings
 
 router = APIRouter(prefix="/api/v1/dashboard", tags=["dashboard"])
 
@@ -151,31 +152,21 @@ async def get_dashboard_metrics(
             print(f"WARNING: api_dashboard: failed to get max date for price_snapshots: {type(e).__name__}: {e}")
             # Keep default value None
         
-        # Get frontend prices counts - wrapped in try/except
-        # Note: frontend_catalog_price_snapshots doesn't have project_id; derive by project brand_id (project_marketplaces.settings_json.brand_id)
+        # Get frontend prices counts - wrapped in try/except.
+        # frontend_catalog_price_snapshots has no project_id, so scope by configured storefront brand ids.
         try:
             check_sql = text("SELECT 1 FROM frontend_catalog_price_snapshots LIMIT 1")
             _safe_execute(check_sql).scalar_one_or_none()
 
-            # Get brand_id from project_marketplaces for wildberries
-            brand_sql = text("""
-                SELECT pm.settings_json->>'brand_id' AS brand_id
-                FROM project_marketplaces pm
-                JOIN marketplaces m ON m.id = pm.marketplace_id
-                WHERE pm.project_id = :project_id
-                  AND m.code = 'wildberries'
-                LIMIT 1
-            """)
-            brand_row = _safe_execute(brand_sql, {"project_id": project_id}).mappings().first()
-            brand_id = brand_row.get("brand_id") if brand_row else None
+            brand_ids = get_project_frontend_brand_id_strings(project_id)
 
-            if brand_id:
+            if brand_ids:
                 sql = text("""
                     SELECT COUNT(*) AS cnt, COUNT(DISTINCT nm_id) AS uniq
                     FROM frontend_catalog_price_snapshots
-                    WHERE query_type = 'brand' AND query_value = :brand_id
+                    WHERE query_type = 'brand' AND query_value = ANY(:brand_ids)
                 """)
-                row = _safe_execute(sql, {"brand_id": str(brand_id)}).mappings().first()
+                row = _safe_execute(sql, {"brand_ids": brand_ids}).mappings().first()
                 if row:
                     counts["frontend_prices"] = row.get("cnt", 0)
                     counts["frontend_prices_rows"] = row.get("cnt", 0)
@@ -192,24 +183,15 @@ async def get_dashboard_metrics(
             check_sql = text("SELECT 1 FROM frontend_catalog_price_snapshots LIMIT 1")
             _safe_execute(check_sql).scalar_one_or_none()
 
-            brand_sql = text("""
-                SELECT pm.settings_json->>'brand_id' AS brand_id
-                FROM project_marketplaces pm
-                JOIN marketplaces m ON m.id = pm.marketplace_id
-                WHERE pm.project_id = :project_id
-                  AND m.code = 'wildberries'
-                LIMIT 1
-            """)
-            brand_row = _safe_execute(brand_sql, {"project_id": project_id}).mappings().first()
-            brand_id = brand_row.get("brand_id") if brand_row else None
+            brand_ids = get_project_frontend_brand_id_strings(project_id)
 
-            if brand_id:
+            if brand_ids:
                 sql = text("""
                     SELECT MAX(snapshot_at) AS max_date
                     FROM frontend_catalog_price_snapshots
-                    WHERE query_type = 'brand' AND query_value = :brand_id
+                    WHERE query_type = 'brand' AND query_value = ANY(:brand_ids)
                 """)
-                result = _safe_execute(sql, {"brand_id": str(brand_id)}).mappings().all()
+                result = _safe_execute(sql, {"brand_ids": brand_ids}).mappings().all()
             else:
                 result = []
                 
@@ -263,17 +245,11 @@ async def get_dashboard_kpis(
     - Storefront: frontend_catalog_price_snapshots for project brand_id, latest snapshot_at run
     - RRP XML: rrp_snapshots, latest snapshot_at run
     """
+    brand_ids = get_project_frontend_brand_id_strings(project_id)
+
     sql = text(
         """
         WITH
-        brand AS (
-            SELECT pm.settings_json->>'brand_id' AS brand_id
-            FROM project_marketplaces pm
-            JOIN marketplaces m ON m.id = pm.marketplace_id
-            WHERE pm.project_id = :project_id
-              AND m.code = 'wildberries'
-            LIMIT 1
-        ),
         wb_products AS (
             SELECT COUNT(*)::bigint AS total
             FROM products
@@ -351,17 +327,15 @@ async def get_dashboard_kpis(
         storefront_run AS (
             SELECT MAX(f.snapshot_at) AS run_at
             FROM frontend_catalog_price_snapshots f
-            JOIN brand b ON b.brand_id IS NOT NULL
             WHERE f.query_type = 'brand'
-              AND f.query_value = b.brand_id
+              AND f.query_value = ANY(:brand_ids)
         ),
         storefront_latest AS (
             SELECT COUNT(DISTINCT f.nm_id)::bigint AS cnt
             FROM frontend_catalog_price_snapshots f
-            JOIN brand b ON b.brand_id IS NOT NULL
             JOIN storefront_run r ON f.snapshot_at = r.run_at
             WHERE f.query_type = 'brand'
-              AND f.query_value = b.brand_id
+              AND f.query_value = ANY(:brand_ids)
         ),
         expected_storefront AS (
             SELECT COUNT(DISTINCT nm_id)::bigint AS cnt
@@ -431,7 +405,7 @@ async def get_dashboard_kpis(
 
     try:
         with engine.connect() as conn:
-            row = conn.execute(sql, {"project_id": project_id}).mappings().first() or {}
+            row = conn.execute(sql, {"project_id": project_id, "brand_ids": brand_ids}).mappings().first() or {}
     except Exception as e:
         # Log error for debugging
         import traceback
@@ -460,6 +434,8 @@ async def get_dashboard_kpis(
         "storefront": {
             "storefront_products": int(row.get("storefront_products") or 0),
             "expected_storefront_products": int(row.get("expected_storefront_products") or 0),
+            "storefront_configured": bool(brand_ids),
+            "storefront_brand_ids": [int(brand_id) for brand_id in brand_ids],
         },
         "rrp_xml": {
             "total": int(row.get("rrp_total") or 0),

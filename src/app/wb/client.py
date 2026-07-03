@@ -17,6 +17,8 @@ class WBClient:
         self.timeout = 30
         self.max_retries = 3
         self.retry_delay = 1.0
+        self.last_response_status: int | None = None
+        self.last_error_text: str | None = None
 
     async def _request_with_retry(
         self, 
@@ -88,6 +90,9 @@ class WBClient:
             print("fetch_prices: MOCK mode, returning empty list")
             return []
         
+        self.last_response_status = None
+        self.last_error_text = None
+
         url = f"{self.prices_base_url}/api/v2/list/goods/filter"
         params = {"limit": limit, "offset": offset}
         if filter_nm_id:
@@ -111,6 +116,7 @@ class WBClient:
                     return []
                 
                 print(f"fetch_prices: HTTP status={r.status_code}")
+                self.last_response_status = r.status_code
                 response_text = r.text[:500] if r.text else "(empty)"
                 print(f"fetch_prices: response preview (first 500 chars): {response_text}")
                 
@@ -150,15 +156,19 @@ class WBClient:
                         return []
                 elif r.status_code == 401:
                     print("fetch_prices: HTTP 401 Unauthorized - check token validity and permissions (need 'Prices and Discounts' category)")
+                    self.last_error_text = response_text
                     return []
                 elif r.status_code == 403:
                     print("fetch_prices: HTTP 403 Forbidden - token may lack required scopes/permissions (need 'Prices and Discounts' category)")
+                    self.last_error_text = response_text
                     return []
                 elif r.status_code == 429:
                     print("fetch_prices: HTTP 429 Too Many Requests - rate limit exceeded, need backoff")
+                    self.last_error_text = response_text
                     return []
                 else:
                     print(f"fetch_prices: HTTP {r.status_code} error")
+                    self.last_error_text = response_text
                     return []
             except Exception as e:
                 print(f"fetch_prices: exception during request: {type(e).__name__}: {e}")

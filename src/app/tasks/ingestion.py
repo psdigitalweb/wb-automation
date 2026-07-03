@@ -65,7 +65,10 @@ def _get_frontend_prices_proxy_config(project_id: int) -> tuple[str | None, str 
 def ingest_prices_task(project_id: int) -> Dict[str, Any]:
     from app.ingest_prices import ingest_prices as _ingest_prices
 
-    asyncio.run(_ingest_prices(project_id))
+    result = asyncio.run(_ingest_prices(project_id))
+    if isinstance(result, dict):
+        status_value = "completed" if result.get("ok", True) else "failed"
+        return {**result, "status": status_value}
     return {"status": "completed", "project_id": project_id, "domain": "prices"}
 
 
@@ -115,6 +118,7 @@ def ingest_frontend_prices_task(project_id: int, run_id: int | None = None) -> D
     from app.db import engine
     from app.ingest_frontend_prices import ingest_frontend_brand_prices
     from app.services.ingest.runs import get_run
+    from app.services.wb_storefront_brands import extract_frontend_brand_ids
 
     brand_id: int | None = None
     base_url_template: str | None = None
@@ -128,7 +132,7 @@ def ingest_frontend_prices_task(project_id: int, run_id: int | None = None) -> D
             text(
                 """
                 SELECT
-                  pm.settings_json->>'brand_id' AS brand_id,
+                  pm.settings_json AS settings_json,
                   pm.settings_json->'frontend_prices'->>'base_url_template' AS base_url_template,
                   pm.settings_json->'frontend_prices'->>'max_pages' AS fp_max_pages,
                   pm.settings_json->'frontend_prices'->>'sleep_base_ms' AS fp_sleep_base_ms,
@@ -144,7 +148,7 @@ def ingest_frontend_prices_task(project_id: int, run_id: int | None = None) -> D
             {"project_id": project_id},
         ).mappings().first()
 
-        brand_id_str = (wb_settings_row or {}).get("brand_id")
+        brand_ids = extract_frontend_brand_ids((wb_settings_row or {}).get("settings_json"))
         base_url_template = (wb_settings_row or {}).get("base_url_template")
         fp_sleep_base_ms_str = (wb_settings_row or {}).get("fp_sleep_base_ms")
         fp_sleep_ms_str = (wb_settings_row or {}).get("fp_sleep_ms")
@@ -171,22 +175,15 @@ def ingest_frontend_prices_task(project_id: int, run_id: int | None = None) -> D
             )
         ).scalar_one_or_none()
 
-    if brand_id_str:
-        try:
-            brand_id = int(brand_id_str)
-        except (ValueError, TypeError):
-            return {
-                "status": "error",
-                "domain": "frontend_prices",
-                "reason": "invalid_brand_id",
-                "brand_id": brand_id_str,
-            }
+    if brand_ids:
+        brand_id = brand_ids[0]
     else:
         return {
             "status": "error",
             "domain": "frontend_prices",
-            "reason": "brand_id_not_configured_for_project",
+            "reason": "no_storefront_brands_configured",
             "project_id": project_id,
+            "error": "Добавьте бренд витрины WB в настройках Wildberries для загрузки frontend_prices.",
         }
 
     if sleep_ms_str:
@@ -487,4 +484,3 @@ def ingest_rrp_xml_task(project_id: int, run_id: int | None = None) -> Dict[str,
         "written_count": written_count,
         "skipped_count": skipped_count,
     }
-

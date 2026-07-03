@@ -25,7 +25,7 @@ def round_to_49_99(value: Decimal) -> Decimal:
     return Decimal(best)
 
 
-async def ingest_prices(project_id: int, run_id: int | None = None) -> None:
+async def ingest_prices(project_id: int, run_id: int | None = None) -> Dict[str, Any]:
     """Fetch and insert price snapshots from WB Prices and Discounts API for a specific project.
     
     Uses GET /api/v2/list/goods/filter with pagination via offset.
@@ -47,10 +47,24 @@ async def ingest_prices(project_id: int, run_id: int | None = None) -> None:
     except ValueError as e:
         # Enabled but not connected - log error and skip (error already checked at endpoint level)
         print(f"ingest_prices: {str(e)}, skipping")
-        return
+        return {
+            "ok": False,
+            "scope": "project",
+            "project_id": project_id,
+            "domain": "prices",
+            "reason": "wb_not_connected",
+            "error": str(e),
+        }
     if not token or token.upper() == "MOCK":
         print("ingest_prices: skipped (MOCK mode or no token)")
-        return
+        return {
+            "ok": False,
+            "scope": "project",
+            "project_id": project_id,
+            "domain": "prices",
+            "reason": "no_token",
+            "error": "WB token is missing or MOCK",
+        }
 
     # Check if raw column exists in price_snapshots table
     check_raw_sql = text("""
@@ -102,6 +116,21 @@ async def ingest_prices(project_id: int, run_id: int | None = None) -> None:
         list_goods = await client.fetch_prices(limit=limit, offset=offset)
         
         if not list_goods:
+            if page_count == 1 and client.last_response_status in (401, 403):
+                reason = "wb_token_unauthorized" if client.last_response_status == 401 else "wb_token_forbidden"
+                print(
+                    "ingest_prices: failed to fetch first page, "
+                    f"status={client.last_response_status}, reason={reason}"
+                )
+                return {
+                    "ok": False,
+                    "scope": "project",
+                    "project_id": project_id,
+                    "domain": "prices",
+                    "reason": reason,
+                    "http_status": client.last_response_status,
+                    "error": "WB prices API rejected the token",
+                }
             print(f"ingest_prices: no goods returned at offset {offset}, pagination complete")
             break
         
@@ -189,6 +218,14 @@ async def ingest_prices(project_id: int, run_id: int | None = None) -> None:
             break
     
     print(f"ingest_prices: finished, total pages={page_count}, total inserted={total_inserted}")
+    return {
+        "ok": True,
+        "scope": "project",
+        "project_id": project_id,
+        "domain": "prices",
+        "pages": page_count,
+        "inserted": total_inserted,
+    }
 
 
 @router.get("/prices")

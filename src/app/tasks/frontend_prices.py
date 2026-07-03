@@ -11,6 +11,7 @@ from sqlalchemy import text
 from app import settings
 from app.celery_app import celery_app
 from app.db import engine
+from app.services.wb_storefront_brands import extract_frontend_brand_ids
 from app.wb.catalog_client import CatalogClient
 
 
@@ -135,32 +136,30 @@ def sync_frontend_prices_brand() -> Dict[str, Any]:
             sleep_ms = 800
             print(f"sync_frontend_prices_brand: invalid sleep_ms, using default 800")
 
-        # For periodic job: iterate all enabled WB project brand_ids
-        brand_ids_sql = text(
+        # For periodic job: iterate all enabled WB project storefront brand ids.
+        brand_settings_sql = text(
             """
-            SELECT DISTINCT pm.settings_json->>'brand_id' AS brand_id
+            SELECT pm.settings_json
             FROM project_marketplaces pm
             JOIN marketplaces m ON m.id = pm.marketplace_id
             WHERE m.code = 'wildberries'
               AND pm.is_enabled = true
-              AND pm.settings_json ? 'brand_id'
-              AND (pm.settings_json->>'brand_id') IS NOT NULL
-              AND (pm.settings_json->>'brand_id') != ''
             """
         )
         with engine.connect() as conn:
-            brand_id_rows = conn.execute(brand_ids_sql).all()
+            settings_rows = conn.execute(brand_settings_sql).mappings().all()
 
         brand_ids: list[int] = []
-        for (bid,) in brand_id_rows:
-            try:
-                brand_ids.append(int(bid))
-            except Exception:
-                continue
+        seen_brand_ids: set[int] = set()
+        for row in settings_rows:
+            for bid in extract_frontend_brand_ids(row.get("settings_json")):
+                if bid not in seen_brand_ids:
+                    seen_brand_ids.add(bid)
+                    brand_ids.append(bid)
 
         if not brand_ids:
-            print("sync_frontend_prices_brand: no enabled WB projects with settings_json.brand_id; skipping")
-            return {"status": "skipped", "reason": "no_brand_ids"}
+            print("sync_frontend_prices_brand: no enabled WB projects with storefront brands; skipping")
+            return {"status": "skipped", "reason": "no_storefront_brands_configured"}
 
         from app.ingest_frontend_prices import resolve_base_url
 
@@ -463,4 +462,3 @@ async def ingest_frontend_brand_prices_task(
         "uniq_nm_id": uniq_nm_id,
         "expected_total": expected_total,
     }
-

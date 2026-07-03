@@ -416,9 +416,9 @@ export default function MarketplaceSettingsPage() {
               </div>
             </div>
 
-            <h4 style={{ marginTop: 24, marginBottom: 8, fontSize: '1rem' }}>Бренды</h4>
+            <h4 style={{ marginTop: 24, marginBottom: 8, fontSize: '1rem' }}>Бренды витрины WB</h4>
             <p style={{ color: '#6b7280', fontSize: 13, marginBottom: 12 }}>
-              Задача «Загрузка цен с витрины» (domain=frontend_prices) обрабатывает все включённые бренды за один запуск. Добавьте brand_id и включите/выключите при необходимости.
+              Необязательная настройка для витринных цен, СПП и связанных отчётов. API-данные WB по токену доступны и без этих брендов.
             </p>
             <div style={formGridStyle}>
               <div style={formFieldStyle}>

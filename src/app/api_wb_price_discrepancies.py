@@ -28,6 +28,7 @@ from sqlalchemy import text
 
 from app.db import engine
 from app.deps import allow_client_portal_read, get_current_active_user, get_project_membership
+from app.services.wb_storefront_brands import get_project_frontend_brand_id_strings
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +147,7 @@ def _build_discrepancies_sql(
         "qpat": None,
         "category_ids": filters.category_ids or None,
         "front_snapshot_at": filters.front_snapshot_at,
+        "brand_ids": get_project_frontend_brand_id_strings(project_id),
     }
 
     # Search by article / nm_id / title
@@ -197,14 +199,6 @@ def _build_discrepancies_sql(
 
     sql = f"""
     WITH
-    brand AS (
-        SELECT pm.settings_json->>'brand_id' AS brand_id
-        FROM project_marketplaces pm
-        JOIN marketplaces m ON m.id = pm.marketplace_id
-        WHERE pm.project_id = :project_id
-          AND m.code = 'wildberries'
-        LIMIT 1
-    ),
     rrp_run AS (
         SELECT MAX(snapshot_at) AS run_at
         FROM rrp_snapshots
@@ -218,9 +212,8 @@ def _build_discrepancies_sql(
     front_run AS (
         SELECT COALESCE(CAST(:front_snapshot_at AS timestamptz), MAX(f.snapshot_at)) AS run_at
         FROM frontend_catalog_price_snapshots f
-        JOIN brand b ON b.brand_id IS NOT NULL
         WHERE f.query_type = 'brand'
-          AND f.query_value = b.brand_id
+          AND f.query_value = ANY(:brand_ids)
     ),
     -- Latest RRP per vendor_code_norm
     rrp_latest AS (
@@ -251,10 +244,9 @@ def _build_discrepancies_sql(
             f.discount_calc_percent AS spp_percent,
             f.snapshot_at          AS showcase_updated_at
         FROM frontend_catalog_price_snapshots f
-        JOIN brand b ON b.brand_id IS NOT NULL
         JOIN front_run r ON f.snapshot_at = r.run_at
         WHERE f.query_type = 'brand'
-          AND f.query_value = b.brand_id
+          AND f.query_value = ANY(:brand_ids)
         ORDER BY f.nm_id, f.snapshot_at DESC
     ),
     -- Latest WB stock per nm_id for this project
@@ -478,21 +470,21 @@ def _row_to_item(row: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _get_latest_front_snapshot_at(project_id: int) -> Optional[datetime]:
-    """Return the latest WB frontend (showcase) snapshot_at for the project's brand_id."""
+    """Return the latest WB frontend (showcase) snapshot_at for project storefront brands."""
+    brand_ids = get_project_frontend_brand_id_strings(project_id)
+    if not brand_ids:
+        return None
     with engine.connect() as conn:
         front_max = conn.execute(
             text(
                 """
                 SELECT MAX(f.snapshot_at)
                 FROM frontend_catalog_price_snapshots f
-                JOIN project_marketplaces pm ON pm.project_id = :project_id
-                JOIN marketplaces m ON m.id = pm.marketplace_id
-                WHERE m.code = 'wildberries'
-                  AND f.query_type = 'brand'
-                  AND f.query_value = pm.settings_json->>'brand_id'
+                WHERE f.query_type = 'brand'
+                  AND f.query_value = ANY(:brand_ids)
                 """
             ),
-            {"project_id": project_id},
+            {"brand_ids": brand_ids},
         ).scalar()
     if isinstance(front_max, datetime):
         if front_max.tzinfo is None:
@@ -525,19 +517,17 @@ def _get_updated_at(project_id: int, front_snapshot_at: Optional[datetime] = Non
             {"project_id": project_id},
         ).scalar()
         if front_snapshot_at is None:
+            brand_ids = get_project_frontend_brand_id_strings(project_id)
             front_max = conn.execute(
                 text(
                     """
                     SELECT MAX(f.snapshot_at)
                     FROM frontend_catalog_price_snapshots f
-                    JOIN project_marketplaces pm ON pm.project_id = :project_id
-                    JOIN marketplaces m ON m.id = pm.marketplace_id
-                    WHERE m.code = 'wildberries'
-                      AND f.query_type = 'brand'
-                      AND f.query_value = pm.settings_json->>'brand_id'
+                    WHERE f.query_type = 'brand'
+                      AND f.query_value = ANY(:brand_ids)
                     """
                 ),
-                {"project_id": project_id},
+                {"brand_ids": brand_ids},
             ).scalar()
         else:
             front_max = front_snapshot_at
@@ -666,26 +656,14 @@ async def get_wb_price_discrepancies(
                 {"project_id": project_id},
             ).scalar() or 0
             
-            # Check frontend prices count
-            brand_check = conn.execute(
-                text("""
-                    SELECT pm.settings_json->>'brand_id' AS brand_id
-                    FROM project_marketplaces pm
-                    JOIN marketplaces m ON m.id = pm.marketplace_id
-                    WHERE pm.project_id = :project_id AND m.code = 'wildberries'
-                    LIMIT 1
-                """),
-                {"project_id": project_id},
-            ).mappings().first()
-            
             frontend_count = 0
-            if brand_check and brand_check.get("brand_id"):
+            if params.get("brand_ids"):
                 frontend_count = conn.execute(
                     text("""
                         SELECT COUNT(*) FROM frontend_catalog_price_snapshots
-                        WHERE query_type = 'brand' AND query_value = :brand_id
+                        WHERE query_type = 'brand' AND query_value = ANY(:brand_ids)
                     """),
-                    {"brand_id": str(brand_check.get("brand_id"))},
+                    {"brand_ids": params["brand_ids"]},
                 ).scalar() or 0
             
             # Check Internal Data availability
@@ -798,21 +776,13 @@ async def get_wb_price_discrepancies(
                 base_test = conn.execute(
                     text("""
                         WITH
-                        brand AS (
-                            SELECT pm.settings_json->>'brand_id' AS brand_id
-                            FROM project_marketplaces pm
-                            JOIN marketplaces m ON m.id = pm.marketplace_id
-                            WHERE pm.project_id = :project_id AND m.code = 'wildberries'
-                            LIMIT 1
-                        ),
                         rrp_run AS (
                             SELECT MAX(snapshot_at) AS run_at FROM rrp_snapshots WHERE project_id = :project_id
                         ),
                         front_run AS (
                             SELECT MAX(f.snapshot_at) AS run_at
                             FROM frontend_catalog_price_snapshots f
-                            JOIN brand b ON b.brand_id IS NOT NULL
-                            WHERE f.query_type = 'brand' AND f.query_value = b.brand_id
+                            WHERE f.query_type = 'brand' AND f.query_value = ANY(:brand_ids)
                         ),
                         rrp_latest AS (
                             SELECT s.vendor_code_norm, MAX(s.rrp_price) AS rrp_price
@@ -824,9 +794,8 @@ async def get_wb_price_discrepancies(
                         front_latest AS (
                             SELECT DISTINCT ON (f.nm_id) f.nm_id::bigint AS nm_id, f.price_product AS showcase_price
                             FROM frontend_catalog_price_snapshots f
-                            JOIN brand b ON b.brand_id IS NOT NULL
                             JOIN front_run r ON f.snapshot_at = r.run_at
-                            WHERE f.query_type = 'brand' AND f.query_value = b.brand_id
+                            WHERE f.query_type = 'brand' AND f.query_value = ANY(:brand_ids)
                             ORDER BY f.nm_id, f.snapshot_at DESC
                         )
                         SELECT 
@@ -839,7 +808,7 @@ async def get_wb_price_discrepancies(
                         LEFT JOIN front_latest ON front_latest.nm_id = p.nm_id
                         WHERE p.project_id = :project_id AND p.vendor_code_norm IS NOT NULL
                     """),
-                    {"project_id": project_id},
+                    {"project_id": project_id, "brand_ids": params["brand_ids"]},
                 ).mappings().first()
                 
                 with open(r'd:\Work\EcomCore\.cursor\debug.log', 'a', encoding='utf-8') as f:
@@ -896,10 +865,10 @@ async def get_wb_price_discrepancies(
         # Collect diagnostic information about missing data
         try:
             with engine.connect() as conn:
-                # Check brand_id
-                brand_check = conn.execute(
+                # Check WB marketplace row and storefront brand scope.
+                marketplace_check = conn.execute(
                     text("""
-                        SELECT pm.settings_json->>'brand_id' AS brand_id, pm.is_enabled
+                        SELECT pm.is_enabled
                         FROM project_marketplaces pm
                         JOIN marketplaces m ON m.id = pm.marketplace_id
                         WHERE pm.project_id = :project_id AND m.code = 'wildberries'
@@ -907,6 +876,7 @@ async def get_wb_price_discrepancies(
                     """),
                     {"project_id": project_id},
                 ).mappings().first()
+                brand_ids = params.get("brand_ids") or []
                 
                 # Check table counts
                 rrp_count = conn.execute(
@@ -930,13 +900,13 @@ async def get_wb_price_discrepancies(
                 ).scalar() or 0
                 
                 frontend_count = 0
-                if brand_check and brand_check.get("brand_id"):
+                if brand_ids:
                     frontend_count = conn.execute(
                         text("""
                             SELECT COUNT(*) FROM frontend_catalog_price_snapshots
-                            WHERE query_type = 'brand' AND query_value = :brand_id
+                            WHERE query_type = 'brand' AND query_value = ANY(:brand_ids)
                         """),
-                        {"brand_id": str(brand_check.get("brand_id"))},
+                        {"brand_ids": brand_ids},
                     ).scalar() or 0
                 
                 stock_count = conn.execute(
@@ -1086,21 +1056,13 @@ async def get_wb_price_discrepancies(
                 products_with_both = conn.execute(
                     text("""
                         WITH
-                        brand AS (
-                            SELECT pm.settings_json->>'brand_id' AS brand_id
-                            FROM project_marketplaces pm
-                            JOIN marketplaces m ON m.id = pm.marketplace_id
-                            WHERE pm.project_id = :project_id AND m.code = 'wildberries'
-                            LIMIT 1
-                        ),
                         rrp_run AS (
                             SELECT MAX(snapshot_at) AS run_at FROM rrp_snapshots WHERE project_id = :project_id
                         ),
                         front_run AS (
                             SELECT MAX(f.snapshot_at) AS run_at
                             FROM frontend_catalog_price_snapshots f
-                            JOIN brand b ON b.brand_id IS NOT NULL
-                            WHERE f.query_type = 'brand' AND f.query_value = b.brand_id
+                            WHERE f.query_type = 'brand' AND f.query_value = ANY(:brand_ids)
                         ),
                         rrp_latest AS (
                             SELECT s.vendor_code_norm, MAX(s.rrp_price) AS rrp_price
@@ -1112,9 +1074,8 @@ async def get_wb_price_discrepancies(
                         front_latest AS (
                             SELECT DISTINCT ON (f.nm_id) f.nm_id::bigint AS nm_id, f.price_product AS showcase_price
                             FROM frontend_catalog_price_snapshots f
-                            JOIN brand b ON b.brand_id IS NOT NULL
                             JOIN front_run r ON f.snapshot_at = r.run_at
-                            WHERE f.query_type = 'brand' AND f.query_value = b.brand_id
+                            WHERE f.query_type = 'brand' AND f.query_value = ANY(:brand_ids)
                             ORDER BY f.nm_id, f.snapshot_at DESC
                         )
                         SELECT COUNT(*) AS count
@@ -1126,21 +1087,13 @@ async def get_wb_price_discrepancies(
                           AND rrp_latest.rrp_price IS NOT NULL
                           AND front_latest.showcase_price IS NOT NULL
                     """),
-                    {"project_id": project_id},
-                ).scalar() or 0
-                
-                # Safely extract brand_id
-                brand_id_value = None
-                if brand_check and brand_check.get("brand_id"):
-                    try:
-                        brand_id_value = int(brand_check.get("brand_id"))
-                    except (ValueError, TypeError):
-                        brand_id_value = None
+                        {"project_id": project_id, "brand_ids": brand_ids},
+                    ).scalar() or 0
                 
                 diagnostic_info = {
                     "data_availability": {
-                        "brand_id_configured": brand_id_value is not None,
-                        "brand_id": brand_id_value,
+                        "storefront_configured": bool(brand_ids),
+                        "storefront_brand_ids": [int(brand_id) for brand_id in brand_ids],
                         "rrp_snapshots_count": rrp_count,
                         "rrp_snapshots_latest_snapshot_at": rrp_latest_snapshot_at.isoformat() if rrp_latest_snapshot_at else None,
                         "price_snapshots_count": price_count,
@@ -1167,9 +1120,12 @@ async def get_wb_price_discrepancies(
                 }
                 
                 # Identify issues
-                if not brand_check or not brand_check.get("brand_id"):
-                    diagnostic_info["issues"].append("brand_id not configured in project_marketplaces.settings_json")
-                    diagnostic_info["recommendations"].append("Configure brand_id in project marketplace settings")
+                if not marketplace_check:
+                    diagnostic_info["issues"].append("Wildberries marketplace is not configured for this project")
+                    diagnostic_info["recommendations"].append("Connect Wildberries with an API token in project marketplaces")
+                elif not brand_ids:
+                    diagnostic_info["issues"].append("WB storefront brands are not configured")
+                    diagnostic_info["recommendations"].append("Add a WB storefront brand in Wildberries marketplace settings")
                 
                 if rrp_count == 0:
                     diagnostic_info["issues"].append("No RRP snapshots found")
@@ -1184,12 +1140,12 @@ async def get_wb_price_discrepancies(
                             "and then build snapshots: domain='build_rrp_snapshots'"
                         )
                 
-                if frontend_count == 0 and brand_check and brand_check.get("brand_id"):
+                if frontend_count == 0 and brand_ids:
                     diagnostic_info["issues"].append("No frontend catalog price snapshots found")
                     diagnostic_info["recommendations"].append("Run frontend prices ingestion: POST /api/v1/projects/{project_id}/ingest/run with domain='frontend_prices'")
 
-                # If a specific vitrine snapshot was requested, validate it exists for this brand.
-                if front_snapshot_at is not None and brand_check and brand_check.get("brand_id"):
+                # If a specific vitrine snapshot was requested, validate it exists for this storefront brand scope.
+                if front_snapshot_at is not None and brand_ids:
                     selected_front_count = (
                         conn.execute(
                             text(
@@ -1197,12 +1153,12 @@ async def get_wb_price_discrepancies(
                                 SELECT COUNT(DISTINCT f.nm_id)::bigint
                                 FROM frontend_catalog_price_snapshots f
                                 WHERE f.query_type = 'brand'
-                                  AND f.query_value = :brand_id
+                                  AND f.query_value = ANY(:brand_ids)
                                   AND f.snapshot_at = :front_snapshot_at
                                 """
                             ),
                             {
-                                "brand_id": str(brand_check.get("brand_id")),
+                                "brand_ids": brand_ids,
                                 "front_snapshot_at": front_snapshot_at,
                             },
                         ).scalar()
@@ -1213,7 +1169,7 @@ async def get_wb_price_discrepancies(
                     )
                     diagnostic_info["data_availability"]["front_snapshot_distinct_nm_id_count"] = int(selected_front_count)
                     if int(selected_front_count) == 0:
-                        diagnostic_info["issues"].append("Requested frontend showcase snapshot not found for this brand_id")
+                        diagnostic_info["issues"].append("Requested frontend showcase snapshot not found for configured storefront brands")
                         diagnostic_info["recommendations"].append(
                             "Pick another snapshot: GET /api/v1/projects/{project_id}/wildberries/price-discrepancies/front-snapshots"
                         )
@@ -1395,7 +1351,7 @@ async def diagnose_price_discrepancies(
     """Trigger diagnostic task for price discrepancies data availability.
     
     This endpoint enqueues a Celery task to check:
-    - brand_id configuration
+    - WB storefront brand configuration
     - RRP snapshots availability
     - Price snapshots availability
     - Frontend catalog price snapshots availability
@@ -1460,34 +1416,28 @@ async def get_wb_front_price_discrepancies_snapshots(
     limit: int = Query(25, ge=1, le=200, description="Max number of snapshots to return"),
     _auth: dict = Depends(allow_client_portal_read),
 ):
-    """Return available WB frontend showcase snapshot versions for the project's brand_id.
+    """Return available WB frontend showcase snapshot versions for project storefront brands.
 
     Each item contains snapshot_at + count of distinct nm_id for that snapshot.
     """
     sql = text(
         """
-        WITH brand AS (
-            SELECT pm.settings_json->>'brand_id' AS brand_id
-            FROM project_marketplaces pm
-            JOIN marketplaces m ON m.id = pm.marketplace_id
-            WHERE pm.project_id = :project_id
-              AND m.code = 'wildberries'
-            LIMIT 1
-        )
         SELECT
             f.snapshot_at AS snapshot_at,
             COUNT(DISTINCT f.nm_id)::bigint AS items_count
         FROM frontend_catalog_price_snapshots f
-        JOIN brand b ON b.brand_id IS NOT NULL
         WHERE f.query_type = 'brand'
-          AND f.query_value = b.brand_id
+          AND f.query_value = ANY(:brand_ids)
         GROUP BY f.snapshot_at
         ORDER BY f.snapshot_at DESC
         LIMIT :limit
         """
     )
     with engine.connect() as conn:
-        rows = conn.execute(sql, {"project_id": project_id, "limit": limit}).mappings().all()
+        rows = conn.execute(
+            sql,
+            {"brand_ids": get_project_frontend_brand_id_strings(project_id), "limit": limit},
+        ).mappings().all()
 
     items = []
     for row in rows:

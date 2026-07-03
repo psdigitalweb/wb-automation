@@ -269,6 +269,16 @@
   font-weight: 600;
 }
 
+.successBox {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--color-success-bg);
+  color: var(--color-success);
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .emptyState {
   padding: 24px;
   border: 0.5px dashed var(--color-border);

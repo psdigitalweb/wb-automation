@@ -129,32 +129,6 @@
   display: inline-flex;
 }
 
-.ec-rail-indicator {
-  position: absolute;
-  top: -5px;
-  right: -7px;
-  width: 7px;
-  height: 7px;
-  border-radius: 999px;
-  background: var(--color-success);
-  box-shadow: 0 0 0 2px var(--color-surface);
-}
-
-.ec-rail-indicator.is-purple {
-  background: oklch(58% 0.16 305);
-}
-
-.ec-rail-badge-dot {
-  position: absolute;
-  top: -5px;
-  right: -7px;
-  width: 7px;
-  height: 7px;
-  border-radius: 999px;
-  background: var(--color-danger);
-  box-shadow: 0 0 0 2px var(--color-surface);
-}
-
 .ec-rail-label {
   font-size: 9px;
   font-weight: 600;

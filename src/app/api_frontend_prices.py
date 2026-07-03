@@ -32,6 +32,7 @@ from sqlalchemy import text
 from app.db import engine
 from app.deps import get_current_active_user, get_project_membership
 from app.ingest_frontend_prices import resolve_base_url
+from app.services.wb_storefront_brands import extract_frontend_brand_ids
 
 router = APIRouter(prefix="/api/v1", tags=["frontend-prices"])
 
@@ -79,7 +80,7 @@ async def get_frontend_prices_resolved_url(
     with engine.connect() as conn:
         row = conn.execute(
             text("""
-                SELECT pm.settings_json->>'brand_id' AS brand_id,
+                SELECT pm.settings_json AS settings_json,
                        pm.settings_json->'frontend_prices'->>'base_url_template' AS base_url_template
                 FROM project_marketplaces pm
                 JOIN marketplaces m ON m.id = pm.marketplace_id
@@ -88,21 +89,18 @@ async def get_frontend_prices_resolved_url(
             """),
             {"project_id": project_id},
         ).mappings().first()
-        brand_id_str = (row or {}).get("brand_id")
+        brand_ids = extract_frontend_brand_ids((row or {}).get("settings_json"))
         base_url_template = (row or {}).get("base_url_template")
         if not base_url_template or not str(base_url_template).strip():
             base_url_template = conn.execute(
                 text("SELECT value->>'url' AS url FROM app_settings WHERE key = 'frontend_prices.brand_base_url'")
             ).scalar_one_or_none()
-    if not brand_id_str:
+    if not brand_ids:
         raise HTTPException(
             status_code=400,
-            detail="brand_id not configured for this project (Wildberries marketplace settings).",
+            detail="Storefront brands are not configured for this project (Wildberries marketplace settings).",
         )
-    try:
-        brand_id = int(brand_id_str)
-    except (ValueError, TypeError):
-        raise HTTPException(status_code=400, detail="Invalid brand_id in project settings.")
+    brand_id = brand_ids[0]
     if not base_url_template or not str(base_url_template).strip():
         raise HTTPException(
             status_code=400,
@@ -188,23 +186,14 @@ async def get_project_frontend_prices(
                 settings = {}
         if not isinstance(settings, dict):
             settings = {}
-        brand_ids_set: set[str] = set()
-        legacy_brand = settings.get("brand_id")
-        if legacy_brand is not None:
-            brand_ids_set.add(str(legacy_brand))
-        fp = settings.get("frontend_prices")
-        if isinstance(fp, dict) and isinstance(fp.get("brands"), list):
-            for b in fp["brands"]:
-                if isinstance(b, dict) and b.get("brand_id") is not None:
-                    brand_ids_set.add(str(b["brand_id"]))
-        brand_ids_list = sorted(brand_ids_set) if brand_ids_set else []
+        brand_ids_list = [str(brand_id) for brand_id in extract_frontend_brand_ids(settings)]
 
         # If no brand_ids configured, return empty result but keep contract stable.
         if not brand_ids_list:
             _dbg(
                 hypothesisId="H2",
                 location="api_frontend_prices.py:get_project_frontend_prices:brand_id_missing",
-                message="brand_id missing in project marketplace settings",
+                message="storefront brands missing in project marketplace settings",
                 data={"project_id": project_id},
             )
             return {
@@ -631,4 +620,3 @@ async def get_latest_frontend_prices_by_nm(
         "nm_id": nm_id,
         "count": len(rows)
     }
-

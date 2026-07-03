@@ -253,6 +253,79 @@
   gap: 8px;
 }
 
+.cardStatsControls {
+  display: grid;
+  grid-template-columns: repeat(2, max-content);
+  gap: 8px;
+  align-items: center;
+  max-width: 560px;
+}
+
+.inlineField {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.inlineField span {
+  color: var(--settings-text-3);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1;
+}
+
+.inlineField select {
+  width: 154px;
+  height: 28px;
+  border: 0.5px solid var(--settings-border);
+  border-radius: 6px;
+  padding: 0 8px;
+  background: var(--settings-surface);
+  color: var(--settings-text);
+  font: 12px/1.3 var(--font-sans, inherit);
+}
+
+.dateRangeControls {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dateRangeControls input {
+  width: 132px;
+  height: 28px;
+  border: 0.5px solid var(--settings-border);
+  border-radius: 6px;
+  padding: 0 8px;
+  background: var(--settings-surface);
+  color: var(--settings-text);
+  font: 12px/1.3 var(--font-sans, inherit);
+}
+
+.dateRangeControls span {
+  color: var(--settings-text-3);
+  font-size: 12px;
+}
+
+.runPlan {
+  min-height: 28px;
+  max-width: 360px;
+  padding: 6px 8px;
+  border: 0.5px solid var(--settings-border);
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  overflow: hidden;
+  background: var(--settings-surface-2);
+  color: var(--settings-text-2);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .quickLinks {
   margin-top: 14px;
 }

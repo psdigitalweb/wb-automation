@@ -77,7 +77,10 @@ class WBMarketplaceStatus(BaseModel):
     is_enabled: bool = Field(..., description="Whether Wildberries is enabled for the project")
     has_token: bool = Field(..., description="Whether API token is set")
     brand_id: Optional[int] = Field(None, description="Brand ID from settings_json")
-    connected: bool = Field(..., description="True if enabled, has token, and has brand_id")
+    connected: bool = Field(..., description="True if enabled and has token")
+    storefront_configured: bool = Field(False, description="True if at least one storefront brand is configured")
+    storefront_brand_ids: List[int] = Field(default_factory=list, description="Enabled storefront brand IDs")
+    legacy_brand_id: Optional[int] = Field(None, description="Legacy brand_id from settings_json")
     updated_at: datetime = Field(..., description="Last update timestamp")
 
 
@@ -92,10 +95,22 @@ class WBSettingsStatus(BaseModel):
 class WBMarketplaceStatusV2(BaseModel):
     """Status response for Wildberries marketplace (frontend-friendly, no secrets)."""
     is_enabled: bool
-    is_configured: bool = Field(..., description="True if token exists AND brand_id exists")
+    is_configured: bool = Field(..., description="True if enabled and token exists")
     credentials: WBCredentialsStatus
     settings: WBSettingsStatus
+    storefront_configured: bool = Field(False, description="True if at least one storefront brand is configured")
+    storefront_brand_ids: List[int] = Field(default_factory=list, description="Enabled storefront brand IDs")
+    legacy_brand_id: Optional[int] = Field(None, description="Legacy brand_id from settings_json")
     updated_at: datetime
+
+
+class WBTokenValidationResponse(BaseModel):
+    """Result of validating the stored Wildberries API token."""
+
+    valid: bool = Field(..., description="True if WB accepted the stored token")
+    has_token: bool = Field(..., description="True if a token is stored for this project")
+    message: Optional[str] = Field(None, description="Validation result details")
+    checked_at: datetime = Field(..., description="Validation timestamp")
 
 
 class WBMarketplaceUpdate(BaseModel):
@@ -677,4 +692,3 @@ class SystemMarketplacePublicStatus(BaseModel):
     is_globally_enabled: bool = Field(..., description="Whether marketplace is globally enabled")
     is_visible: bool = Field(..., description="Whether marketplace is visible in UI")
     sort_order: int = Field(..., description="Sort order for display")
-

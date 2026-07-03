@@ -50,7 +50,21 @@ type RunParams = {
   max_seconds?: number
   max_batches?: number
   cursor?: { date: string; nm_offset: number }
-  use_fast_path?: boolean
+}
+
+type WbCardStatsRunMode = 'daily' | 'last30' | 'custom'
+
+function toDateInputValue(value: Date): string {
+  const year = value.getFullYear()
+  const month = String(value.getMonth() + 1).padStart(2, '0')
+  const day = String(value.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function shiftedDateInputValue(days: number): string {
+  const value = new Date()
+  value.setDate(value.getDate() + days)
+  return toDateInputValue(value)
 }
 
 function formatDateTime(value: string | null | undefined): string {
@@ -124,12 +138,10 @@ export default function ProjectSettingsPage({ params }: { params: { projectId: s
   const [wbIngestLoading, setWbIngestLoading] = useState(false)
   const [runningJobs, setRunningJobs] = useState<Set<string>>(new Set())
   const [isPolling, setIsPolling] = useState(false)
-  const [frontendPricesBrandCount, setFrontendPricesBrandCount] = useState(1)
-  const [backfillCustomOpen, setBackfillCustomOpen] = useState(false)
-  const [backfillDateFrom, setBackfillDateFrom] = useState('')
-  const [backfillDateTo, setBackfillDateTo] = useState('')
-  const [backfillCustomLoading, setBackfillCustomLoading] = useState(false)
-  const [wbCardStatsUseFastPath, setWbCardStatsUseFastPath] = useState(false)
+  const [frontendPricesBrandCount, setFrontendPricesBrandCount] = useState(0)
+  const [wbCardStatsRunMode, setWbCardStatsRunMode] = useState<WbCardStatsRunMode>('daily')
+  const [wbCardStatsDateFrom, setWbCardStatsDateFrom] = useState(() => shiftedDateInputValue(-29))
+  const [wbCardStatsDateTo, setWbCardStatsDateTo] = useState(() => toDateInputValue(new Date()))
 
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null)
   const lastStatusesHashRef = useRef('')
@@ -221,7 +233,7 @@ export default function ProjectSettingsPage({ params }: { params: { projectId: s
         setProject(projectResult.data)
         setConnectedMarketplaces(enabledMarketplaces)
         setWbEnabled(!!wbMarketplace?.is_enabled)
-        setFrontendPricesBrandCount(brandCount > 0 ? brandCount : 1)
+        setFrontendPricesBrandCount(brandCount)
       } catch (error) {
         if (!alive) return
         setError((error as { detail?: string; message?: string })?.detail || 'Не удалось загрузить настройки проекта')
@@ -253,11 +265,6 @@ export default function ProjectSettingsPage({ params }: { params: { projectId: s
       return
     }
 
-    const finalParams =
-      jobCode === 'wb_card_stats_daily'
-        ? { ...params, use_fast_path: params?.use_fast_path ?? wbCardStatsUseFastPath }
-        : params
-
     try {
       setRunningJobs((prev) => new Set(prev).add(jobCode))
       setWbIngestStatuses((prev) =>
@@ -266,7 +273,7 @@ export default function ProjectSettingsPage({ params }: { params: { projectId: s
         ),
       )
 
-      await runWBIngest(projectId, jobCode, finalParams)
+      await runWBIngest(projectId, jobCode, params)
       showToast(`Загрузка ${jobCode} запущена`)
       startPolling()
       window.setTimeout(() => loadWBIngestStatuses(), 1000)
@@ -314,37 +321,54 @@ export default function ProjectSettingsPage({ params }: { params: { projectId: s
     }
   }
 
-  const runCardStatsBackfill = async (params?: RunParams) => {
-    await runIngestWithParams('wb_card_stats_daily', {
-      mode: 'backfill',
-      max_seconds: 900,
-      max_batches: 200,
-      ...params,
-      use_fast_path: wbCardStatsUseFastPath,
-    })
-  }
-
-  const openCustomBackfill = () => {
-    const today = new Date()
-    const from = new Date(today)
-    from.setDate(from.getDate() - 29)
-    setBackfillDateTo(today.toISOString().slice(0, 10))
-    setBackfillDateFrom(from.toISOString().slice(0, 10))
-    setBackfillCustomOpen(true)
-  }
-
-  const submitCustomBackfill = async () => {
-    if (!backfillDateFrom || !backfillDateTo) return
-    setBackfillCustomLoading(true)
-    try {
-      await runCardStatsBackfill({
-        date_from: backfillDateFrom,
-        date_to: backfillDateTo,
-      })
-      setBackfillCustomOpen(false)
-    } finally {
-      setBackfillCustomLoading(false)
+  const getWbCardStatsPlan = (): { params: RunParams; summary: string; invalid?: string } => {
+    if (wbCardStatsRunMode === 'daily') {
+      const day = shiftedDateInputValue(-1)
+      return {
+        params: {
+          mode: 'daily',
+          date_from: day,
+          date_to: day,
+        },
+        summary: `Обычная дневная загрузка за ${day}`,
+      }
     }
+
+    const dateFrom = wbCardStatsRunMode === 'last30' ? shiftedDateInputValue(-29) : wbCardStatsDateFrom
+    const dateTo = wbCardStatsRunMode === 'last30' ? toDateInputValue(new Date()) : wbCardStatsDateTo
+    if (!dateFrom || !dateTo) {
+      return {
+        params: {},
+        summary: 'backfill · даты не выбраны',
+        invalid: 'Выберите date_from и date_to',
+      }
+    }
+    if (dateFrom > dateTo) {
+      return {
+        params: {},
+        summary: `Догрузка периода ${dateFrom}..${dateTo}`,
+        invalid: 'date_from позже date_to',
+      }
+    }
+    return {
+      params: {
+        mode: 'backfill',
+        date_from: dateFrom,
+        date_to: dateTo,
+        max_seconds: 1500,
+        max_batches: 200,
+      },
+      summary: `Догрузка периода ${dateFrom}..${dateTo}`,
+    }
+  }
+
+  const runSelectedCardStats = async () => {
+    const plan = getWbCardStatsPlan()
+    if (plan.invalid) {
+      showToast(plan.invalid, 5000)
+      return
+    }
+    await runIngestWithParams('wb_card_stats_daily', plan.params)
   }
 
   return (
@@ -457,6 +481,7 @@ export default function ProjectSettingsPage({ params }: { params: { projectId: s
                   <tbody>
                     {wbIngestStatuses.map((status) => {
                       const isRunning = status.is_running || runningJobs.has(status.job_code)
+                      const cardStatsPlan = status.job_code === 'wb_card_stats_daily' ? getWbCardStatsPlan() : null
 
                       return (
                         <tr key={status.job_code}>
@@ -470,7 +495,7 @@ export default function ProjectSettingsPage({ params }: { params: { projectId: s
                                   <span>{status.title}</span>
                                   {status.job_code === 'frontend_prices' ? (
                                     <span className={`${styles.badge} ${styles.neutralBadge}`}>
-                                      Брендов: {frontendPricesBrandCount}
+                                      {frontendPricesBrandCount > 0 ? `Брендов: ${frontendPricesBrandCount}` : 'Бренды не настроены'}
                                     </span>
                                   ) : null}
                                 </div>
@@ -523,6 +548,51 @@ export default function ProjectSettingsPage({ params }: { params: { projectId: s
                                     Догрузить новое
                                   </button>
                                 </>
+                              ) : status.job_code === 'wb_card_stats_daily' ? (
+                                <div className={styles.cardStatsControls}>
+                                  <label className={styles.inlineField}>
+                                    <span>Что загрузить</span>
+                                    <select
+                                      value={wbCardStatsRunMode}
+                                      onChange={(event) => setWbCardStatsRunMode(event.target.value as WbCardStatsRunMode)}
+                                    >
+                                      <option value="daily">Вчера</option>
+                                      <option value="last30">Последние 30 дней</option>
+                                      <option value="custom">Свой период</option>
+                                    </select>
+                                  </label>
+
+                                  {wbCardStatsRunMode === 'custom' ? (
+                                    <div className={styles.dateRangeControls}>
+                                      <input
+                                        type="date"
+                                        value={wbCardStatsDateFrom}
+                                        onChange={(event) => setWbCardStatsDateFrom(event.target.value)}
+                                        aria-label="date_from"
+                                      />
+                                      <span>...</span>
+                                      <input
+                                        type="date"
+                                        value={wbCardStatsDateTo}
+                                        onChange={(event) => setWbCardStatsDateTo(event.target.value)}
+                                        aria-label="date_to"
+                                      />
+                                    </div>
+                                  ) : null}
+
+                                  <div className={styles.runPlan} title={JSON.stringify(cardStatsPlan?.params ?? {})}>
+                                    {cardStatsPlan?.summary}
+                                  </div>
+
+                                  <button
+                                    type="button"
+                                    className={styles.smallPrimary}
+                                    onClick={runSelectedCardStats}
+                                    disabled={!wbEnabled || isRunning || Boolean(cardStatsPlan?.invalid)}
+                                  >
+                                    {isRunning ? 'Выполняется...' : 'Запустить'}
+                                  </button>
+                                </div>
                               ) : (
                                 <button
                                   type="button"
@@ -546,35 +616,6 @@ export default function ProjectSettingsPage({ params }: { params: { projectId: s
                                 </Link>
                               ) : null}
 
-                              {status.job_code === 'wb_card_stats_daily' ? (
-                                <>
-                                  <label className={styles.checkboxLabel} title="Быстрый сбор через batched WB endpoint">
-                                    <input
-                                      type="checkbox"
-                                      checked={wbCardStatsUseFastPath}
-                                      onChange={(event) => setWbCardStatsUseFastPath(event.target.checked)}
-                                    />
-                                    Fast path
-                                  </label>
-                                  <button
-                                    type="button"
-                                    className={styles.smallSecondary}
-                                    onClick={() => runCardStatsBackfill()}
-                                    disabled={!wbEnabled || isRunning}
-                                  >
-                                    Backfill 30 days
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className={styles.smallSecondary}
-                                    onClick={openCustomBackfill}
-                                    disabled={!wbEnabled || isRunning}
-                                  >
-                                    Custom
-                                  </button>
-                                </>
-                              ) : null}
-
                               {status.job_code !== 'wb_finances' && (status.last_run_at || status.job_code === 'wb_card_stats_daily') ? (
                                 <Link className={styles.inlineLink} href={`/app/project/${projectId}/ingestion?job_code=${status.job_code}`}>
                                   История
@@ -591,34 +632,6 @@ export default function ProjectSettingsPage({ params }: { params: { projectId: s
             )}
           </section>
 
-          {backfillCustomOpen ? (
-            <div className={styles.modalBackdrop} onClick={() => !backfillCustomLoading && setBackfillCustomOpen(false)}>
-              <div className={styles.modal} onClick={(event) => event.stopPropagation()}>
-                <h2>Backfill wb_card_stats_daily</h2>
-                <label>
-                  <span>date_from</span>
-                  <input type="date" value={backfillDateFrom} onChange={(event) => setBackfillDateFrom(event.target.value)} />
-                </label>
-                <label>
-                  <span>date_to</span>
-                  <input type="date" value={backfillDateTo} onChange={(event) => setBackfillDateTo(event.target.value)} />
-                </label>
-                <div className={styles.modalActions}>
-                  <button type="button" className={styles.smallSecondary} onClick={() => setBackfillCustomOpen(false)} disabled={backfillCustomLoading}>
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    className={styles.smallPrimary}
-                    onClick={submitCustomBackfill}
-                    disabled={backfillCustomLoading || !backfillDateFrom || !backfillDateTo}
-                  >
-                    {backfillCustomLoading ? 'Запуск...' : 'Start'}
-                  </button>
-                </div>
-              </div>
-            </div>
-          ) : null}
         </>
       ) : null}
     </div>

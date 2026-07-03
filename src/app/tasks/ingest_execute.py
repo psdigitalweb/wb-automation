@@ -36,6 +36,8 @@ from app.db_wb_backfill_state import (
 
 logger = logging.getLogger(__name__)
 
+WB_CARD_STATS_RATE_LIMIT_CONTINUE_DELAY_SECONDS = 10 * 60
+
 
 def _maybe_schedule_wb_communications_full_sync_continuation(
     run_id: int,
@@ -200,7 +202,7 @@ def _maybe_schedule_wb_card_stats_daily_continuation(
     marketplace_code: str,
     stats: dict,
 ) -> None:
-    """If run ended with progress_saved for a single-day range and state is paused, schedule next run."""
+    """If run ended with progress_saved and range state is paused, schedule next run."""
     params = run.get("params_json")
     if isinstance(params, str):
         try:
@@ -226,8 +228,6 @@ def _maybe_schedule_wb_card_stats_daily_continuation(
         )
     except (ValueError, TypeError):
         return
-    if date_from != date_to:
-        return
 
     range_state = get_backfill_state(
         project_id, JOB_CODE_WB_CARD_STATS_DAILY, date_from, date_to
@@ -238,34 +238,41 @@ def _maybe_schedule_wb_card_stats_daily_continuation(
     if status == "completed":
         logger.info(
             "wb_card_stats_daily auto-continue: skipped because completed date=%s",
-            date_from.isoformat(),
+            f"{date_from.isoformat()}..{date_to.isoformat()}",
         )
         return
     if status == "running":
         logger.info(
             "wb_card_stats_daily auto-continue: skipped because already_running_for_range date=%s",
-            date_from.isoformat(),
+            f"{date_from.isoformat()}..{date_to.isoformat()}",
         )
         return
     if status == "failed":
         return
     if status != "paused":
         return
+    range_days = max(1, (date_to - date_from).days + 1)
+    default_max_auto_continues = max(MAX_AUTO_CONTINUES_PER_DAY, range_days * MAX_AUTO_CONTINUES_PER_DAY)
+    try:
+        max_auto_continues = int(params.get("max_auto_continues") or default_max_auto_continues)
+    except (ValueError, TypeError):
+        max_auto_continues = default_max_auto_continues
+    max_auto_continues = max(1, max_auto_continues)
 
     new_count = try_increment_auto_continue_count(
-        project_id, JOB_CODE_WB_CARD_STATS_DAILY, date_from, date_to, MAX_AUTO_CONTINUES_PER_DAY
+        project_id, JOB_CODE_WB_CARD_STATS_DAILY, date_from, date_to, max_auto_continues
     )
     if new_count is None:
         logger.warning(
             "wb_card_stats_daily auto-continue: stopped by max_auto_continues (limit=%s) date=%s",
-            MAX_AUTO_CONTINUES_PER_DAY,
-            date_from.isoformat(),
+            max_auto_continues,
+            f"{date_from.isoformat()}..{date_to.isoformat()}",
         )
         return
 
     logger.info(
-        "wb_card_stats_daily auto-continue: scheduling next run for date=%s count=%s",
-        date_from.isoformat(),
+        "wb_card_stats_daily auto-continue: scheduling next run for range=%s count=%s",
+        f"{date_from.isoformat()}..{date_to.isoformat()}",
         new_count,
     )
     params_json = {
@@ -273,6 +280,9 @@ def _maybe_schedule_wb_card_stats_daily_continuation(
         "date_from": date_from.isoformat(),
         "date_to": date_to.isoformat(),
     }
+    for key in ("use_fast_path", "max_seconds", "max_batches", "max_auto_continues"):
+        if key in params:
+            params_json[key] = params[key]
     new_run = create_run_queued(
         project_id=project_id,
         marketplace_code=marketplace_code,
@@ -282,7 +292,18 @@ def _maybe_schedule_wb_card_stats_daily_continuation(
         params_json=params_json,
     )
     new_run_id = new_run["id"]
-    res = execute_ingest.delay(new_run_id)
+    if stats.get("pause_reason") == "wb_analytics_rate_limited":
+        logger.info(
+            "wb_card_stats_daily auto-continue: delaying rate_limited continuation range=%s delay_seconds=%s",
+            f"{date_from.isoformat()}..{date_to.isoformat()}",
+            WB_CARD_STATS_RATE_LIMIT_CONTINUE_DELAY_SECONDS,
+        )
+        res = execute_ingest.apply_async(
+            args=[new_run_id],
+            countdown=WB_CARD_STATS_RATE_LIMIT_CONTINUE_DELAY_SECONDS,
+        )
+    else:
+        res = execute_ingest.delay(new_run_id)
     set_run_celery_task_id(new_run_id, res.id)
 
 
@@ -361,7 +382,7 @@ def execute_ingest(run_id: int) -> dict:
                 or "ingest_failed"
             )
             tb = json.dumps(stats, ensure_ascii=False)[:50000]
-            logger.warning(f"execute_ingest: job returned ok=False, failing run_id={run_id}, reason={reason}")
+            logger.warning(f"execute_ingest: job returned ok=False, run_id={run_id}, reason={reason}")
             # Preserve debug progress and backfill checkpoint from set_run_progress
             current = get_run(run_id)
             if current and isinstance(current.get("stats_json"), dict):
@@ -374,13 +395,8 @@ def execute_ingest(run_id: int) -> dict:
                 for k in preserve_keys:
                     if k in current["stats_json"]:
                         stats = {**stats, k: current["stats_json"][k]}
-            finish_run_failed(
-                run_id=run_id,
-                error_message=str(reason),
-                error_trace=tb,
-                stats_json=stats,
-            )
             if reason == "progress_saved" and job_code == "wb_card_stats_daily":
+                finish_run_success(run_id=run_id, stats_json=stats)
                 _maybe_schedule_wb_card_stats_daily_continuation(
                     run_id=run_id,
                     run=run,
@@ -388,6 +404,20 @@ def execute_ingest(run_id: int) -> dict:
                     marketplace_code=marketplace_code,
                     stats=stats,
                 )
+                return {
+                    "status": "success",
+                    "run_id": run_id,
+                    "project_id": project_id,
+                    "marketplace_code": marketplace_code,
+                    "job_code": job_code,
+                    "stats": stats,
+                }
+            finish_run_failed(
+                run_id=run_id,
+                error_message=str(reason),
+                error_trace=tb,
+                stats_json=stats,
+            )
             if reason == "progress_saved" and job_code == "wb_communications":
                 _maybe_schedule_wb_communications_full_sync_continuation(
                     run_id=run_id,

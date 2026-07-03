@@ -44,8 +44,6 @@ export default function RailNav({ activePrimary, openPrimary, projectId, items, 
             >
               <span className="ec-rail-icon-wrap">
                 <Icon name={item.icon} size={18} />
-                {item.indicator ? <span className={`ec-rail-indicator is-${item.indicator}`} /> : null}
-                {item.badge ? <span className="ec-rail-badge-dot" /> : null}
               </span>
               <span className="ec-rail-label">{item.label}</span>
             </Link>

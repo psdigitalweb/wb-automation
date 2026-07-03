@@ -86,12 +86,18 @@ def compute_retry_sleep_seconds(retry_count: int) -> int:
     return int(round(sleep))
 
 
-def compute_retry_sleep_429(retry_count: int) -> int:
-    """Backoff for 429: 2, 4, 8, 16, 32 sec (cap 60). Used for pool/single-brand; max 5 retries."""
+def compute_retry_sleep_429(
+    retry_count: int,
+    *,
+    base_seconds: int = 2,
+    max_seconds: int = 60,
+) -> int:
+    """Backoff for 429: exponential sleep with a configurable cap."""
     if retry_count <= 0:
         retry_count = 1
-    base = min(2 * (2 ** (retry_count - 1)), 60)
-    return int(base)
+    base = max(1, int(base_seconds or 2))
+    cap = max(base, int(max_seconds or 60))
+    return int(min(base * (2 ** (retry_count - 1)), cap))
 
 
 async def sleep_with_heartbeat(
@@ -342,6 +348,10 @@ async def ingest_frontend_brand_prices(
     http_timeout_jitter_sec: Optional[int] = None,
     min_coverage_ratio: Optional[float] = None,
     max_runtime_seconds: Optional[int] = None,
+    rate_limit_max_retries: Optional[int] = None,
+    rate_limit_base_sleep_seconds: Optional[int] = None,
+    rate_limit_max_sleep_seconds: Optional[int] = None,
+    rate_limit_max_total_wait_seconds: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Fetch and insert frontend catalog price snapshots from WB public API."""
     proxy_used = bool(proxy_url and str(proxy_url).strip())
@@ -581,7 +591,12 @@ async def ingest_frontend_brand_prices(
         # We keep it bounded and visible in stats_json so "running" is explainable.
         data = None
         last_meta: dict | None = None
-        page_attempts = 10
+        max_429_retries = (
+            int(rate_limit_max_retries)
+            if rate_limit_max_retries is not None and rate_limit_max_retries > 0
+            else 5
+        )
+        page_attempts = max(10, max_429_retries + 1)
         retry_count_429 = 0
         for page_attempt in range(1, page_attempts + 1):
             data = await client.fetch_brand_catalog_page(brand_id, page, base_url)
@@ -595,18 +610,30 @@ async def ingest_frontend_brand_prices(
             except Exception:
                 status_code = None
 
-            # Rate limit (429): backoff 2, 4, 8, 16, 32 sec (cap 60), max 5 retries then fail brand.
+            # Rate limit (429): configurable backoff, then fail brand.
             if status_code == 429:
                 retry_count_429 += 1
-                if retry_count_429 > 5:
+                if retry_count_429 > max_429_retries:
                     return {
                         "error": "rate_limited_max_retries",
-                        "detail": "HTTP 429 after 5 retries",
+                        "detail": f"HTTP 429 after {max_429_retries} retries",
                         "page": page,
                         "retry_count": retry_count_429,
                         **proxy_meta,
                     }
-                sleep_s = compute_retry_sleep_429(retry_count_429)
+                sleep_s = compute_retry_sleep_429(
+                    retry_count_429,
+                    base_seconds=(
+                        int(rate_limit_base_sleep_seconds)
+                        if rate_limit_base_sleep_seconds is not None and rate_limit_base_sleep_seconds > 0
+                        else 2
+                    ),
+                    max_seconds=(
+                        int(rate_limit_max_sleep_seconds)
+                        if rate_limit_max_sleep_seconds is not None and rate_limit_max_sleep_seconds > 0
+                        else 60
+                    ),
+                )
                 runtime_s = time.monotonic() - started_monotonic
 
                 # Limits: stop gracefully (skipped rate_limited) instead of running forever.
@@ -615,8 +642,14 @@ async def ingest_frontend_brand_prices(
                     if max_runtime_seconds is not None and max_runtime_seconds > 0
                     else settings.FRONTEND_PRICES_MAX_RUNTIME_SECONDS
                 )
+                max_total_retry_wait = (
+                    int(rate_limit_max_total_wait_seconds)
+                    if rate_limit_max_total_wait_seconds is not None
+                    and rate_limit_max_total_wait_seconds > 0
+                    else settings.FRONTEND_PRICES_MAX_TOTAL_RETRY_WAIT_SECONDS
+                )
                 if (
-                    (total_retry_wait_seconds + sleep_s) > settings.FRONTEND_PRICES_MAX_TOTAL_RETRY_WAIT_SECONDS
+                    (total_retry_wait_seconds + sleep_s) > max_total_retry_wait
                     or runtime_s > max_runtime
                 ):
                     if run_id is not None:
@@ -1276,4 +1309,3 @@ async def start_ingest_frontend_brand_prices(
         "message": "Frontend prices ingestion completed",
         **result
     }
-
