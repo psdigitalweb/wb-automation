@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { apiDownload, apiGetData, apiPost } from '@/lib/apiClient'
@@ -367,69 +368,72 @@ function PhotoPopover({ photos, size = 40 }: PhotoPopoverProps) {
         </div>
       )}
 
-      {open && hasPhotos && (
-        <div
-          ref={popoverRef}
-          onMouseEnter={() => setOpen(true)}
-          onMouseLeave={handleClose}
-          style={{
-            position: 'absolute',
-            zIndex: 1000,
-            top: position.top - (anchorRef.current?.getBoundingClientRect().bottom || 0) - window.scrollY,
-            left: 0,
-            background: '#fff',
-            border: '1px solid #ddd',
-            borderRadius: 6,
-            boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
-            padding: 8,
-            minWidth: 260,
-            maxWidth: 480,
-          }}
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-            <strong style={{ fontSize: 12 }}>Фото товара</strong>
-            <button type="button" onClick={() => setOpen(false)} style={{ fontSize: 12 }}>
-              ✕
-            </button>
-          </div>
-          <div style={{ textAlign: 'center', marginBottom: 8 }}>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={photos[selectedIndex]}
-              alt="Фото товара крупно"
-              style={{ maxWidth: '100%', maxHeight: 240, objectFit: 'contain', borderRadius: 4 }}
-              loading="lazy"
-            />
-          </div>
+      {open &&
+        hasPhotos &&
+        createPortal(
           <div
+            ref={popoverRef}
+            onMouseEnter={() => setOpen(true)}
+            onMouseLeave={handleClose}
             style={{
-              display: 'flex',
-              gap: 6,
-              overflowX: 'auto',
-              paddingBottom: 4,
+              position: 'absolute',
+              zIndex: 1000,
+              top: position.top,
+              left: position.left,
+              background: '#fff',
+              border: '1px solid #ddd',
+              borderRadius: 6,
+              boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
+              padding: 8,
+              minWidth: 260,
+              maxWidth: 480,
             }}
           >
-            {photos.map((url, idx) => (
-              // eslint-disable-next-line @next/next/no-img-element
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <strong style={{ fontSize: 12 }}>Фото товара</strong>
+              <button type="button" onClick={() => setOpen(false)} style={{ fontSize: 12 }}>
+                ✕
+              </button>
+            </div>
+            <div style={{ textAlign: 'center', marginBottom: 8 }}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                key={url + idx}
-                src={url}
-                alt={`Миниатюра ${idx + 1}`}
-                style={{
-                  width: 48,
-                  height: 48,
-                  objectFit: 'cover',
-                  borderRadius: 3,
-                  cursor: 'pointer',
-                  border: idx === selectedIndex ? '2px solid #0070f3' : '1px solid #ddd',
-                }}
+                src={photos[selectedIndex]}
+                alt="Фото товара крупно"
+                style={{ maxWidth: '100%', maxHeight: 240, objectFit: 'contain', borderRadius: 4 }}
                 loading="lazy"
-                onClick={() => setSelectedIndex(idx)}
               />
-            ))}
-          </div>
-        </div>
-      )}
+            </div>
+            <div
+              style={{
+                display: 'flex',
+                gap: 6,
+                overflowX: 'auto',
+                paddingBottom: 4,
+              }}
+            >
+              {photos.map((url, idx) => (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  key={url + idx}
+                  src={url}
+                  alt={`Миниатюра ${idx + 1}`}
+                  style={{
+                    width: 48,
+                    height: 48,
+                    objectFit: 'cover',
+                    borderRadius: 3,
+                    cursor: 'pointer',
+                    border: idx === selectedIndex ? '2px solid #0070f3' : '1px solid #ddd',
+                  }}
+                  loading="lazy"
+                  onClick={() => setSelectedIndex(idx)}
+                />
+              ))}
+            </div>
+          </div>,
+          document.body,
+        )}
     </div>
   )
 }
@@ -1112,10 +1116,6 @@ function RrpFilterToolbar({
           </select>
         </label>
 
-        <button type="button" className={styles.toolbarButton} title="Настройка колонок пока недоступна">
-          <span>☀</span>
-          Колонки
-        </button>
       </div>
     </div>
   )
