@@ -122,12 +122,6 @@ interface PriceApplyResponse {
   already_exists: boolean
 }
 
-interface PriceApplyStatusResponse {
-  status: 'waiting' | 'applied' | 'error'
-  upload_id: number
-  errors?: Array<{ errorText?: string | null }>
-}
-
 interface FiltersState {
   q: string
   categoryIds: number[]
@@ -1109,7 +1103,6 @@ function PriceApplyModal({ projectId, item, onClose, onApplied }: PriceApplyModa
   const [basePrice, setBasePrice] = useState('')
   const [discount, setDiscount] = useState('')
   const [sizePrices, setSizePrices] = useState<Record<number, string>>({})
-  const [uploadId, setUploadId] = useState<number | null>(null)
 
   const nmId = item?.nm_id
 
@@ -1117,7 +1110,6 @@ function PriceApplyModal({ projectId, item, onClose, onApplied }: PriceApplyModa
     let cancelled = false
     setPreview(null)
     setMessage(null)
-    setUploadId(null)
     setStatus(nmId ? 'loading' : 'idle')
     setSizePrices({})
 
@@ -1148,46 +1140,6 @@ function PriceApplyModal({ projectId, item, onClose, onApplied }: PriceApplyModa
     }
   }, [projectId, nmId])
 
-  useEffect(() => {
-    if (!uploadId || status !== 'waiting') return
-    let cancelled = false
-    let attempts = 0
-
-    const timer = window.setInterval(async () => {
-      attempts += 1
-      try {
-        const resp = await apiGetData<PriceApplyStatusResponse>(
-          `/api/v1/projects/${projectId}/wildberries/price-discrepancies/price-apply-status?upload_id=${uploadId}`,
-        )
-        if (cancelled) return
-        if (resp.status === 'applied') {
-          setStatus('applied')
-          setMessage('Цена установлена на WB.')
-          onApplied()
-          window.clearInterval(timer)
-        } else if (resp.status === 'error') {
-          const firstError = resp.errors?.find((err) => err?.errorText)?.errorText
-          setStatus('error')
-          setMessage(firstError || 'WB вернул ошибку при установке цены')
-          window.clearInterval(timer)
-        } else if (attempts >= 12) {
-          setMessage('WB принял задачу, она еще обрабатывается. Отчет можно обновить позже.')
-          window.clearInterval(timer)
-        }
-      } catch (e: any) {
-        if (cancelled) return
-        setStatus('error')
-        setMessage(getErrorMessage(e, 'Не удалось получить статус задачи WB'))
-        window.clearInterval(timer)
-      }
-    }, 2500)
-
-    return () => {
-      cancelled = true
-      window.clearInterval(timer)
-    }
-  }, [projectId, uploadId, status, onApplied])
-
   if (!item || !nmId) return null
 
   const submitDisabled = status === 'loading' || status === 'submitting' || status === 'waiting' || !preview
@@ -1217,7 +1169,6 @@ function PriceApplyModal({ projectId, item, onClose, onApplied }: PriceApplyModa
         body,
       )
       if (data.upload_id) {
-        setUploadId(data.upload_id)
         setStatus('applied')
         setMessage('WB принял задачу обновления цены. Цена обычно применяется в ЛК в течение нескольких секунд.')
         onApplied()

@@ -25,6 +25,7 @@ class WBClient:
         client: httpx.AsyncClient, 
         method: str, 
         url: str, 
+        retry_on_429: bool = True,
         **kwargs
     ) -> Optional[httpx.Response]:
         """Make HTTP request with retries and exponential backoff.
@@ -44,6 +45,8 @@ class WBClient:
 
                 # Special-case rate limiting: backoff and retry.
                 if response.status_code == 429:
+                    if not retry_on_429:
+                        return response
                     if attempt < self.max_retries - 1:
                         delay = min(15 * (attempt + 1), 90)  # 15s, 30s, 45s ... cap 90s
                         print(f"Request failed with 429, retrying in {delay}s (attempt {attempt + 1}/{self.max_retries})")
@@ -204,6 +207,7 @@ class WBClient:
                 client,
                 method,
                 url,
+                retry_on_429=False,
                 headers=headers,
                 params=params,
                 json=json_body,
@@ -215,6 +219,12 @@ class WBClient:
 
         self.last_response_status = response.status_code
         response_text = response.text[:1000] if response.text else ""
+        rate_limit_headers = {
+            "retry_after": response.headers.get("X-Ratelimit-Retry")
+            or response.headers.get("Retry-After"),
+            "limit": response.headers.get("X-Ratelimit-Limit"),
+            "reset": response.headers.get("X-Ratelimit-Reset"),
+        }
         try:
             payload = response.json()
         except Exception:
@@ -227,6 +237,8 @@ class WBClient:
             self.last_error_text = payload.get("errorText") or response_text
             payload.setdefault("error", True)
             payload.setdefault("errorText", self.last_error_text)
+        payload["statusCode"] = response.status_code
+        payload["rateLimit"] = rate_limit_headers
         return payload
 
     async def upload_price_task(self, items: List[Dict[str, Any]]) -> Dict[str, Any]:

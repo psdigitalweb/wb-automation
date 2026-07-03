@@ -738,6 +738,14 @@ async def apply_wb_recommended_price(
 
     upload_id = _extract_upload_id(response_payload)
     if response_payload.get("error"):
+        status_code = int(response_payload.get("statusCode") or 502)
+        retry_after = (response_payload.get("rateLimit") or {}).get("retry_after")
+        if status_code == 429:
+            retry_text = f" Повторите через {retry_after} сек." if retry_after else ""
+            raise HTTPException(
+                status_code=429,
+                detail=f"Wildberries ограничил частоту запросов к API цен.{retry_text}",
+            )
         raise HTTPException(
             status_code=502,
             detail=response_payload.get("errorText") or "Wildberries не принял задачу обновления цены",
