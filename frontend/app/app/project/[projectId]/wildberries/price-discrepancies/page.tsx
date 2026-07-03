@@ -36,6 +36,12 @@ interface PriceDiscrepancyItem {
     delta_recommended: number | null
     expected_showcase_price: number | null
   }
+  staleness?: {
+    showcase_price_stale: boolean
+    reason: 'awaiting_showcase_refresh' | null
+    wb_price_updated_at: string | null
+    showcase_updated_at: string | null
+  }
 }
 
 interface DiagnosticInfo {
@@ -1417,6 +1423,8 @@ function RrpReportTable({ items, meta, showAll, loading, onToggleShowAll, onPage
               const deltaLabelRub = absDiffRub !== null ? `${deltaSign}${absDiffRub.toFixed(0)} ₽` : '—'
               const deltaLabelPercent =
                 absDiffPercent !== null ? `${deltaSign}${absDiffPercent.toFixed(1)}%` : '—'
+              const isShowcaseStale = Boolean(item.staleness?.showcase_price_stale)
+              const staleCellClass = isShowcaseStale ? styles.staleShowcaseCell : undefined
 
               return (
                 <tr key={key} className={!hasShowcase ? styles.mutedRow : undefined}>
@@ -1457,15 +1465,15 @@ function RrpReportTable({ items, meta, showAll, loading, onToggleShowAll, onPage
                   </td>
                   <td className={`${styles.num} ${styles.priceCell}`}>{formatCurrency(item.prices.wb_admin_price)}</td>
                   <td className={`${styles.num} ${styles.priceCell}`}>{formatCurrency(item.prices.rrp_price)}</td>
-                  <td className={`${styles.num} ${styles.priceCell}`}>
+                  <td className={`${styles.num} ${styles.priceCell} ${staleCellClass || ''}`}>
                     {formatCurrency(item.prices.showcase_price)}
                     {expectedShowcase !== null && <span className={styles.priceHint}>≈ {formatCurrency(expectedShowcase)}</span>}
                   </td>
-                  <td className={styles.num}>
+                  <td className={`${styles.num} ${staleCellClass || ''}`}>
                     <div>{item.discounts.wb_discount_percent ?? '—'}%</div>
                     <span className={styles.priceHint}>СПП {item.discounts.spp_percent ?? '—'}%</span>
                   </td>
-                  <td className={styles.num}>
+                  <td className={`${styles.num} ${staleCellClass || ''}`}>
                     {hasShowcase && diffRub !== null ? (
                       <span
                         className={`${styles.deltaBadge} ${isBelow ? styles.deltaDanger : styles.deltaNeutral}`}
@@ -1477,8 +1485,10 @@ function RrpReportTable({ items, meta, showAll, loading, onToggleShowAll, onPage
                       '—'
                     )}
                   </td>
-                  <td className={`${styles.num} ${styles.recommend}`}>
-                    {recommended !== null ? (
+                  <td className={`${styles.num} ${styles.recommend} ${staleCellClass || ''}`}>
+                    {isShowcaseStale ? (
+                      <div className={styles.staleShowcaseNotice}>Ждем обновления витрины WB</div>
+                    ) : recommended !== null ? (
                       <button
                         type="button"
                         className={styles.recommendButton}

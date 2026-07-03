@@ -249,7 +249,8 @@ def _build_discrepancies_sql(
             ps.nm_id::bigint AS nm_id,
             ps.wb_price        AS wb_admin_price,
             ps.wb_discount     AS wb_discount_percent,
-            ps.created_at      AS wb_price_updated_at
+            ps.created_at      AS wb_price_updated_at,
+            ps.raw->>'source'  AS wb_price_source
         FROM price_snapshots ps
         WHERE ps.project_id = :project_id
         ORDER BY ps.nm_id, ps.created_at DESC
@@ -291,11 +292,13 @@ def _build_discrepancies_sql(
             wb_price_latest.wb_discount_percent,
             front_latest.showcase_price,
             front_latest.spp_percent,
+            front_latest.showcase_updated_at,
             stock_latest.wb_stock_qty,
             rrp_run.run_at     AS rrp_updated_at,
             stock_run.run_at   AS stock_updated_at,
             front_run.run_at   AS showcase_run_at,
-            wb_price_latest.wb_price_updated_at
+            wb_price_latest.wb_price_updated_at,
+            wb_price_latest.wb_price_source
         FROM products p
         LEFT JOIN rrp_latest ON btrim(rrp_latest.vendor_code_norm) = btrim(p.vendor_code_norm)
         LEFT JOIN wb_price_latest ON wb_price_latest.nm_id = p.nm_id
@@ -399,7 +402,9 @@ def _build_discrepancies_sql(
         rrp_updated_at,
         stock_updated_at,
         showcase_run_at,
+        showcase_updated_at,
         wb_price_updated_at,
+        wb_price_source,
         total_count
     FROM counted
     ORDER BY {order_clause}
@@ -466,6 +471,24 @@ def _row_to_item(row: Dict[str, Any]) -> Dict[str, Any]:
         if row.get("expected_showcase_price") is not None
         else None,
     }
+    wb_price_updated_at = row.get("wb_price_updated_at")
+    showcase_updated_at = row.get("showcase_updated_at")
+    if isinstance(wb_price_updated_at, datetime) and wb_price_updated_at.tzinfo is None:
+        wb_price_updated_at = wb_price_updated_at.replace(tzinfo=timezone.utc)
+    if isinstance(showcase_updated_at, datetime) and showcase_updated_at.tzinfo is None:
+        showcase_updated_at = showcase_updated_at.replace(tzinfo=timezone.utc)
+    showcase_price_stale = (
+        row.get("wb_price_source") == "price_discrepancy_manual_apply"
+        and isinstance(wb_price_updated_at, datetime)
+        and isinstance(showcase_updated_at, datetime)
+        and wb_price_updated_at > showcase_updated_at
+    )
+    staleness = {
+        "showcase_price_stale": showcase_price_stale,
+        "reason": "awaiting_showcase_refresh" if showcase_price_stale else None,
+        "wb_price_updated_at": wb_price_updated_at.isoformat() if isinstance(wb_price_updated_at, datetime) else None,
+        "showcase_updated_at": showcase_updated_at.isoformat() if isinstance(showcase_updated_at, datetime) else None,
+    }
 
     category = None
     if row.get("category_id") is not None or row.get("category_name") is not None:
@@ -484,6 +507,7 @@ def _row_to_item(row: Dict[str, Any]) -> Dict[str, Any]:
         "discounts": discounts,
         "stocks": stocks,
         "computed": computed,
+        "staleness": staleness,
     }
 
 
