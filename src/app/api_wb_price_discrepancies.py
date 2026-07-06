@@ -130,6 +130,7 @@ class DiscrepancyFilters:
     sort: SortKey
     page: int
     page_size: int
+    nm_ids: Optional[List[int]] = None
 
 
 def _parse_category_ids(raw: Optional[str]) -> List[int]:
@@ -170,6 +171,7 @@ def _build_discrepancies_sql(
         "category_ids": filters.category_ids or None,
         "front_snapshot_at": filters.front_snapshot_at,
         "brand_ids": get_project_frontend_brand_id_strings(project_id),
+        "nm_ids": filters.nm_ids or None,
     }
 
     # Search by article / nm_id / title
@@ -200,6 +202,9 @@ def _build_discrepancies_sql(
     # Category filter (subject_id from products)
     if filters.category_ids:
         where_clauses.append("p.subject_id = ANY(:category_ids)")
+
+    if filters.nm_ids:
+        where_clauses.append("p.nm_id = ANY(:nm_ids)")
 
     # Stock filters
     if filters.has_wb_stock == "true":
@@ -516,8 +521,24 @@ def _row_to_item(row: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _get_price_discrepancy_item(project_id: int, nm_id: int) -> Optional[Dict[str, Any]]:
+    return _get_price_discrepancy_items(project_id, [nm_id]).get(nm_id)
+
+
+def _get_price_discrepancy_items(project_id: int, nm_ids: List[int]) -> Dict[int, Dict[str, Any]]:
+    normalized_nm_ids: set[int] = set()
+    for nm_id in nm_ids:
+        try:
+            normalized_nm_id = int(nm_id)
+        except (TypeError, ValueError):
+            continue
+        if normalized_nm_id > 0:
+            normalized_nm_ids.add(normalized_nm_id)
+    unique_nm_ids = sorted(normalized_nm_ids)
+    if not unique_nm_ids:
+        return {}
+
     filters = DiscrepancyFilters(
-        q=str(nm_id),
+        q=None,
         category_ids=[],
         only_below_rrp=False,
         has_wb_stock="any",
@@ -525,44 +546,67 @@ def _get_price_discrepancy_item(project_id: int, nm_id: int) -> Optional[Dict[st
         front_snapshot_at=None,
         sort="nm_id_asc",
         page=1,
-        page_size=5,
+        page_size=len(unique_nm_ids),
+        nm_ids=unique_nm_ids,
     )
     sql, params = _build_discrepancies_sql(project_id, filters)
     with engine.connect() as conn:
         rows = conn.execute(text(sql), params).mappings().all()
+
+    items_by_nm_id: Dict[int, Dict[str, Any]] = {}
     for row in rows:
         row_dict = dict(row)
-        if int(row_dict.get("nm_id") or 0) == nm_id:
-            return _row_to_item(row_dict)
-    return None
+        row_nm_id = int(row_dict.get("nm_id") or 0)
+        if row_nm_id:
+            items_by_nm_id[row_nm_id] = _row_to_item(row_dict)
+    return items_by_nm_id
 
 
-def _get_latest_price_raw(project_id: int, nm_id: int) -> Dict[str, Any]:
-    with engine.connect() as conn:
-        raw = conn.execute(
-            text(
-                """
-                SELECT raw
-                FROM price_snapshots
-                WHERE project_id = :project_id
-                  AND nm_id = :nm_id
-                ORDER BY created_at DESC
-                LIMIT 1
-                """
-            ),
-            {"project_id": project_id, "nm_id": nm_id},
-        ).scalar()
+def _parse_price_raw(raw: Any) -> Dict[str, Any]:
     if isinstance(raw, dict):
         return raw
     if isinstance(raw, str):
         try:
-            import json
-
             parsed = json.loads(raw)
             return parsed if isinstance(parsed, dict) else {}
         except Exception:
             return {}
     return {}
+
+
+def _get_latest_price_raw(project_id: int, nm_id: int) -> Dict[str, Any]:
+    return _get_latest_price_raws(project_id, [nm_id]).get(nm_id, {})
+
+
+def _get_latest_price_raws(project_id: int, nm_ids: List[int]) -> Dict[int, Dict[str, Any]]:
+    normalized_nm_ids: set[int] = set()
+    for nm_id in nm_ids:
+        try:
+            normalized_nm_id = int(nm_id)
+        except (TypeError, ValueError):
+            continue
+        if normalized_nm_id > 0:
+            normalized_nm_ids.add(normalized_nm_id)
+    unique_nm_ids = sorted(normalized_nm_ids)
+    if not unique_nm_ids:
+        return {}
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                """
+                SELECT DISTINCT ON (nm_id)
+                    nm_id::bigint AS nm_id,
+                    raw
+                FROM price_snapshots
+                WHERE project_id = :project_id
+                  AND nm_id = ANY(:nm_ids)
+                ORDER BY nm_id, created_at DESC
+                """
+            ),
+            {"project_id": project_id, "nm_ids": unique_nm_ids},
+        ).mappings().all()
+    return {int(row["nm_id"]): _parse_price_raw(row.get("raw")) for row in rows}
 
 
 def _coerce_int_price(value: Any) -> Optional[int]:
@@ -803,9 +847,11 @@ async def apply_wb_recommended_prices_bulk(
 
     ready: List[Dict[str, Any]] = []
     skipped: List[Dict[str, Any]] = []
+    items_by_nm_id = _get_price_discrepancy_items(project_id, nm_ids)
+    raw_prices_by_nm_id = _get_latest_price_raws(project_id, nm_ids)
 
     for nm_id in nm_ids:
-        item = _get_price_discrepancy_item(project_id, nm_id)
+        item = items_by_nm_id.get(nm_id)
         if not item:
             skipped.append({"nm_id": nm_id, "reason": "not_found", "message": "Товар не найден в отчете"})
             continue
@@ -833,7 +879,7 @@ async def apply_wb_recommended_prices_bulk(
             )
             continue
 
-        raw_price = _get_latest_price_raw(project_id, nm_id)
+        raw_price = raw_prices_by_nm_id.get(nm_id, {})
         if bool(raw_price.get("editableSizePrice")):
             skipped.append(
                 {
