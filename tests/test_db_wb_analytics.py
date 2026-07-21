@@ -4,6 +4,8 @@ from __future__ import annotations
 from datetime import date
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from app.db_wb_analytics import _chunked, get_wb_nm_ids_for_project, get_funnel_signals_raw
 
 
@@ -118,3 +120,33 @@ def test_get_funnel_signals_raw_carts_zero_cart_to_order_none():
     assert result[0]["cart_to_order"] is None
     assert result[0]["cart_rate"] == 0.0
     assert result[0]["order_rate"] == 0.0
+
+
+def test_get_funnel_signals_uses_weighted_ctr_and_quality_filter_sql():
+    """CTR must be SUM(clicks)/SUM(impressions), never AVG(reported_ctr)."""
+    with patch("app.db_wb_analytics.engine") as mock_engine:
+        mock_conn = MagicMock()
+        mock_result = MagicMock()
+        mock_result.fetchall.return_value = [
+            (101, 500, 10, 2, 1000, None, None, None, None, None, 103, 15, 14.5631, 2, 1),
+        ]
+        mock_conn.execute.return_value = mock_result
+        mock_cm = MagicMock()
+        mock_cm.__enter__.return_value = mock_conn
+        mock_cm.__exit__.return_value = None
+        mock_engine.connect.return_value = mock_cm
+
+        result = get_funnel_signals_raw(
+            project_id=1,
+            period_from=date(2025, 1, 1),
+            period_to=date(2025, 1, 31),
+            ctr_mode="quality_filtered",
+        )
+
+    sql = str(mock_conn.execute.call_args.args[0])
+    assert "SUM(card_clicks)" in sql
+    assert "SUM(impressions)" in sql
+    assert "AVG(reported_ctr)" not in sql
+    assert "CLICKS_EXCEED_IMPRESSIONS" in sql
+    assert result[0]["funnel_ctr_percent"] == pytest.approx(14.5631)
+    assert result[0]["quality_excluded_rows"] == 1

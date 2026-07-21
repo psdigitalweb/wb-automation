@@ -211,31 +211,44 @@ def get_content_analytics_summary(
     period_from: date,
     period_to: date,
     nm_id: Optional[int] = None,
+    ctr_mode: str = "raw",
 ) -> List[Dict[str, Any]]:
     """Aggregate wb_card_stats_daily by nm_id for content analytics funnel.
 
     Returns: list of dicts with keys nm_id, opens, add_to_cart, cart_rate, orders, conversion, revenue.
     cart_rate = add_to_cart/opens, conversion = orders/add_to_cart (NULL when divisor is 0).
     """
-    sql = text("""
-        SELECT
-            nm_id,
-            COALESCE(SUM(open_count), 0)::bigint AS opens,
-            COALESCE(SUM(cart_count), 0)::bigint AS add_to_cart,
-            CASE WHEN SUM(open_count) > 0
-                THEN SUM(cart_count)::numeric / NULLIF(SUM(open_count), 0)
-                ELSE NULL END AS cart_rate,
-            COALESCE(SUM(order_count), 0)::bigint AS orders,
-            CASE WHEN SUM(cart_count) > 0
-                THEN SUM(order_count)::numeric / NULLIF(SUM(cart_count), 0)
-                ELSE NULL END AS conversion,
-            COALESCE(SUM(order_sum), 0)::numeric AS revenue
-        FROM wb_card_stats_daily
-        WHERE project_id = :project_id
-          AND stat_date >= :period_from AND stat_date <= :period_to
-          AND (:nm_id IS NULL OR nm_id = :nm_id)
-        GROUP BY nm_id
-        ORDER BY nm_id
+    eligible = "TRUE" if ctr_mode == "raw" else "NOT (quality_flags && ARRAY['ZERO_IMPRESSIONS_WITH_CLICKS','CLICKS_EXCEED_IMPRESSIONS','CTR_EXCEEDS_100','REPORTED_CTR_MISMATCH','DELETED_PRODUCT']::text[])"
+    sql = text(f"""
+        WITH stats AS (
+            SELECT nm_id,
+                   COALESCE(SUM(open_count), 0)::bigint AS opens,
+                   COALESCE(SUM(cart_count), 0)::bigint AS add_to_cart,
+                   CASE WHEN SUM(open_count) > 0 THEN SUM(cart_count)::numeric / SUM(open_count) ELSE NULL END AS cart_rate,
+                   COALESCE(SUM(order_count), 0)::bigint AS orders,
+                   CASE WHEN SUM(cart_count) > 0 THEN SUM(order_count)::numeric / SUM(cart_count) ELSE NULL END AS conversion,
+                   COALESCE(SUM(order_sum), 0)::numeric AS revenue
+            FROM wb_card_stats_daily
+            WHERE project_id = :project_id AND stat_date BETWEEN :period_from AND :period_to
+              AND (:nm_id IS NULL OR nm_id = :nm_id)
+            GROUP BY nm_id
+        ), ctr AS (
+            SELECT nm_id,
+                   COALESCE(SUM(impressions) FILTER (WHERE {eligible}), 0)::bigint AS impressions,
+                   COALESCE(SUM(card_clicks) FILTER (WHERE {eligible}), 0)::bigint AS card_clicks,
+                   COUNT(DISTINCT stat_date) FILTER (WHERE {eligible} AND impressions > 0)::integer AS active_days,
+                   COUNT(*) FILTER (WHERE NOT ({eligible}))::integer AS excluded_rows
+            FROM wb_funnel_ctr_daily
+            WHERE project_id = :project_id AND stat_date BETWEEN :period_from AND :period_to
+              AND (:nm_id IS NULL OR nm_id = :nm_id)
+            GROUP BY nm_id
+        )
+        SELECT stats.nm_id, stats.opens, stats.add_to_cart, stats.cart_rate, stats.orders,
+               stats.conversion, stats.revenue, COALESCE(ctr.impressions, 0),
+               COALESCE(ctr.card_clicks, 0),
+               CASE WHEN ctr.impressions > 0 THEN ctr.card_clicks::numeric / ctr.impressions * 100 ELSE NULL END,
+               COALESCE(ctr.active_days, 0), COALESCE(ctr.excluded_rows, 0)
+        FROM stats LEFT JOIN ctr USING (nm_id) ORDER BY stats.nm_id
     """)
     params: Dict[str, Any] = {
         "project_id": project_id,
@@ -245,6 +258,8 @@ def get_content_analytics_summary(
     }
     with engine.connect() as conn:
         rows = conn.execute(sql, params).fetchall()
+    from app.services.wb_funnel_quality import get_quality_config, sample_tier
+    config = get_quality_config()
     return [
         {
             "nm_id": int(r[0]),
@@ -254,6 +269,13 @@ def get_content_analytics_summary(
             "orders": int(r[4]),
             "conversion": float(r[5]) if r[5] is not None else None,
             "revenue": float(r[6]) if r[6] is not None else 0,
+            "impressions": int(r[7] or 0),
+            "card_clicks": int(r[8] or 0),
+            "funnel_ctr_percent": float(r[9]) if r[9] is not None else None,
+            "active_days_with_impressions": int(r[10] or 0),
+            "quality_excluded_rows": int(r[11] or 0),
+            "ctr_sample_tier": sample_tier(int(r[7] or 0), config),
+            "ctr_quality_flags": (["INSUFFICIENT_ACTIVE_DAYS"] if int(r[7] or 0) > 0 and int(r[10] or 0) < config.recommended_active_days else []),
         }
         for r in rows
     ]
@@ -315,6 +337,7 @@ def get_funnel_signals_raw(
     period_to: date,
     only_cart_gt0: bool = False,
     wb_category: Optional[str] = None,
+    ctr_mode: str = "raw",
 ) -> List[Dict[str, Any]]:
     """Raw aggregation by nm_id for funnel signals. Sums from SQL; derived in Python.
     LEFT JOIN products for title, subject_name (wb_category), pics (first → image_url).
@@ -323,6 +346,7 @@ def get_funnel_signals_raw(
     join_filter = " AND p.subject_name = :wb_category" if wb_category else ""
     where_category = " AND p.nm_id IS NOT NULL" if wb_category else ""
 
+    eligible = "TRUE" if ctr_mode == "raw" else "NOT (quality_flags && ARRAY['ZERO_IMPRESSIONS_WITH_CLICKS','CLICKS_EXCEED_IMPRESSIONS','CTR_EXCEEDS_100','REPORTED_CTR_MISMATCH','DELETED_PRODUCT']::text[])"
     sql = text(f"""
         WITH agg AS (
             SELECT
@@ -336,6 +360,15 @@ def get_funnel_signals_raw(
               AND stat_date >= :period_from AND stat_date <= :period_to
             GROUP BY nm_id
             {having}
+        ), ctr AS (
+            SELECT nm_id,
+                   COALESCE(SUM(impressions) FILTER (WHERE {eligible}), 0)::bigint AS impressions,
+                   COALESCE(SUM(card_clicks) FILTER (WHERE {eligible}), 0)::bigint AS card_clicks,
+                   COUNT(DISTINCT stat_date) FILTER (WHERE {eligible} AND impressions > 0)::integer AS active_days,
+                   COUNT(*) FILTER (WHERE NOT ({eligible}))::integer AS excluded_rows
+            FROM wb_funnel_ctr_daily
+            WHERE project_id = :project_id AND stat_date BETWEEN :period_from AND :period_to
+            GROUP BY nm_id
         )
         SELECT
             agg.nm_id,
@@ -347,8 +380,12 @@ def get_funnel_signals_raw(
             p.subject_name AS wb_category,
             p.pics AS pics,
             p.vendor_code AS vendor_code,
-            p.vendor_code_norm AS vendor_code_norm
+            p.vendor_code_norm AS vendor_code_norm,
+            COALESCE(ctr.impressions, 0), COALESCE(ctr.card_clicks, 0),
+            CASE WHEN ctr.impressions > 0 THEN ctr.card_clicks::numeric / ctr.impressions * 100 ELSE NULL END,
+            COALESCE(ctr.active_days, 0), COALESCE(ctr.excluded_rows, 0)
         FROM agg
+        LEFT JOIN ctr ON ctr.nm_id = agg.nm_id
         LEFT JOIN products p ON p.project_id = :project_id AND p.nm_id = agg.nm_id{join_filter}
         WHERE 1=1{where_category}
         ORDER BY agg.nm_id
@@ -362,6 +399,8 @@ def get_funnel_signals_raw(
         params["wb_category"] = wb_category
     with engine.connect() as conn:
         rows = conn.execute(sql, params).fetchall()
+    from app.services.wb_funnel_quality import get_quality_config, sample_tier
+    config = get_quality_config()
     result = []
     for r in rows:
         nm_id = int(r[0])
@@ -378,6 +417,11 @@ def get_funnel_signals_raw(
         pics = r[7]
         vendor_code = r[8] if len(r) > 8 and r[8] is not None else None
         vendor_code_norm = r[9] if len(r) > 9 and r[9] is not None else None
+        impressions = int(r[10] or 0) if len(r) > 10 else 0
+        card_clicks = int(r[11] or 0) if len(r) > 11 else 0
+        funnel_ctr_percent = float(r[12]) if len(r) > 12 and r[12] is not None else None
+        active_days = int(r[13] or 0) if len(r) > 13 else 0
+        excluded_rows = int(r[14] or 0) if len(r) > 14 else 0
         image_url = _first_image_url_from_pics(pics)
         result.append({
             "nm_id": nm_id,
@@ -394,6 +438,13 @@ def get_funnel_signals_raw(
             "image_url": image_url,
             "vendor_code": vendor_code,
             "vendor_code_norm": vendor_code_norm,
+            "impressions": impressions,
+            "card_clicks": card_clicks,
+            "funnel_ctr_percent": funnel_ctr_percent,
+            "active_days_with_impressions": active_days,
+            "quality_excluded_rows": excluded_rows,
+            "ctr_sample_tier": sample_tier(impressions, config),
+            "ctr_quality_flags": (["INSUFFICIENT_ACTIVE_DAYS"] if impressions > 0 and active_days < config.recommended_active_days else []),
         })
     return result
 

@@ -858,12 +858,23 @@ export interface WBUnitPnlRow {
   cogs_missing?: boolean
   commission_vv_signed?: number | null
   acquiring?: number | null
+  wb_own_total_signed?: number | null
+  wb_common_allocated_total?: number | null
+  wb_common_allocated_per_unit?: number | null
   wb_total_signed?: number | null
   wb_total_cost_per_unit?: number | null
   profit_per_unit?: number | null
   margin_pct_of_revenue?: number | null
   margin_pct_of_rrp?: number | null
   markup_pct_of_cogs?: number | null
+  packaging_cost_per_unit?: number | null
+  packaging_cost_total?: number | null
+  packaging_missing?: boolean
+  additional_costs_total?: number
+  additional_costs_per_unit?: number
+  full_profit_per_unit?: number | null
+  full_profit_total?: number | null
+  full_margin_pct_of_revenue?: number | null
 }
 
 export interface WBUnitPnlResponse {
@@ -884,6 +895,10 @@ export interface WBUnitPnlResponse {
     other_withholdings?: number
     penalties?: number
     loyalty_comp_display?: number
+    commission_vv_signed?: number | null
+    acquiring?: number | null
+    wb_total_signed?: number | null
+    wb_total_pct_of_revenue?: number | null
     total_to_pay?: number
     rrp_sales_model?: number | null
     wb_take_from_rrp?: number | null
@@ -891,6 +906,22 @@ export interface WBUnitPnlResponse {
     rrp_coverage_pct?: number | null
     rrp_net_units_covered?: number | null
     net_units_total?: number | null
+    packaging_cost_total?: number | null
+    cogs_cost_total?: number | null
+    packaging_missing_count?: number
+    additional_costs_total?: number | null
+    marketplace_additional_costs_total?: number | null
+    warehouse_labor_costs_total?: number | null
+    tax_model_code?: string | null
+    tax_base?: number | null
+    tax_vat_amount?: number | null
+    tax_profit_amount?: number | null
+    tax_expense_total?: number | null
+    tax_rate?: number | null
+    tax_vat_rate?: number | null
+    full_profit_before_tax_total?: number | null
+    full_profit_total?: number | null
+    full_margin_pct_of_revenue?: number | null
   }
   debug?: Record<string, number>
 }
@@ -908,6 +939,9 @@ export interface WBUnitPnlDetailsResponse {
   }
   commission_vv_signed?: number | null
   acquiring?: number | null
+  wb_own_total_signed?: number | null
+  wb_common_allocated_total?: number | null
+  wb_common_allocated_per_unit?: number | null
   wb_total_signed?: number | null
   wb_total_pct_of_sale?: number | null
   wb_costs_per_unit: {
@@ -920,8 +954,12 @@ export interface WBUnitPnlDetailsResponse {
       acceptance?: number | null
       withholdings?: number | null
       penalties?: number | null
+      common_wb_allocated?: number | null
       total?: number | null
     }
+    own_wb_total_signed?: number
+    common_wb_allocated_total?: number
+    common_wb_allocation_basis?: Record<string, number>
     logistics_cost?: number
     storage_cost?: number
     acceptance_cost?: number
@@ -943,6 +981,16 @@ export interface WBUnitPnlDetailsResponse {
     cogs_missing?: boolean
     cogs_per_unit?: number
     cogs_total?: number
+  }
+  extended_costs?: {
+    packaging_cost_per_unit?: number | null
+    packaging_cost_total?: number | null
+    packaging_missing?: boolean
+    product_additional_costs_total?: number
+    marketplace_additional_costs_total?: number
+    warehouse_labor_costs_total?: number
+    additional_costs_total?: number
+    additional_costs_per_unit?: number
   }
   debug?: {
     retail_price_nonzero_rows?: number
@@ -2462,6 +2510,13 @@ export interface FunnelSignalsItem {
   order_rate: number | null
   cart_to_order: number | null
   avg_check: number | null
+  impressions: number
+  card_clicks: number
+  funnel_ctr_percent: number | null
+  active_days_with_impressions: number
+  quality_excluded_rows: number
+  ctr_sample_tier: 'insufficient' | 'indicative' | 'reliable' | 'high_sample'
+  ctr_quality_flags: string[]
   signal_code: string
   signal: string
   signal_label: string
@@ -2495,6 +2550,7 @@ export async function getFunnelSignals(
     only_fbo_gt0?: boolean
     wb_category?: string
     signal_code?: string
+    ctr_mode?: 'raw' | 'quality_filtered'
     page?: number
     page_size?: number
     sort?: string
@@ -2512,12 +2568,34 @@ export async function getFunnelSignals(
   if (params.only_fbo_gt0 === true) qs.set('only_fbo_gt0', 'true')
   if (params.wb_category != null && params.wb_category !== '') qs.set('wb_category', params.wb_category)
   if (params.signal_code != null && params.signal_code !== '') qs.set('signal_code', params.signal_code)
+  if (params.ctr_mode != null) qs.set('ctr_mode', params.ctr_mode)
   if (params.page != null && params.page >= 1) qs.set('page', String(params.page))
   if (params.page_size != null && params.page_size >= 1) qs.set('page_size', String(params.page_size))
   if (params.sort != null && params.sort !== '') qs.set('sort', params.sort)
   if (params.order != null) qs.set('order', params.order)
   const res = await apiGet<FunnelSignalsResponse>(
     `/api/v1/projects/${projectId}/wildberries/analytics/funnel-signals?${qs.toString()}`
+  )
+  return res.data
+}
+
+export interface WBFunnelImportResponse {
+  id: number
+  original_filename: string
+  source_type: string
+  period_from: string
+  period_to: string
+  rows_total: number
+  quality_summary: { flag_counts?: Record<string, number>; warning_rows?: number }
+  duplicate: boolean
+}
+
+export async function uploadWBFunnelReport(projectId: string, file: File): Promise<WBFunnelImportResponse> {
+  const form = new FormData()
+  form.append('file', file)
+  const res = await apiRequest<WBFunnelImportResponse>(
+    `/api/v1/projects/${projectId}/wildberries/funnel-report/import`,
+    { method: 'POST', body: form }
   )
   return res.data
 }
@@ -2553,6 +2631,72 @@ export async function getFunnelSignalsCategoriesStats(
   if (params.signal_code != null && params.signal_code !== '') qs.set('signal_code', params.signal_code)
   const res = await apiGet<FunnelSignalsCategoryItem[]>(
     `/api/v1/projects/${projectId}/wildberries/analytics/funnel-signals/categories-stats?${qs.toString()}`
+  )
+  return res.data
+}
+
+// Order geography
+export type OrderGeographyGroupBy = 'country' | 'region' | 'city' | 'ppvz' | 'office'
+
+export interface OrderGeographySummary {
+  orders: number
+  gross_sales: number
+  countries: number
+  regions: number
+  cities: number
+  ppvz_count: number
+  top_region: string | null
+}
+
+export interface OrderGeographyItem {
+  country: string | null
+  region: string | null
+  city: string | null
+  ppvz_office_id: string | null
+  ppvz_office_name: string | null
+  office_name: string | null
+  orders: number
+  share: number
+  gross_sales: number
+  unique_nm_ids: number
+  top_nm_id: number | null
+  top_nm_orders: number
+  first_order_date: string | null
+  last_order_date: string | null
+}
+
+export interface OrderGeographyResponse {
+  summary: OrderGeographySummary
+  items: OrderGeographyItem[]
+  group_by: OrderGeographyGroupBy
+  limit: number
+  total_groups: number
+}
+
+export async function getOrderGeography(
+  projectId: string,
+  params: {
+    period_from: string
+    period_to: string
+    group_by?: OrderGeographyGroupBy
+    country?: string
+    nm_id?: number
+    vendor_code?: string
+    office_name?: string
+    limit?: number
+  }
+): Promise<OrderGeographyResponse> {
+  const qs = new URLSearchParams()
+  qs.set('period_from', params.period_from)
+  qs.set('period_to', params.period_to)
+  if (params.group_by != null) qs.set('group_by', params.group_by)
+  if (params.country != null && params.country !== '') qs.set('country', params.country)
+  if (params.nm_id != null && !Number.isNaN(params.nm_id)) qs.set('nm_id', String(params.nm_id))
+  if (params.vendor_code != null && params.vendor_code !== '') qs.set('vendor_code', params.vendor_code)
+  if (params.office_name != null && params.office_name !== '') qs.set('office_name', params.office_name)
+  if (params.limit != null && !Number.isNaN(params.limit)) qs.set('limit', String(params.limit))
+  const res = await apiGet<OrderGeographyResponse>(
+    `/api/v1/projects/${projectId}/wildberries/order-geography?${qs.toString()}`
   )
   return res.data
 }

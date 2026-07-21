@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation'
 import {
   getFunnelSignals,
   getFunnelSignalsCategoriesStats,
+  uploadWBFunnelReport,
   type FunnelSignalsCategoryItem,
   type FunnelSignalsItem,
   type FunnelSignalsResponse,
@@ -245,6 +246,11 @@ function SeverityBadge({ severity }: { severity: string | null }) {
   )
 }
 
+function formatPctPoints(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) return '—'
+  return `${value.toFixed(1)}%`
+}
+
 interface WbCategoryPopoverProps {
   categories: FunnelSignalsCategoryItem[]
   value: string
@@ -374,6 +380,9 @@ export default function FunnelSignalsPage() {
   const [periodFrom, setPeriodFrom] = useState('')
   const [periodTo, setPeriodTo] = useState('')
   const [minOpens, setMinOpens] = useState(200)
+  const [ctrMode, setCtrMode] = useState<'raw' | 'quality_filtered'>('raw')
+  const [importing, setImporting] = useState(false)
+  const [importMessage, setImportMessage] = useState<string | null>(null)
   const [signalFilter, setSignalFilter] = useState('')
   const [onlyCartGt0, setOnlyCartGt0] = useState(false)
   const [wbCategory, setWbCategory] = useState('')
@@ -442,6 +451,7 @@ export default function FunnelSignalsPage() {
         only_fbo_gt0: onlyFboGt0,
         wb_category: wbCategory || undefined,
         signal_code: signalFilter || undefined,
+        ctr_mode: ctrMode,
         page: pageNum,
         page_size: size,
         sort: sortVal,
@@ -468,6 +478,7 @@ export default function FunnelSignalsPage() {
       onlyFboGt0,
       wbCategory,
       signalFilter,
+      ctrMode,
       pageSize,
       sortBy,
       sortOrder,
@@ -531,6 +542,7 @@ export default function FunnelSignalsPage() {
         only_fbo_gt0: onlyFboGt0,
         wb_category: wbCategory || undefined,
         signal_code: signalFilter || undefined,
+        ctr_mode: ctrMode,
         page: 1,
         page_size: pageSizeExport,
         sort: sortBy,
@@ -548,6 +560,7 @@ export default function FunnelSignalsPage() {
           only_fbo_gt0: onlyFboGt0,
           wb_category: wbCategory || undefined,
           signal_code: signalFilter || undefined,
+          ctr_mode: ctrMode,
           page: p,
           page_size: pageSizeExport,
           sort: sortBy,
@@ -562,6 +575,12 @@ export default function FunnelSignalsPage() {
         'nmID',
         'Название',
         'Склад',
+        'Показы',
+        'Переходы для CTR',
+        'WB funnel CTR',
+        'CTR sample tier',
+        'Дней с показами',
+        'Исключено quality-строк',
         'Просмотры',
         'Корзины (шт)',
         'Корзины %',
@@ -602,6 +621,12 @@ export default function FunnelSignalsPage() {
             esc(r.nm_id),
             esc(r.title ?? ''),
             esc(intRaw(r.enterprise_stock_qty ?? null)),
+            esc(intRaw(r.impressions)),
+            esc(intRaw(r.card_clicks)),
+            esc(r.funnel_ctr_percent == null ? '' : `${r.funnel_ctr_percent.toFixed(1)}%`),
+            esc(r.ctr_sample_tier),
+            esc(intRaw(r.active_days_with_impressions)),
+            esc(intRaw(r.quality_excluded_rows)),
             esc(intRaw(r.opens)),
             esc(intRaw(r.carts)),
             esc(pct1(r.cart_rate)),
@@ -639,6 +664,7 @@ export default function FunnelSignalsPage() {
     onlyFboGt0,
     wbCategory,
     signalFilter,
+    ctrMode,
     sortBy,
     sortOrder,
   ])
@@ -662,13 +688,54 @@ export default function FunnelSignalsPage() {
             <strong>{formatInt(meta.total)}</strong>
           </div>
         )}
+        <label className={styles.buttonPrimary} style={{ cursor: importing ? 'wait' : 'pointer' }}>
+          {importing ? 'Загрузка…' : 'Загрузить XLSX / CSV / ZIP'}
+          <input
+            type="file"
+            accept=".xlsx,.csv,.zip"
+            hidden
+            disabled={importing}
+            onChange={async (event) => {
+              const selected = event.target.files?.[0]
+              event.target.value = ''
+              if (!selected || !projectId) return
+              setImporting(true)
+              setImportMessage(null)
+              setError(null)
+              try {
+                const result = await uploadWBFunnelReport(projectId, selected)
+                setImportMessage(result.duplicate
+                  ? `Отчёт уже загружен: ${result.rows_total} строк`
+                  : `Загружено ${result.rows_total} строк за ${result.period_from} — ${result.period_to}`)
+                load(1)
+              } catch (e: unknown) {
+                setError((e as { detail?: string })?.detail || 'Не удалось загрузить отчёт')
+              } finally {
+                setImporting(false)
+              }
+            }}
+          />
+        </label>
       </header>
+
+      {importMessage && <div style={{ marginBottom: 16, color: '#166534' }}>{importMessage}</div>}
 
       {/* Form: row1 = даты, мин. открытий, сигнал, кнопка; row2 = Категория WB, чекбокс */}
       <div className={styles.filterCard}>
         <div className={styles.filterCardInner}>
           <h3>Фильтры</h3>
           <div className={styles.filterGrid}>
+            <div className={styles.field}>
+              <label className={styles.fieldLabel}>Режим CTR</label>
+              <select
+                value={ctrMode}
+                onChange={(e) => setCtrMode(e.target.value as 'raw' | 'quality_filtered')}
+                className={styles.control}
+              >
+                <option value="raw">Raw / blended</option>
+                <option value="quality_filtered">Quality filtered</option>
+              </select>
+            </div>
             <div className={styles.field}>
               <label className={styles.fieldLabel}>Дата с</label>
               <input
@@ -803,6 +870,8 @@ export default function FunnelSignalsPage() {
                 <col style={{ width: 70 }} />
                 <col style={{ width: 70 }} />
                 <col style={{ width: 90 }} />
+                <col style={{ width: 90 }} />
+                <col style={{ width: 90 }} />
                 <col style={{ width: 85 }} />
                 <col style={{ width: 95 }} />
                 <col style={{ width: 88 }} />
@@ -825,6 +894,12 @@ export default function FunnelSignalsPage() {
                     title="Остаток предприятия из каталога/РРЦ (если загружено)"
                   >
                     Склад
+                  </th>
+                  <th style={{ padding: '10px 8px', textAlign: 'right', fontWeight: 600 }} title="Показы из загруженного отчёта WB">
+                    Показы
+                  </th>
+                  <th style={{ padding: '10px 8px', textAlign: 'right', fontWeight: 600 }} title="SUM(переходы) / SUM(показы), не среднее reported CTR">
+                    WB funnel CTR
                   </th>
                   <th
                     style={{
@@ -1001,6 +1076,10 @@ export default function FunnelSignalsPage() {
                         title={row.enterprise_stock_updated_at ? `Обновлено: ${new Date(row.enterprise_stock_updated_at).toLocaleString('ru-RU')}` : ''}
                       >
                         {formatInt(row.enterprise_stock_qty)}
+                      </td>
+                      <td style={{ padding: '8px 6px', textAlign: 'right' }}>{formatInt(row.impressions)}</td>
+                      <td style={{ padding: '8px 6px', textAlign: 'right' }} title={row.ctr_quality_flags.join(', ')}>
+                        {formatPctPoints(row.funnel_ctr_percent)}
                       </td>
                       <td style={{ padding: '8px 6px', textAlign: 'right' }}>{formatInt(row.opens)}</td>
                       <td style={{ padding: '8px 6px', textAlign: 'right' }}>{formatPct(row.cart_rate)}</td>

@@ -86,6 +86,7 @@ async def get_content_analytics_summary_endpoint(
     period_from: date = Query(..., description="Start date (YYYY-MM-DD)"),
     period_to: date = Query(..., description="End date (YYYY-MM-DD)"),
     nm_id: Optional[int] = Query(None, description="Filter by nm_id"),
+    ctr_mode: str = Query("raw", pattern="^(raw|quality_filtered)$"),
     _member=Depends(get_project_membership),
 ):
     """Aggregated funnel by nm_id: opens, add to cart, cart rate, orders, conversion, revenue."""
@@ -94,6 +95,7 @@ async def get_content_analytics_summary_endpoint(
         period_from=period_from,
         period_to=period_to,
         nm_id=nm_id,
+        ctr_mode=ctr_mode,
     )
     return ContentAnalyticsSummaryResponse(
         items=[ContentAnalyticsSummaryItem(**r) for r in rows]
@@ -193,6 +195,7 @@ async def get_funnel_signals_endpoint(
     only_enterprise_gt0: bool = Query(False, description="Only SKU with enterprise stock > 0"),
     only_fbo_gt0: bool = Query(False, description="Only SKU with FBO stock > 0"),
     signal_code: Optional[str] = Query(None, description="Filter by signal code"),
+    ctr_mode: str = Query("raw", pattern="^(raw|quality_filtered)$"),
     page: int = Query(1, ge=1, description="Page number (1-based)"),
     page_size: int = Query(50, ge=1, le=500, description="Items per page"),
     sort: str = Query(
@@ -211,6 +214,7 @@ async def get_funnel_signals_endpoint(
         period_to=period_to,
         only_cart_gt0=only_cart_gt0,
         wb_category=None,
+        ctr_mode=ctr_mode,
     )
     items = compute_funnel_signals(raw, min_opens=min_opens)
     if wb_category is not None:

@@ -13,6 +13,13 @@ class ContentAnalyticsSummaryItem(BaseModel):
     orders: int
     conversion: Optional[float] = None  # orders / add_to_cart
     revenue: float
+    impressions: int = 0
+    card_clicks: int = 0
+    funnel_ctr_percent: Optional[float] = None
+    active_days_with_impressions: int = 0
+    quality_excluded_rows: int = 0
+    ctr_sample_tier: str = "insufficient"
+    ctr_quality_flags: List[str] = Field(default_factory=list)
 
 
 class ContentAnalyticsSummaryResponse(BaseModel):
@@ -93,6 +100,13 @@ class FunnelSignalsItem(BaseModel):
     order_rate: Optional[float] = None
     cart_to_order: Optional[float] = None
     avg_check: Optional[float] = None
+    impressions: int = 0
+    card_clicks: int = 0
+    funnel_ctr_percent: Optional[float] = None
+    active_days_with_impressions: int = 0
+    quality_excluded_rows: int = 0
+    ctr_sample_tier: str = "insufficient"
+    ctr_quality_flags: List[str] = Field(default_factory=list)
     signal_code: str
     signal: str
     signal_label: str

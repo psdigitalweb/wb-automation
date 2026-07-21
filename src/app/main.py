@@ -20,6 +20,7 @@ from app.api_articles import router as articles_router
 from app.api_rrp import router as rrp_router
 from app.api_wb_price_discrepancies import router as wb_price_discrepancies_router
 from app.api_wb_stock_without_photos import router as wb_stock_without_photos_router
+from app.api_wb_spp_dynamics import router as wb_spp_dynamics_router
 from app.api_articles_base import router as articles_base_router
 from app.routers.auth import router as auth_router
 from app.routers.admin_tasks import router as admin_tasks_router
@@ -31,6 +32,7 @@ from app.routers.ingest import router as ingest_router
 from app.routers.projects import router as projects_router
 from app.routers.marketplaces import router as marketplaces_router
 from app.routers.wildberries_analytics import router as wildberries_analytics_router
+from app.routers.wildberries_funnel_import import router as wildberries_funnel_import_router
 from app.routers.seo_query_import import router as seo_query_import_router
 from app.routers.seo_query_pipeline_debug import router as seo_query_pipeline_debug_router
 from app.routers.seo_meaning_extraction_debug import router as seo_meaning_extraction_debug_router
@@ -109,6 +111,7 @@ app.include_router(marketplaces_router)
 
 # WB content analytics & reviews (project-scoped, requires membership)
 app.include_router(wildberries_analytics_router)
+app.include_router(wildberries_funnel_import_router)
 app.include_router(seo_query_import_router)
 app.include_router(seo_query_pipeline_debug_router)
 app.include_router(seo_meaning_extraction_debug_router)
@@ -190,6 +193,7 @@ app.include_router(rrp_router)
 app.include_router(articles_base_router)
 app.include_router(wb_price_discrepancies_router)
 app.include_router(wb_stock_without_photos_router)
+app.include_router(wb_spp_dynamics_router)
 
 # Читаем URL из окружения или формируем из POSTGRES_* переменных
 DATABASE_URL = os.getenv("DATABASE_URL")
