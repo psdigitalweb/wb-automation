@@ -6,6 +6,7 @@ import { apiGet, apiPost, apiPut } from '../../../../../../lib/apiClient'
 import { getAccessToken } from '../../../../../../lib/auth'
 import { getApiBase } from '../../../../../../lib/api'
 import { usePageTitle } from '../../../../../../hooks/usePageTitle'
+import styles from './internal-data-settings.module.css'
 
 interface InternalDataSourceField {
   key: string
@@ -787,22 +788,26 @@ export default function InternalDataSettingsPage({ params }: { params: { project
   }
 
   return (
-    <div className="container">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-        <h1>Загрузка каталога</h1>
+    <div className={['container', 'ec-settings-page', styles.page].join(' ')}>
+      <div className={styles.header}>
+        <div>
+          <div className={styles.eyebrow}>Данные</div>
+          <h1>Загрузка каталога</h1>
+          <p>Настройка источника внутренних данных и сопоставление полей каталога.</p>
+        </div>
         <Link href={`/app/project/${projectId}/settings`}>← Назад к настройкам</Link>
       </div>
 
       {toast && <div className="toast">{toast}</div>}
 
       {loading ? (
-        <p>Loading...</p>
+        <div className={styles.emptyState}>Загрузка...</div>
       ) : error ? (
-        <div className="card">
+        <div className={['card', styles.panel].join(' ')}>
           <p style={{ color: 'crimson' }}>{error}</p>
         </div>
       ) : (
-        <div className="card" style={{ padding: '20px' }}>
+        <div className={['card', styles.panel].join(' ')} style={{ padding: '20px' }}>
           {/* [1] Статус - всегда виден */}
           <div style={{ marginBottom: '20px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '10px' }}>
@@ -1163,6 +1168,7 @@ export default function InternalDataSettingsPage({ params }: { params: { project
 
       {showMappingWizard && (
         <div
+          className={styles.modalBackdrop}
           style={{
             position: 'fixed',
             inset: 0,
@@ -1173,7 +1179,7 @@ export default function InternalDataSettingsPage({ params }: { params: { project
             zIndex: 1000,
           }}
         >
-          <div style={{ backgroundColor: 'white', padding: 20, borderRadius: 4, maxWidth: 900, width: '100%' }}>
+          <div className={styles.modal} style={{ backgroundColor: 'white', padding: 20, borderRadius: 4, maxWidth: 900, width: '100%' }}>
             <h3 style={{ marginTop: 0 }}>Mapping Internal Data</h3>
             <p style={{ fontSize: '0.9rem', color: '#555', marginBottom: 24 }}>
               Выберите поля источника для внутренних полей. Минимум: Internal SKU и RRP.

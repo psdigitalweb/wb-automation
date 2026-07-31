@@ -1,0 +1,30 @@
+{
+  "atoms": {
+    "buyer_intent": "",
+    "cluster_key": null,
+    "confidence": {},
+    "evidence_refs": [],
+    "excluded_atoms": [],
+    "genericness": "specific",
+    "negative_fit_atoms": [],
+    "preferred_atoms": [
+      {
+        "confidence": 0.85,
+        "field": "expressive",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "deterministic_guard",
+        "type": "expressive",
+        "value": "смешная"
+      }
+    ],
+    "product_type": "кружка",
+    "query": null,
+    "required_atoms": [],
+    "schema_version": "meaning_atoms_v0",
+    "source_query_examples": []
+  },
+  "normalized_query_text": "кружка с приколом",
+  "query_id": 130420,
+  "ranking_value_used": 188097.0
+}

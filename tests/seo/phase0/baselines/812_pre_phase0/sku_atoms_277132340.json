@@ -1,0 +1,358 @@
+{
+  "annotation_id": 9,
+  "atoms": {
+    "category_id": 812,
+    "confidence": {},
+    "evidence_refs": [
+      "baseline_capture"
+    ],
+    "facts": [
+      {
+        "confidence": 0.95,
+        "field": "product_type",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "product_type",
+        "value": "кружка"
+      },
+      {
+        "confidence": 0.95,
+        "field": "compatibility",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "compatibility",
+        "value": "microwave"
+      },
+      {
+        "confidence": 0.95,
+        "field": "compatibility",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "compatibility",
+        "value": "dishwasher"
+      }
+    ],
+    "negative_fit_atoms": [
+      {
+        "confidence": 0.8,
+        "field": "negative",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "attribute",
+        "value": "не подходит для промышленных целей"
+      },
+      {
+        "confidence": 0.8,
+        "field": "negative",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "attribute",
+        "value": "не подходит для использования вне дома или офиса"
+      },
+      {
+        "confidence": 0.8,
+        "field": "negative",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "attribute",
+        "value": "не является термосом или термокружкой"
+      },
+      {
+        "confidence": 0.8,
+        "field": "negative",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "attribute",
+        "value": "не подходит для спортивных или туристических целей"
+      }
+    ],
+    "nm_id": 277132340,
+    "positive_atoms": [
+      {
+        "confidence": 0.85,
+        "field": "expressive",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "expressive",
+        "value": "Милота и уют"
+      },
+      {
+        "confidence": 0.85,
+        "field": "expressive",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "expressive",
+        "value": "Подарочная привлекательность"
+      },
+      {
+        "confidence": 0.85,
+        "field": "expressive",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "expressive",
+        "value": "Радость и удовлетворение от покупки"
+      },
+      {
+        "confidence": 0.85,
+        "field": "expressive",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "expressive",
+        "value": "Красота и эстетика"
+      },
+      {
+        "confidence": 0.85,
+        "field": "expressive",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "expressive",
+        "value": "Удобство и комфорт использования"
+      },
+      {
+        "confidence": 0.85,
+        "field": "occasion",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "occasion",
+        "value": "день рождения"
+      },
+      {
+        "confidence": 0.85,
+        "field": "occasion",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "occasion",
+        "value": "8 марта"
+      },
+      {
+        "confidence": 0.85,
+        "field": "occasion",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "occasion",
+        "value": "новый год"
+      },
+      {
+        "confidence": 0.85,
+        "field": "occasion",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "occasion",
+        "value": "домашние подарки"
+      },
+      {
+        "confidence": 0.85,
+        "field": "occasion",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "occasion",
+        "value": "подарок подруге"
+      },
+      {
+        "confidence": 0.85,
+        "field": "occasion",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "occasion",
+        "value": "подарок любимой"
+      },
+      {
+        "confidence": 0.85,
+        "field": "occasion",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "occasion",
+        "value": "подарок ребенку"
+      },
+      {
+        "confidence": 0.85,
+        "field": "occasion",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "occasion",
+        "value": "подарок другу"
+      },
+      {
+        "confidence": 0.85,
+        "field": "occasion",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "occasion",
+        "value": "подарок коллеге"
+      },
+      {
+        "confidence": 0.85,
+        "field": "recipient",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "recipient",
+        "value": "дети"
+      },
+      {
+        "confidence": 0.85,
+        "field": "recipient",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "recipient",
+        "value": "взрослые"
+      },
+      {
+        "confidence": 0.85,
+        "field": "recipient",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "recipient",
+        "value": "любители уюта"
+      },
+      {
+        "confidence": 0.85,
+        "field": "recipient",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "recipient",
+        "value": "подарочные покупатели"
+      },
+      {
+        "confidence": 0.85,
+        "field": "recipient",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "recipient",
+        "value": "домашние пользователи"
+      },
+      {
+        "confidence": 0.85,
+        "field": "recipient",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "recipient",
+        "value": "офисные работники"
+      }
+    ],
+    "product_identity": "",
+    "product_type": "кружка",
+    "project_id": 1,
+    "schema_version": "meaning_atoms_v0"
+  },
+  "meaning_payload": {
+    "audience": [
+      "дети",
+      "взрослые",
+      "любители уюта",
+      "подарочные покупатели",
+      "домашние пользователи",
+      "офисные работники"
+    ],
+    "confidence": {
+      "audience": 0.8,
+      "expressive": 0.85,
+      "functional": 0.9
+    },
+    "evidence_refs": [
+      "product.description",
+      "product.characteristics",
+      "product.reviews",
+      "category_prior"
+    ],
+    "expressive": {
+      "emotions": [
+        "позитив",
+        "тепло",
+        "радость",
+        "удовлетворение"
+      ],
+      "gift_contexts": [
+        "день рождения",
+        "8 марта",
+        "новый год",
+        "домашние подарки",
+        "подарок подруге",
+        "подарок любимой",
+        "подарок ребенку",
+        "подарок другу",
+        "подарок коллеге"
+      ],
+      "styles": [],
+      "vibes": [
+        "Милота и уют",
+        "Подарочная привлекательность",
+        "Радость и удовлетворение от покупки",
+        "Красота и эстетика",
+        "Удобство и комфорт использования"
+      ]
+    },
+    "functional": {
+      "attributes": [
+        "керамическая",
+        "объем 375 мл",
+        "высота 9 см",
+        "диаметр 9.5 см",
+        "принт с двух сторон",
+        "упаковка подарочная коробка",
+        "использование в СВЧ",
+        "использование в посудомоечной машине",
+        "хрупкое",
+        "цвет светло-бежевый",
+        "подходит для подарка",
+        "универсальный подарок",
+        "для ребенка",
+        "для подруге",
+        "для любимой",
+        "повседневное использование",
+        "изготовлено в Китае"
+      ],
+      "product_type": "кружка",
+      "use_cases": [
+        "для кофе",
+        "для чая",
+        "для какао",
+        "для посудомоечной",
+        "для микроволновки",
+        "повседневная",
+        "домашние"
+      ]
+    },
+    "negative_constraints": [
+      "не подходит для промышленных целей",
+      "не подходит для использования вне дома или офиса",
+      "не является термосом или термокружкой",
+      "не подходит для спортивных или туристических целей"
+    ],
+    "review_status": "draft",
+    "schema_version": "sku_meaning_v0"
+  },
+  "nm_id": 277132340,
+  "schema_version": "sku_meaning_v0",
+  "source_metadata": {
+    "product_title": "Кружка керамическая \"Mini Capy\" 375 мл.",
+    "tool": "sku_meaning_preview_annotation"
+  },
+  "status": "draft"
+}

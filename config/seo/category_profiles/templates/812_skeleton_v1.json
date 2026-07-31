@@ -1,0 +1,402 @@
+{
+  "schema_version": "category_profile_v1",
+  "subject": {
+    "primary": "кружка",
+    "primary_aliases": [
+      "кружка",
+      "кружки",
+      "кружку",
+      "кружке",
+      "кружкой",
+      "mug"
+    ],
+    "related_but_different": [
+      {
+        "subject": "термокружка",
+        "aliases": [
+          "термокруж",
+          "термостакан"
+        ]
+      },
+      {
+        "subject": "стакан",
+        "aliases": [
+          "стакан"
+        ]
+      },
+      {
+        "subject": "бокал",
+        "aliases": [
+          "бокал",
+          "пивн"
+        ]
+      }
+    ],
+    "detection_hints": {
+      "token_prefixes": [
+        "круж"
+      ],
+      "negative_token_prefixes": [
+        "термокруж",
+        "стакан",
+        "бокал",
+        "поильник"
+      ]
+    }
+  },
+  "product_type_aliases": {
+    "кружка": {
+      "match_any_prefix": [
+        "круж"
+      ],
+      "score_bonus": 0.16
+    },
+    "термокружка": {
+      "match_any_prefix": [
+        "термокруж"
+      ],
+      "score_bonus": 0.22
+    },
+    "стакан": {
+      "match_any_prefix": [
+        "стакан"
+      ],
+      "score_bonus": 0.08
+    },
+    "бокал": {
+      "match_any_prefix": [
+        "бокал"
+      ],
+      "score_bonus": 0.08
+    }
+  },
+  "constraints": {
+    "derive_from_query_tokens": [
+      {
+        "constraint": "thermal",
+        "when_query_contains_any": [
+          "термокруж",
+          "термос"
+        ]
+      },
+      {
+        "constraint": "beer_use_case",
+        "when_query_contains_any": [
+          "пивн",
+          "пиво"
+        ]
+      },
+      {
+        "constraint": "set",
+        "when_query_contains_any": [
+          "набор",
+          "комплект"
+        ]
+      }
+    ],
+    "derive_from_sku_meaning": [
+      {
+        "constraint": "thermal",
+        "when_functional_attribute_contains": [
+          "термокруж"
+        ]
+      },
+      {
+        "constraint": "set",
+        "when_functional_attribute_contains": [
+          "набор"
+        ]
+      }
+    ]
+  },
+  "hard_conflicts": [
+    {
+      "name": "thermal_required",
+      "when_query_has": {
+        "constraint": "thermal"
+      },
+      "requires_sku_any": [
+        {
+          "constraint": "thermal"
+        },
+        {
+          "product_type_contains": "термокруж"
+        }
+      ],
+      "message": "requires thermal/термокружка, SKU meaning does not"
+    },
+    {
+      "name": "product_type_termo_mismatch",
+      "when_query_has": {
+        "product_type": "термокружка"
+      },
+      "requires_sku_any": [
+        {
+          "product_type": "термокружка"
+        }
+      ],
+      "message": "product_type conflict: термокружка vs SKU product type"
+    },
+    {
+      "name": "product_type_glass_mismatch",
+      "when_query_has": {
+        "product_type": "стакан"
+      },
+      "requires_sku_any": [
+        {
+          "product_type": "стакан"
+        }
+      ],
+      "message": "product_type conflict: стакан vs SKU product type"
+    },
+    {
+      "name": "product_type_goblet_mismatch",
+      "when_query_has": {
+        "product_type": "бокал"
+      },
+      "requires_sku_any": [
+        {
+          "product_type": "бокал"
+        }
+      ],
+      "message": "product_type conflict: бокал vs SKU product type"
+    },
+    {
+      "name": "beer_use_case_required",
+      "when_query_has": {
+        "constraint": "beer_use_case"
+      },
+      "requires_sku_any": [
+        {
+          "constraint": "beer_use_case"
+        },
+        {
+          "token_prefix": "пив"
+        }
+      ],
+      "message": "requires beer mug use case"
+    },
+    {
+      "name": "set_quantity_required",
+      "when_query_has": {
+        "constraint_prefix": "set"
+      },
+      "requires_sku_any": [
+        {
+          "constraint_prefix": "set"
+        }
+      ],
+      "message": "requires set/quantity"
+    }
+  ],
+  "scoring": {
+    "weights": {
+      "product_type_match": 0.22,
+      "product_type_compat": 0.16,
+      "product_type_weak": -0.18,
+      "use_case_overlap": 0.1,
+      "attribute_overlap": 0.08,
+      "expressive_overlap": 0.08,
+      "audience_overlap": 0.06,
+      "occasion_overlap": 0.04,
+      "material_mismatch": -0.25,
+      "negative_audience": -1.0
+    },
+    "bucket_cutoffs": {
+      "primary": 0.6,
+      "secondary": 0.35,
+      "broad": 0.15
+    },
+    "bucket_caps": {
+      "primary": 100,
+      "secondary": 300,
+      "broad": 500
+    },
+    "materials_relevant": [
+      "glass",
+      "ceramic",
+      "porcelain",
+      "metal"
+    ]
+  },
+  "user_bucket_labels": {
+    "primary": "Лучшие",
+    "secondary": "Подходящие",
+    "broad": "Слишком общие",
+    "rejected": "Не подходят"
+  },
+  "sku_guards": {
+    "characteristic_mappings": [
+      {
+        "name_contains": "объем",
+        "target": {
+          "type": "numeric",
+          "field": "volume_ml",
+          "parser": "int_first"
+        }
+      },
+      {
+        "name_contains": "цвет",
+        "target": {
+          "type": "attribute",
+          "field": "color"
+        }
+      },
+      {
+        "name_contains": "материал",
+        "target": {
+          "type": "attribute",
+          "field": "material"
+        }
+      },
+      {
+        "name_contains": "количество",
+        "target": {
+          "type": "numeric",
+          "field": "quantity",
+          "parser": "int_first"
+        }
+      },
+      {
+        "name_contains": "рисунок",
+        "target": {
+          "type": "visual",
+          "field": "design",
+          "value_if_any": "print"
+        }
+      },
+      {
+        "name_contains": "декоратив",
+        "target": {
+          "type": "visual",
+          "field": "design",
+          "value_if_any": "print"
+        }
+      },
+      {
+        "name_contains": "особенности",
+        "target_keywords": [
+          {
+            "when_value_contains": "свч",
+            "target": {
+              "type": "compatibility",
+              "field": "compatibility",
+              "value": "microwave"
+            }
+          },
+          {
+            "when_value_contains": "посудом",
+            "target": {
+              "type": "compatibility",
+              "field": "compatibility",
+              "value": "dishwasher"
+            }
+          }
+        ]
+      }
+    ],
+    "functional_token_mappings": [
+      {
+        "when_contains": "термокруж",
+        "target": {
+          "type": "compatibility",
+          "field": "thermal",
+          "value": true
+        }
+      },
+      {
+        "when_contains": "посудом",
+        "target": {
+          "type": "compatibility",
+          "field": "compatibility",
+          "value": "dishwasher"
+        }
+      },
+      {
+        "when_contains": "свч",
+        "target": {
+          "type": "compatibility",
+          "field": "compatibility",
+          "value": "microwave"
+        }
+      }
+    ]
+  },
+  "query_guards": {
+    "product_type_detection": [
+      {
+        "when_contains": "термокруж",
+        "set_product_type": "термокружка",
+        "add_required": [
+          {
+            "type": "compatibility",
+            "field": "thermal",
+            "value": true
+          }
+        ]
+      },
+      {
+        "when_contains": "круж",
+        "set_product_type": "кружка",
+        "unless_set": true
+      }
+    ],
+    "required_atoms": [
+      {
+        "when_contains": "прозрач",
+        "atom": {
+          "type": "visual",
+          "field": "transparency",
+          "value": "transparent"
+        }
+      },
+      {
+        "when_contains": "кофемаш",
+        "atom": {
+          "type": "compatibility",
+          "field": "compatibility",
+          "value": "coffee_machine"
+        }
+      },
+      {
+        "when_contains": "пивн",
+        "atom": {
+          "type": "use_case",
+          "field": "use_case",
+          "value": "beer"
+        }
+      },
+      {
+        "when_contains": "в машину",
+        "atom": {
+          "type": "use_case",
+          "field": "context",
+          "value": "car"
+        }
+      }
+    ],
+    "excluded_atoms": [
+      {
+        "when_contains": "без рисун",
+        "exclude": {
+          "field": "design",
+          "value": "print"
+        }
+      },
+      {
+        "when_contains": "без принт",
+        "exclude": {
+          "field": "design",
+          "value": "print"
+        }
+      },
+      {
+        "when_contains": "без крыш",
+        "exclude": {
+          "field": "feature",
+          "value": "lid"
+        }
+      }
+    ]
+  }
+}

@@ -1,11 +1,14 @@
 'use client'
 
 import { useEffect, useMemo, useState, useRef } from 'react'
-import { useParams, useRouter, useSearchParams } from 'next/navigation'
+import { createPortal } from 'react-dom'
+import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
-import { apiGetData, apiPost } from '@/lib/apiClient'
+import { apiDownload, apiGetData, apiPost } from '@/lib/apiClient'
 import { usePageTitle } from '@/hooks/usePageTitle'
 import CategoryMultiSelectPopover from '@/components/CategoryMultiSelectPopover'
+import PortalBackButton from '@/components/PortalBackButton'
+import styles from './price-discrepancies.module.css'
 
 interface PriceDiscrepancyItem {
   article: string | null
@@ -33,6 +36,12 @@ interface PriceDiscrepancyItem {
     recommended_wb_admin_price: number | null
     delta_recommended: number | null
     expected_showcase_price: number | null
+  }
+  staleness?: {
+    showcase_price_stale: boolean
+    reason: 'awaiting_showcase_refresh' | null
+    wb_price_updated_at: string | null
+    showcase_updated_at: string | null
   }
 }
 
@@ -75,6 +84,7 @@ interface PriceDiscrepancyResponse {
     page: number
     page_size: number
     updated_at: string
+    front_snapshot_at?: string | null
   }
   items: PriceDiscrepancyItem[]
   diagnostic?: DiagnosticInfo
@@ -87,12 +97,67 @@ interface CategoryOption {
   name: string | null
 }
 
+interface FrontSnapshotOption {
+  snapshot_at: string | null
+  items_count: number
+}
+
+type PriceApplyMode = 'base' | 'size'
+type PriceApplyStatus = 'idle' | 'loading' | 'ready' | 'sending' | 'awaiting_response' | 'success' | 'error'
+
+interface PriceApplySizeItem {
+  size_id: number
+  tech_size_name: string | null
+  current_price: number | null
+  discounted_price: number | null
+  target_price: number
+}
+
+interface PriceApplyPreview {
+  item: PriceDiscrepancyItem
+  pricing_mode: PriceApplyMode
+  editable_size_price: boolean
+  recommended_price: number
+  default_discount: number
+  sizes: PriceApplySizeItem[]
+}
+
+interface PriceApplyResponse {
+  status: 'accepted'
+  pricing_mode: PriceApplyMode
+  upload_id: number | null
+  already_exists: boolean
+}
+
+interface BulkPriceApplyItem {
+  nm_id: number
+  article: string | null
+  title?: string | null
+  current_price?: number | null
+  recommended_price?: number | null
+  discount?: number | null
+  reason?: string
+  message?: string
+}
+
+interface BulkPriceApplyResponse {
+  status: 'accepted' | 'skipped'
+  upload_id: number | null
+  already_exists: boolean
+  accepted_count: number
+  skipped_count: number
+  ready: BulkPriceApplyItem[]
+  skipped: BulkPriceApplyItem[]
+}
+
 interface FiltersState {
   q: string
   categoryIds: number[]
   hasWbStock: HasStockFilter
   hasEnterpriseStock: HasStockFilter
   onlyBelowRrp: boolean
+  showAll: boolean
+  frontSnapshotAt: string
   sort: string
   page: number
   pageSize: number
@@ -120,7 +185,9 @@ function parseFiltersFromSearchParams(searchParams: URLSearchParams): FiltersSta
   const hasEnterpriseStock = (searchParams.get('has_enterprise_stock') as HasStockFilter) || 'any'
   const onlyBelowRrpParam = searchParams.get('only_below_rrp')
   const onlyBelowRrp = onlyBelowRrpParam === null ? true : onlyBelowRrpParam === 'true'
-  const sort = searchParams.get('sort') || 'diff_rub_desc'
+  const showAll = searchParams.get('show_all') === 'true'
+  const frontSnapshotAt = searchParams.get('front_snapshot_at') || ''
+  const sort = searchParams.get('sort') || 'diff_percent_desc'
   const page = Number(searchParams.get('page') || '1')
   const pageSize = Number(searchParams.get('page_size') || '25')
 
@@ -130,6 +197,8 @@ function parseFiltersFromSearchParams(searchParams: URLSearchParams): FiltersSta
     hasWbStock,
     hasEnterpriseStock,
     onlyBelowRrp,
+    showAll,
+    frontSnapshotAt,
     sort,
     page: Number.isNaN(page) || page < 1 ? 1 : page,
     pageSize: Number.isNaN(pageSize) || pageSize <= 0 ? 25 : pageSize,
@@ -162,6 +231,27 @@ function formatDate(value: string | null | undefined): string {
   } catch {
     return '—'
   }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
+async function loadPriceDiscrepancyResponse(url: string): Promise<PriceDiscrepancyResponse> {
+  const retryDelaysMs = [800, 1600, 2600]
+
+  for (let attempt = 0; attempt <= retryDelaysMs.length; attempt += 1) {
+    try {
+      return await apiGetData<PriceDiscrepancyResponse>(url)
+    } catch (error: any) {
+      if (error?.status !== 0 || attempt === retryDelaysMs.length) {
+        throw error
+      }
+      await delay(retryDelaysMs[attempt])
+    }
+  }
+
+  throw new Error('Не удалось загрузить данные')
 }
 
 interface PhotoPopoverProps {
@@ -228,10 +318,13 @@ function PhotoPopover({ photos, size = 40 }: PhotoPopoverProps) {
       onMouseEnter={handleOpen}
       onMouseLeave={(e) => {
         // Закрываем только если курсор не перешёл на поповер
-        const relatedTarget = e.relatedTarget as Node | null
+        const relatedTarget = e.relatedTarget
+        if (!(relatedTarget instanceof Node)) {
+          handleClose()
+          return
+        }
         if (
           !popoverRef.current ||
-          !relatedTarget ||
           (!popoverRef.current.contains(relatedTarget) &&
             !anchorRef.current?.contains(relatedTarget))
         ) {
@@ -275,69 +368,72 @@ function PhotoPopover({ photos, size = 40 }: PhotoPopoverProps) {
         </div>
       )}
 
-      {open && hasPhotos && (
-        <div
-          ref={popoverRef}
-          onMouseEnter={() => setOpen(true)}
-          onMouseLeave={handleClose}
-          style={{
-            position: 'absolute',
-            zIndex: 1000,
-            top: position.top - (anchorRef.current?.getBoundingClientRect().bottom || 0) - window.scrollY,
-            left: 0,
-            background: '#fff',
-            border: '1px solid #ddd',
-            borderRadius: 6,
-            boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
-            padding: 8,
-            minWidth: 260,
-            maxWidth: 480,
-          }}
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-            <strong style={{ fontSize: 12 }}>Фото товара</strong>
-            <button type="button" onClick={() => setOpen(false)} style={{ fontSize: 12 }}>
-              ✕
-            </button>
-          </div>
-          <div style={{ textAlign: 'center', marginBottom: 8 }}>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={photos[selectedIndex]}
-              alt="Фото товара крупно"
-              style={{ maxWidth: '100%', maxHeight: 240, objectFit: 'contain', borderRadius: 4 }}
-              loading="lazy"
-            />
-          </div>
+      {open &&
+        hasPhotos &&
+        createPortal(
           <div
+            ref={popoverRef}
+            onMouseEnter={() => setOpen(true)}
+            onMouseLeave={handleClose}
             style={{
-              display: 'flex',
-              gap: 6,
-              overflowX: 'auto',
-              paddingBottom: 4,
+              position: 'absolute',
+              zIndex: 1000,
+              top: position.top,
+              left: position.left,
+              background: '#fff',
+              border: '1px solid #ddd',
+              borderRadius: 6,
+              boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
+              padding: 8,
+              minWidth: 260,
+              maxWidth: 480,
             }}
           >
-            {photos.map((url, idx) => (
-              // eslint-disable-next-line @next/next/no-img-element
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <strong style={{ fontSize: 12 }}>Фото товара</strong>
+              <button type="button" onClick={() => setOpen(false)} style={{ fontSize: 12 }}>
+                ✕
+              </button>
+            </div>
+            <div style={{ textAlign: 'center', marginBottom: 8 }}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                key={url + idx}
-                src={url}
-                alt={`Миниатюра ${idx + 1}`}
-                style={{
-                  width: 48,
-                  height: 48,
-                  objectFit: 'cover',
-                  borderRadius: 3,
-                  cursor: 'pointer',
-                  border: idx === selectedIndex ? '2px solid #0070f3' : '1px solid #ddd',
-                }}
+                src={photos[selectedIndex]}
+                alt="Фото товара крупно"
+                style={{ maxWidth: '100%', maxHeight: 240, objectFit: 'contain', borderRadius: 4 }}
                 loading="lazy"
-                onClick={() => setSelectedIndex(idx)}
               />
-            ))}
-          </div>
-        </div>
-      )}
+            </div>
+            <div
+              style={{
+                display: 'flex',
+                gap: 6,
+                overflowX: 'auto',
+                paddingBottom: 4,
+              }}
+            >
+              {photos.map((url, idx) => (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  key={url + idx}
+                  src={url}
+                  alt={`Миниатюра ${idx + 1}`}
+                  style={{
+                    width: 48,
+                    height: 48,
+                    objectFit: 'cover',
+                    borderRadius: 3,
+                    cursor: 'pointer',
+                    border: idx === selectedIndex ? '2px solid #0070f3' : '1px solid #ddd',
+                  }}
+                  loading="lazy"
+                  onClick={() => setSelectedIndex(idx)}
+                />
+              ))}
+            </div>
+          </div>,
+          document.body,
+        )}
     </div>
   )
 }
@@ -345,11 +441,18 @@ function PhotoPopover({ photos, size = 40 }: PhotoPopoverProps) {
 interface FiltersBarProps {
   filters: FiltersState
   categories: CategoryOption[]
+  frontSnapshots: FrontSnapshotOption[]
+  frontSnapshotsLoading: boolean
   onChange: (next: Partial<FiltersState>, resetPage?: boolean) => void
-  onExportCsv: () => void
 }
 
-function PriceDiscrepancyFilters({ filters, categories, onChange, onExportCsv }: FiltersBarProps) {
+function PriceDiscrepancyFilters({
+  filters,
+  categories,
+  frontSnapshots,
+  frontSnapshotsLoading,
+  onChange,
+}: FiltersBarProps) {
   const [searchInput, setSearchInput] = useState(filters.q)
 
   useEffect(() => {
@@ -367,96 +470,282 @@ function PriceDiscrepancyFilters({ filters, categories, onChange, onExportCsv }:
   }, [searchInput, filters.q, onChange])
 
   return (
-    <div className="card" style={{ marginTop: 16, marginBottom: 16 }}>
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          gap: 12,
-          flexWrap: 'wrap',
-          marginBottom: 8,
-        }}
-      >
+    <div className={`card ${styles.filtersCard}`} style={{ marginTop: 16, marginBottom: 16 }}>
+      <div className={styles.cardHeader} style={{ marginBottom: 12 }}>
         <h2 style={{ margin: 0 }}>Фильтры</h2>
       </div>
 
       <div
+        className="pricediff-filters-layout"
         style={{
-          display: 'flex',
-          flexWrap: 'wrap',
-          gap: 12,
-          alignItems: 'center',
-          marginBottom: 8,
+          display: 'grid',
+          gridTemplateColumns: '1fr',
+          gap: 24,
         }}
       >
-        <div style={{ flex: 1, minWidth: 220 }}>
-          <input
-            type="text"
-            placeholder="Поиск по артикулу / nmID / названию"
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-            style={{ width: '100%', padding: 8, fontSize: 14 }}
-          />
+        <div className="pricediff-column pricediff-column--left" style={{ minWidth: 0 }}>
+          <div className="pricediff-field" style={{ minWidth: 0 }}>
+            <label
+              className="pricediff-label"
+              style={{ display: 'block', fontSize: 14, fontWeight: 500, marginBottom: 6 }}
+            >
+              Поиск
+            </label>
+            <input
+              type="text"
+              placeholder="Поиск по артикулу / nmID / названию"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              className="pricediff-control"
+              style={{
+                width: '100%',
+                minHeight: 40,
+                padding: '8px 12px',
+                fontSize: 14,
+                lineHeight: '20px',
+                borderRadius: 6,
+                border: '1px solid #d1d5db',
+                background: '#fff',
+                boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+              }}
+            />
+          </div>
+
+          <div
+            className="pricediff-field pricediff-field--category"
+            style={{ minWidth: 0 }}
+          >
+            <label
+              className="pricediff-label"
+              style={{ display: 'block', fontSize: 14, fontWeight: 500, marginBottom: 6 }}
+            >
+              Категория WB
+            </label>
+            {categories.length > 0 ? (
+              <CategoryMultiSelectPopover
+                categories={categories}
+                selectedIds={filters.categoryIds}
+                onChange={(ids) => onChange({ categoryIds: ids }, true)}
+                fullWidth
+              />
+            ) : (
+              <div
+                className="pricediff-control"
+                style={{
+                  width: '100%',
+                  minHeight: 40,
+                  padding: '8px 12px',
+                  fontSize: 14,
+                  lineHeight: '20px',
+                  borderRadius: 6,
+                  border: '1px solid #d1d5db',
+                  background: '#f9fafb',
+                  color: '#9ca3af',
+                  display: 'flex',
+                  alignItems: 'center',
+                }}
+              >
+                Нет данных о категориях
+              </div>
+            )}
+          </div>
         </div>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <input
-            type="checkbox"
-            checked={filters.onlyBelowRrp}
-            onChange={(e) => onChange({ onlyBelowRrp: e.target.checked }, true)}
-          />
-          Только ниже РРЦ
-        </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span>Наличие WB:</span>
-          <select
-            value={filters.hasWbStock}
-            onChange={(e) => onChange({ hasWbStock: e.target.value as HasStockFilter }, true)}
-          >
-            <option value="any">Любое</option>
-            <option value="true">Только есть</option>
-            <option value="false">Только нет</option>
-          </select>
-        </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span>Наличие склад:</span>
-          <select
-            value={filters.hasEnterpriseStock}
-            onChange={(e) =>
-              onChange({ hasEnterpriseStock: e.target.value as HasStockFilter }, true)
-            }
-          >
-            <option value="any">Любое</option>
-            <option value="true">Только есть</option>
-            <option value="false">Только нет</option>
-          </select>
-        </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span>Сортировка:</span>
-          <select
-            value={filters.sort}
-            onChange={(e) => onChange({ sort: e.target.value }, true)}
-          >
-            <option value="diff_rub_desc">Δ ₽ (убывание)</option>
-            <option value="diff_rub_asc">Δ ₽ (возрастание)</option>
-            <option value="diff_percent_desc">Δ % (убывание)</option>
-            <option value="diff_percent_asc">Δ % (возрастание)</option>
-            <option value="rrp_price_desc">РРЦ (убывание)</option>
-            <option value="rrp_price_asc">РРЦ (возрастание)</option>
-            <option value="showcase_price_desc">Витрина (убывание)</option>
-            <option value="showcase_price_asc">Витрина (возрастание)</option>
-            <option value="nm_id_desc">nmID (убывание)</option>
-            <option value="nm_id_asc">nmID (возрастание)</option>
-          </select>
-        </label>
-        {categories.length > 0 && (
-          <CategoryMultiSelectPopover
-            categories={categories}
-            selectedIds={filters.categoryIds}
-            onChange={(ids) => onChange({ categoryIds: ids }, true)}
-          />
-        )}
+
+        <div className="pricediff-column pricediff-column--center" style={{ minWidth: 0 }}>
+          <div className="pricediff-field" style={{ minWidth: 0 }}>
+            <label
+              className="pricediff-label"
+              style={{ display: 'block', fontSize: 14, fontWeight: 500, marginBottom: 6 }}
+            >
+              Сортировка
+            </label>
+            <select
+              value={filters.sort}
+              onChange={(e) => onChange({ sort: e.target.value }, true)}
+              className="pricediff-control"
+              style={{
+                width: '100%',
+                minHeight: 40,
+                padding: '8px 12px',
+                fontSize: 14,
+                lineHeight: '20px',
+                borderRadius: 6,
+                border: '1px solid #d1d5db',
+                background: '#fff',
+                boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+              }}
+            >
+              <option value="diff_rub_desc">Δ ₽ (убывание)</option>
+              <option value="diff_rub_asc">Δ ₽ (возрастание)</option>
+              <option value="diff_percent_desc">Δ % (убывание)</option>
+              <option value="diff_percent_asc">Δ % (возрастание)</option>
+              <option value="rrp_price_desc">РРЦ (убывание)</option>
+              <option value="rrp_price_asc">РРЦ (возрастание)</option>
+              <option value="showcase_price_desc">Витрина (убывание)</option>
+              <option value="showcase_price_asc">Витрина (возрастание)</option>
+              <option value="nm_id_desc">nmID (убывание)</option>
+              <option value="nm_id_asc">nmID (возрастание)</option>
+            </select>
+          </div>
+
+          <div className="pricediff-checkbox-row">
+            <label className="pricediff-checkbox">
+              <input
+                type="checkbox"
+                checked={filters.hasWbStock === 'true'}
+                onChange={(e) =>
+                  onChange({ hasWbStock: e.target.checked ? 'true' : 'any' }, true)
+                }
+                style={{ width: 16, height: 16 }}
+              />
+              Только товары с cart &gt; 0
+            </label>
+
+            <label className="pricediff-checkbox">
+              <input
+                type="checkbox"
+                checked={filters.hasEnterpriseStock === 'true'}
+                onChange={(e) =>
+                  onChange({ hasEnterpriseStock: e.target.checked ? 'true' : 'any' }, true)
+                }
+                style={{ width: 16, height: 16 }}
+              />
+              Наличие склада &gt; 0
+            </label>
+
+            <label className="pricediff-checkbox">
+              <input
+                type="checkbox"
+                checked={filters.onlyBelowRrp}
+                onChange={(e) => onChange({ onlyBelowRrp: e.target.checked }, true)}
+                style={{ width: 16, height: 16 }}
+              />
+              Только ниже РРЦ
+            </label>
+          </div>
+        </div>
+
+        <div className="pricediff-column pricediff-column--right" style={{ minWidth: 0 }}>
+          <div className="pricediff-field" style={{ minWidth: 0 }}>
+            <label
+              className="pricediff-label"
+              style={{ display: 'block', fontSize: 14, fontWeight: 500, marginBottom: 6 }}
+            >
+              Витрина WB
+            </label>
+            <select
+              value={filters.frontSnapshotAt}
+              onChange={(e) => onChange({ frontSnapshotAt: e.target.value }, true)}
+              className="pricediff-control"
+              disabled={frontSnapshotsLoading}
+              style={{
+                width: '100%',
+                minHeight: 40,
+                padding: '8px 12px',
+                fontSize: 14,
+                lineHeight: '20px',
+                borderRadius: 6,
+                border: '1px solid #d1d5db',
+                background: '#fff',
+                boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+              }}
+            >
+              {(() => {
+                const fmt = new Intl.NumberFormat('ru-RU')
+                const latest = frontSnapshots?.[0]
+                const latestCount =
+                  latest && typeof latest.items_count === 'number' ? fmt.format(latest.items_count) : null
+                const latestLabel = latestCount ? `Последняя (${latestCount})` : 'Последняя'
+
+                const selected = filters.frontSnapshotAt
+                const selectedExists =
+                  !selected || (frontSnapshots || []).some((s) => s.snapshot_at === selected)
+
+                const otherSnapshots = (frontSnapshots || []).slice(1).filter((s) => Boolean(s.snapshot_at))
+
+                return (
+                  <>
+                    <option value="">{latestLabel}</option>
+                    {!selectedExists && (
+                      <option value={selected}>
+                        Выбранный (вне списка): {formatDate(selected)}
+                      </option>
+                    )}
+                    {otherSnapshots.map((s) => (
+                      <option key={s.snapshot_at || ''} value={s.snapshot_at || ''}>
+                        {formatDate(s.snapshot_at)} ({fmt.format(s.items_count || 0)})
+                      </option>
+                    ))}
+                  </>
+                )
+              })()}
+            </select>
+          </div>
+        </div>
       </div>
+
+      <style jsx>{`
+        @media (min-width: 768px) {
+          .pricediff-filters-layout {
+            grid-template-columns:
+              minmax(300px, 1.3fr)
+              minmax(320px, 1fr)
+              minmax(240px, 0.75fr);
+            align-items: start;
+          }
+          .pricediff-column--left {
+            grid-column: 1;
+            grid-row: 1 / span 2;
+          }
+          .pricediff-column--center {
+            grid-column: 2;
+            grid-row: 1 / span 2;
+          }
+          .pricediff-column--right {
+            grid-column: 3;
+            grid-row: 1;
+          }
+        }
+
+        .pricediff-column {
+          display: flex;
+          flex-direction: column;
+          gap: 16px;
+        }
+
+        .pricediff-field--category {
+          max-width: 520px;
+        }
+
+        .pricediff-checkbox-row {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 18px;
+          align-items: center;
+          min-height: 40px;
+          padding-top: 36px;
+        }
+
+        .pricediff-checkbox {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          cursor: pointer;
+          font-size: 14px;
+          line-height: 1.35;
+          white-space: nowrap;
+        }
+
+        @media (max-width: 767px) {
+          .pricediff-checkbox-row {
+            padding-top: 0;
+          }
+          .pricediff-field--category {
+            max-width: none;
+          }
+        }
+      `}</style>
+
     </div>
   )
 }
@@ -468,15 +757,15 @@ interface TableProps {
 function PriceDiscrepancyTable({ items }: TableProps) {
   if (!items.length) {
     return (
-      <div className="card">
+      <div className={`card ${styles.emptyCard}`}>
         <p>Нет данных по расхождениям цен с текущими фильтрами.</p>
       </div>
     )
   }
 
   return (
-    <div className="card">
-      <div style={{ overflowX: 'auto' }}>
+    <div className={`card ${styles.tableCard}`}>
+      <div className={styles.tableScroll} style={{ overflowX: 'auto' }}>
         <table>
           <thead>
             <tr>
@@ -623,41 +912,831 @@ function PriceDiscrepancyTable({ items }: TableProps) {
 
 interface PaginationProps {
   meta: PriceDiscrepancyResponse['meta']
+  showAll: boolean
+  loading: boolean
   onPageChange: (page: number) => void
 }
 
-function Pagination({ meta, onPageChange }: PaginationProps) {
+function Pagination({ meta, showAll, loading, onPageChange }: PaginationProps) {
   const totalPages = Math.max(1, Math.ceil(meta.total_count / meta.page_size))
 
-  if (totalPages <= 1) {
+  if (meta.total_count <= 0) {
     return null
   }
 
   return (
-    <div className="pagination">
-      <button
-        type="button"
-        onClick={() => onPageChange(Math.max(1, meta.page - 1))}
-        disabled={meta.page <= 1}
+    <div className={`pagination ${styles.pagination}`} style={{ flexWrap: 'wrap', gap: 8 }}>
+      {!showAll ? (
+        <>
+          <button
+            type="button"
+            onClick={() => onPageChange(Math.max(1, meta.page - 1))}
+            disabled={totalPages <= 1 || meta.page <= 1}
+          >
+            Предыдущая
+          </button>
+          <span>
+            Страница {meta.page} из {totalPages} (Всего: {meta.total_count})
+          </span>
+          <button
+            type="button"
+            onClick={() => onPageChange(Math.min(totalPages, meta.page + 1))}
+            disabled={totalPages <= 1 || meta.page >= totalPages}
+          >
+            Следующая
+          </button>
+        </>
+      ) : (
+        <>
+          <span>Показаны все записи (Всего: {meta.total_count})</span>
+        </>
+      )}
+    </div>
+  )
+}
+
+interface RrpSavedViewsProps {
+  filters: FiltersState
+  meta: PriceDiscrepancyResponse['meta'] | null
+  onChange: (next: Partial<FiltersState>, resetPage?: boolean) => void
+}
+
+function RrpSavedViews({ filters, meta, onChange }: RrpSavedViewsProps) {
+  const activeTotal = meta?.total_count
+
+  const views = [
+    {
+      id: 'all',
+      label: 'Все позиции',
+      count: !filters.onlyBelowRrp ? activeTotal : undefined,
+      active: !filters.onlyBelowRrp,
+      onClick: () => onChange({ onlyBelowRrp: false, page: 1 }, true),
+    },
+    {
+      id: 'below',
+      label: 'Только проблемы',
+      count: filters.onlyBelowRrp ? activeTotal : undefined,
+      active: filters.onlyBelowRrp,
+      tone: 'success',
+      onClick: () => onChange({ onlyBelowRrp: true, page: 1 }, true),
+    },
+    {
+      id: 'rrp',
+      label: 'Ниже РРЦ',
+      count: filters.onlyBelowRrp ? activeTotal : undefined,
+      active: false,
+      onClick: () => onChange({ onlyBelowRrp: true, page: 1 }, true),
+    },
+    {
+      id: 'wb-stock',
+      label: 'Без остатка',
+      count: filters.hasWbStock === 'false' ? activeTotal : undefined,
+      active: filters.hasWbStock === 'false',
+      onClick: () =>
+        onChange({ hasWbStock: filters.hasWbStock === 'false' ? 'any' : 'false', page: 1 }, true),
+    },
+    {
+      id: 'competitive',
+      label: 'Конкурентные',
+      count: undefined,
+      active: false,
+      onClick: () => onChange({ onlyBelowRrp: false, hasWbStock: 'any', hasEnterpriseStock: 'any', page: 1 }, true),
+    },
+  ].filter((view) => view.id !== 'competitive')
+
+  return (
+    <div className={styles.savedViewsCard}>
+      <div className={styles.savedViewsRow}>
+        {views.map((view) => (
+          <button
+            key={view.id}
+            type="button"
+            className={`${styles.savedView} ${view.active ? styles.savedViewActive : ''} ${
+              view.tone === 'success' ? styles.savedViewSuccess : ''
+            }`}
+            onClick={view.onClick}
+          >
+            {view.tone === 'success' && <span className={styles.savedViewStar}>☆</span>}
+            <span>{view.label}</span>
+            {typeof view.count === 'number' && <span className={styles.savedViewCount}>{view.count}</span>}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+interface RrpFilterToolbarProps {
+  filters: FiltersState
+  categories: CategoryOption[]
+  frontSnapshots: FrontSnapshotOption[]
+  frontSnapshotsLoading: boolean
+  meta: PriceDiscrepancyResponse['meta'] | null
+  onChange: (next: Partial<FiltersState>, resetPage?: boolean) => void
+}
+
+function RrpFilterToolbar({
+  filters,
+  categories,
+  frontSnapshots,
+  frontSnapshotsLoading,
+  onChange,
+}: RrpFilterToolbarProps) {
+  const [searchValue, setSearchValue] = useState(filters.q)
+
+  useEffect(() => {
+    setSearchValue(filters.q)
+  }, [filters.q])
+
+  useEffect(() => {
+    const handle = window.setTimeout(() => {
+      if (searchValue !== filters.q) {
+        onChange({ q: searchValue, page: 1 }, true)
+      }
+    }, 350)
+
+    return () => window.clearTimeout(handle)
+  }, [searchValue, filters.q, onChange])
+
+  return (
+    <div className={styles.filterToolbar}>
+      <div className={styles.filterRow}>
+        <div className={styles.searchControl}>
+          <span>⌕</span>
+          <input
+            aria-label="Поиск по артикулу, nmID или названию"
+            value={searchValue}
+            onChange={(event) => setSearchValue(event.target.value)}
+            placeholder="Артикул / nmID / название..."
+          />
+        </div>
+
+        <div className={styles.categoryFilter}>
+          {categories.length > 0 ? (
+            <CategoryMultiSelectPopover
+              categories={categories}
+              selectedIds={filters.categoryIds}
+              onChange={(ids) => onChange({ categoryIds: ids, page: 1 }, true)}
+              fullWidth
+            />
+          ) : (
+            <button type="button" className={styles.toolbarButton} disabled>
+              Категория
+            </button>
+          )}
+        </div>
+
+        <label className={styles.snapshotSelect}>
+          <select
+            value={filters.frontSnapshotAt}
+            onChange={(event) => onChange({ frontSnapshotAt: event.target.value, page: 1 }, true)}
+            disabled={frontSnapshotsLoading}
+          >
+            <option value="">Витрина: последняя</option>
+            {frontSnapshots.map((snapshot) => (
+              <option key={snapshot.snapshot_at || 'latest'} value={snapshot.snapshot_at || ''}>
+                {snapshot.snapshot_at ? `Витрина: ${formatDate(snapshot.snapshot_at)}` : 'Витрина: последняя'} (
+                {snapshot.items_count})
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <div className={styles.toolbarSpacer} />
+
+        <label className={styles.sortControl}>
+          <span>Сортировка:</span>
+          <select value={filters.sort} onChange={(event) => onChange({ sort: event.target.value, page: 1 }, true)}>
+            <option value="diff_percent_desc">↕ Δ % ↓</option>
+            <option value="diff_percent_asc">↕ Δ % ↑</option>
+            <option value="diff_rub_desc">↕ Δ ₽ ↓</option>
+            <option value="diff_rub_asc">↕ Δ ₽ ↑</option>
+            <option value="rrp_price_desc">РРЦ ↓</option>
+            <option value="showcase_price_asc">Витрина ↑</option>
+          </select>
+        </label>
+
+      </div>
+    </div>
+  )
+}
+
+interface RrpReportTableProps {
+  items: PriceDiscrepancyItem[]
+  meta: PriceDiscrepancyResponse['meta'] | null
+  showAll: boolean
+  loading: boolean
+  onToggleShowAll: () => void
+  onPageChange: (page: number) => void
+  onOpenPriceApply: (item: PriceDiscrepancyItem) => void
+  onOpenBulkPriceApply: (items: PriceDiscrepancyItem[]) => void
+}
+
+function getItemKey(item: PriceDiscrepancyItem, index: number): string {
+  return `${item.nm_id ?? 'nm'}-${item.article ?? 'article'}-${index}`
+}
+
+interface PriceApplyModalProps {
+  projectId: string
+  item: PriceDiscrepancyItem | null
+  onClose: () => void
+  onApplied: () => void
+}
+
+interface BulkPriceApplyModalProps {
+  projectId: string
+  items: PriceDiscrepancyItem[]
+  onClose: () => void
+  onApplied: () => void
+}
+
+function getErrorMessage(error: any, fallback: string): string {
+  return error?.detail || error?.message || fallback
+}
+
+function buildImmediatePricePreview(item: PriceDiscrepancyItem): PriceApplyPreview | null {
+  const recommended = item.computed.recommended_wb_admin_price
+  if (recommended === null || recommended === undefined || Number.isNaN(recommended)) {
+    return null
+  }
+  return {
+    item,
+    pricing_mode: 'base',
+    editable_size_price: false,
+    recommended_price: Math.round(recommended),
+    default_discount: Math.round(item.discounts.wb_discount_percent ?? 0),
+    sizes: [],
+  }
+}
+
+function PriceApplyModal({ projectId, item, onClose, onApplied }: PriceApplyModalProps) {
+  const [preview, setPreview] = useState<PriceApplyPreview | null>(null)
+  const [status, setStatus] = useState<PriceApplyStatus>('idle')
+  const [message, setMessage] = useState<string | null>(null)
+  const [basePrice, setBasePrice] = useState('')
+  const [discount, setDiscount] = useState('')
+  const [sizePrices, setSizePrices] = useState<Record<number, string>>({})
+
+  const nmId = item?.nm_id
+
+  useEffect(() => {
+    let cancelled = false
+    setMessage(null)
+    setSizePrices({})
+    const immediatePreview = item ? buildImmediatePricePreview(item) : null
+    if (immediatePreview) {
+      setPreview(immediatePreview)
+      setBasePrice(String(immediatePreview.recommended_price))
+      setDiscount(String(immediatePreview.default_discount ?? 0))
+      setStatus('ready')
+    } else {
+      setPreview(null)
+      setStatus(nmId ? 'loading' : 'idle')
+    }
+
+    async function loadPreview() {
+      if (!nmId) return
+      try {
+        const resp = await apiGetData<PriceApplyPreview>(
+          `/api/v1/projects/${projectId}/wildberries/price-discrepancies/${nmId}/price-apply-preview`,
+        )
+        if (cancelled) return
+        setPreview(resp)
+        setBasePrice(String(resp.recommended_price))
+        setDiscount(String(resp.default_discount ?? 0))
+        setSizePrices(
+          Object.fromEntries(resp.sizes.map((size) => [size.size_id, String(size.target_price)])),
+        )
+        setStatus('ready')
+      } catch (e: any) {
+        if (cancelled) return
+        if (!immediatePreview) {
+          setMessage(getErrorMessage(e, 'Не удалось подготовить установку цены'))
+          setStatus('error')
+        }
+      }
+    }
+
+    loadPreview()
+    return () => {
+      cancelled = true
+    }
+  }, [projectId, nmId, item])
+
+  if (!item || !nmId) return null
+
+  const requestInProgress = status === 'sending' || status === 'awaiting_response'
+  const submitDisabled = status === 'loading' || requestInProgress || status === 'success' || !preview
+
+  const handleSubmit = async () => {
+    if (!preview) return
+    let responseReceived = false
+    setStatus('sending')
+    setMessage('Отправляем цену на WB...')
+    window.setTimeout(() => {
+      if (!responseReceived) {
+        setStatus('awaiting_response')
+        setMessage('Ждем ответ WB...')
+      }
+    }, 300)
+    try {
+      const body =
+        preview.pricing_mode === 'base'
+          ? {
+              pricing_mode: 'base',
+              price: Number(basePrice),
+              discount: Number(discount || 0),
+            }
+          : {
+              pricing_mode: 'size',
+              sizes: preview.sizes.map((size) => ({
+                size_id: size.size_id,
+                price: Number(sizePrices[size.size_id]),
+              })),
+            }
+
+      const { data } = await apiPost<PriceApplyResponse>(
+        `/api/v1/projects/${projectId}/wildberries/price-discrepancies/${nmId}/price-apply`,
+        body,
+      )
+      responseReceived = true
+      if (data.upload_id) {
+        setStatus('success')
+        setMessage('WB принял задачу обновления цены. Отчет будет ждать обновления витрины.')
+        onApplied()
+      } else {
+        setStatus('success')
+        setMessage('WB принял задачу обновления цены. Отчет будет ждать обновления витрины.')
+        onApplied()
+      }
+    } catch (e: any) {
+      responseReceived = true
+      setStatus('error')
+      setMessage(getErrorMessage(e, 'Не удалось отправить цену в WB'))
+    }
+  }
+
+  return (
+    <div className={styles.modalOverlay} role="presentation" onMouseDown={onClose}>
+      <div className={styles.modalDialog} role="dialog" aria-modal="true" aria-label="Установка цены WB" onMouseDown={(event) => event.stopPropagation()}>
+        <div className={styles.modalHeader}>
+          <div>
+            <h2>Установка цены WB</h2>
+            <span>{item.article || item.title || `nmID ${nmId}`}</span>
+          </div>
+          <button type="button" className={styles.modalClose} onClick={onClose} aria-label="Закрыть">
+            ×
+          </button>
+        </div>
+
+        <div className={styles.statusRail}>
+          <span className={status === 'sending' ? styles.statusActive : undefined}>Отправляем цену</span>
+          <span className={status === 'awaiting_response' ? styles.statusActive : undefined}>Ждем ответ WB</span>
+          <span className={status === 'success' ? styles.statusSuccess : status === 'error' ? styles.statusError : undefined}>
+            Результат
+          </span>
+        </div>
+
+        {status === 'loading' && <p className={styles.modalMessage}>Готовим данные товара...</p>}
+        {status === 'success' && (
+          <div className={styles.modalSuccessResult}>
+            <strong>Цена успешно отправлена на WB</strong>
+            <span>{message}</span>
+          </div>
+        )}
+        {message && status !== 'success' && (
+          <p className={`${styles.modalMessage} ${status === 'error' ? styles.modalError : ''}`}>{message}</p>
+        )}
+
+        {preview && (
+          <div className={styles.modalBody}>
+            <div className={styles.modeLine}>
+              <strong>{preview.pricing_mode === 'size' ? 'Размерный режим' : 'Базовый режим'}</strong>
+              <span>{preview.pricing_mode === 'size' ? 'Цена задается отдельно по размерам.' : 'Цена задается для товара.'}</span>
+            </div>
+
+            {preview.pricing_mode === 'base' ? (
+              <div className={styles.priceFormGrid}>
+                <label>
+                  <span>Цена</span>
+                  <input type="number" min="1" value={basePrice} onChange={(event) => setBasePrice(event.target.value)} />
+                </label>
+                <label>
+                  <span>Скидка WB, %</span>
+                  <input type="number" min="0" max="99" value={discount} onChange={(event) => setDiscount(event.target.value)} />
+                </label>
+              </div>
+            ) : (
+              <div className={styles.sizePriceTable}>
+                {preview.sizes.map((size) => (
+                  <label key={size.size_id}>
+                    <span>{size.tech_size_name || `Размер ${size.size_id}`}</span>
+                    <small>Сейчас {formatCurrency(size.current_price)}</small>
+                    <input
+                      type="number"
+                      min="1"
+                      value={sizePrices[size.size_id] ?? ''}
+                      onChange={(event) =>
+                        setSizePrices((prev) => ({ ...prev, [size.size_id]: event.target.value }))
+                      }
+                    />
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className={styles.modalActions}>
+          <button type="button" className={styles.buttonSecondary} onClick={onClose}>
+            Закрыть
+          </button>
+          <button type="button" className={styles.buttonPrimary} onClick={handleSubmit} disabled={submitDisabled}>
+            {status === 'success' ? 'Цена отправлена' : requestInProgress ? 'Отправляем...' : 'Установить цену'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function getBulkPrecheck(item: PriceDiscrepancyItem): { status: 'ready' | 'skip'; label: string } {
+  if (!item.nm_id) {
+    return { status: 'skip', label: 'нет nmID' }
+  }
+  if (item.staleness?.showcase_price_stale) {
+    return { status: 'skip', label: 'ждем витрину' }
+  }
+  const recommended = item.computed.recommended_wb_admin_price
+  if (recommended === null || recommended === undefined || Number.isNaN(recommended)) {
+    return { status: 'skip', label: 'нет рекомендации' }
+  }
+  return { status: 'ready', label: 'готово' }
+}
+
+function BulkPriceApplyModal({ projectId, items, onClose, onApplied }: BulkPriceApplyModalProps) {
+  const [status, setStatus] = useState<'ready' | 'sending' | 'success' | 'error'>('ready')
+  const [message, setMessage] = useState<string | null>(null)
+  const [result, setResult] = useState<BulkPriceApplyResponse | null>(null)
+
+  if (!items.length) return null
+
+  const nmIds = Array.from(
+    new Set(items.map((item) => item.nm_id).filter((nmId): nmId is number => Boolean(nmId))),
+  )
+  const prechecked = items.map((item) => ({ item, precheck: getBulkPrecheck(item) }))
+  const precheckReadyCount = prechecked.filter(({ precheck }) => precheck.status === 'ready').length
+  const requestInProgress = status === 'sending'
+  const submitDisabled = requestInProgress || status === 'success' || !nmIds.length || precheckReadyCount === 0
+
+  const handleSubmit = async () => {
+    setStatus('sending')
+    setMessage('Отправляем выбранные цены на WB одним запросом...')
+    setResult(null)
+    try {
+      const { data } = await apiPost<BulkPriceApplyResponse>(
+        `/api/v1/projects/${projectId}/wildberries/price-discrepancies/price-apply/bulk`,
+        { nm_ids: nmIds },
+      )
+      setResult(data)
+      if (data.accepted_count > 0) {
+        setStatus('success')
+        setMessage('WB принял задачу массового обновления. Отчет будет ждать обновления витрины.')
+        onApplied()
+      } else {
+        setStatus('error')
+        setMessage('Нет товаров, готовых к массовой отправке.')
+      }
+    } catch (e: any) {
+      setStatus('error')
+      setMessage(getErrorMessage(e, 'Не удалось отправить цены в WB'))
+    }
+  }
+
+  return (
+    <div className={styles.modalOverlay} role="presentation" onMouseDown={onClose}>
+      <div
+        className={`${styles.modalDialog} ${styles.bulkModalDialog}`}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Массовая установка цен WB"
+        onMouseDown={(event) => event.stopPropagation()}
       >
-        Предыдущая
-      </button>
-      <span>
-        Страница {meta.page} из {totalPages} (Всего: {meta.total_count})
-      </span>
-      <button
-        type="button"
-        onClick={() => onPageChange(Math.min(totalPages, meta.page + 1))}
-        disabled={meta.page >= totalPages}
-      >
-        Следующая
-      </button>
+        <div className={styles.modalHeader}>
+          <div>
+            <h2>Массовая установка цен WB</h2>
+            <span>Выбрано товаров: {items.length}</span>
+          </div>
+          <button type="button" className={styles.modalClose} onClick={onClose} aria-label="Закрыть">
+            ×
+          </button>
+        </div>
+
+        {status === 'success' && (
+          <div className={styles.modalSuccessResult}>
+            <strong>Цены успешно отправлены на WB</strong>
+            <span>{message}</span>
+          </div>
+        )}
+        {message && status !== 'success' && (
+          <p className={`${styles.modalMessage} ${status === 'error' ? styles.modalError : ''}`}>{message}</p>
+        )}
+
+        <div className={styles.bulkSummary}>
+          <span>К отправке: {result ? result.accepted_count : precheckReadyCount}</span>
+          <span>Пропущено: {result ? result.skipped_count : items.length - precheckReadyCount}</span>
+          <span>Запросов к WB: {result?.accepted_count || precheckReadyCount ? 1 : 0}</span>
+        </div>
+
+        <div className={styles.bulkList}>
+          {prechecked.map(({ item, precheck }) => {
+            const resultSkipped = result?.skipped.find((skipped) => skipped.nm_id === item.nm_id)
+            const resultReady = result?.ready.find((ready) => ready.nm_id === item.nm_id)
+            const label = resultSkipped?.message || (resultReady ? 'отправлено' : precheck.label)
+            const rowReady = Boolean(resultReady) || (!result && precheck.status === 'ready')
+            return (
+              <div key={`${item.nm_id}-${item.article}`} className={styles.bulkListRow}>
+                <div>
+                  <strong>{item.article || `nmID ${item.nm_id}`}</strong>
+                  <span>{item.title || item.nm_id}</span>
+                </div>
+                <div className={styles.bulkListPrices}>
+                  <span>{formatCurrency(item.prices.wb_admin_price)}</span>
+                  <strong>{formatCurrency(item.computed.recommended_wb_admin_price)}</strong>
+                </div>
+                <span className={rowReady ? styles.bulkStatusReady : styles.bulkStatusSkipped}>{label}</span>
+              </div>
+            )
+          })}
+        </div>
+
+        <div className={styles.modalActions}>
+          <button type="button" className={styles.buttonSecondary} onClick={onClose}>
+            Закрыть
+          </button>
+          <button type="button" className={styles.buttonPrimary} onClick={handleSubmit} disabled={submitDisabled}>
+            {status === 'success' ? 'Цены отправлены' : requestInProgress ? 'Отправляем...' : 'Отправить цены на WB'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function RrpReportTable({
+  items,
+  meta,
+  showAll,
+  loading,
+  onToggleShowAll,
+  onPageChange,
+  onOpenPriceApply,
+  onOpenBulkPriceApply,
+}: RrpReportTableProps) {
+  const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set())
+  const totalPages = meta ? Math.max(1, Math.ceil(meta.total_count / meta.page_size)) : 1
+
+  useEffect(() => {
+    setSelectedRows(new Set())
+  }, [items])
+
+  if (!items.length) {
+    return (
+      <div className={styles.emptyCard}>
+        <p>Нет данных по расхождениям цен с текущими фильтрами.</p>
+      </div>
+    )
+  }
+
+  const allRowsSelected = items.length > 0 && items.every((item, index) => selectedRows.has(getItemKey(item, index)))
+  const selectedItems = items.filter((item, index) => selectedRows.has(getItemKey(item, index)))
+  const selectedNmItems = selectedItems.filter((item) => item.nm_id)
+
+  const toggleAll = () => {
+    if (allRowsSelected) {
+      setSelectedRows(new Set())
+      return
+    }
+    setSelectedRows(new Set(items.map((item, index) => getItemKey(item, index))))
+  }
+
+  const toggleRow = (key: string) => {
+    setSelectedRows((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) {
+        next.delete(key)
+      } else {
+        next.add(key)
+      }
+      return next
+    })
+  }
+
+  return (
+    <div className={styles.tableCard}>
+      {selectedRows.size > 0 && (
+        <div className={styles.bulkBar}>
+          <span>{selectedRows.size} товаров выбрано</span>
+          <div className={styles.bulkActions}>
+            <button
+              type="button"
+              className={styles.buttonPrimary}
+              onClick={() => onOpenBulkPriceApply(selectedNmItems)}
+              disabled={!selectedNmItems.length}
+            >
+              Установить рекомендованные цены
+            </button>
+            <button type="button" onClick={() => setSelectedRows(new Set())}>
+              Снять
+            </button>
+          </div>
+        </div>
+      )}
+      <div className={styles.tableWrap}>
+        <table className={styles.rrpTable}>
+          <colgroup>
+            <col style={{ width: 34 }} />
+            <col style={{ width: 44 }} />
+            <col style={{ width: 84 }} />
+            <col style={{ width: 300 }} />
+            <col style={{ width: 66 }} />
+            <col style={{ width: 66 }} />
+            <col style={{ width: 66 }} />
+            <col style={{ width: 54 }} />
+            <col style={{ width: 60 }} />
+            <col style={{ width: 76 }} />
+            <col style={{ width: 56 }} />
+          </colgroup>
+          <thead>
+            <tr>
+              <th className={`${styles.sticky} ${styles.stickySelect} ${styles.selectCol}`}>
+                <input
+                  type="checkbox"
+                  className={styles.rowCheck}
+                  checked={allRowsSelected}
+                  onChange={toggleAll}
+                  aria-label="Выбрать все товары на странице"
+                />
+              </th>
+              <th className={`${styles.sticky} ${styles.stickyPhoto} ${styles.photoCol}`}>Фото</th>
+              <th className={`${styles.sticky} ${styles.stickySku} ${styles.skuCol}`}>Артикул</th>
+              <th className={`${styles.sticky} ${styles.stickyTitle} ${styles.titleCol}`}>Название</th>
+              <th className={styles.num}>Цена</th>
+              <th className={styles.num}>РРЦ</th>
+              <th className={styles.num}>Витр.</th>
+              <th className={styles.num}>Скид.</th>
+              <th className={styles.num}>Δ РРЦ</th>
+              <th className={styles.num}>Реком.</th>
+              <th className={styles.num}>Ост.</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((item, index) => {
+              const key = getItemKey(item, index)
+              const hasShowcase = item.prices.showcase_price !== null
+              const isBelow = item.computed.is_below_rrp && hasShowcase
+              const diffRub = item.computed.diff_rub
+              const diffPercent = item.computed.diff_percent
+              const absDiffRub = diffRub !== null ? Math.abs(diffRub) : null
+              const absDiffPercent = diffPercent !== null ? Math.abs(diffPercent) : null
+              const recommended = item.computed.recommended_wb_admin_price
+              const deltaRecommended = item.computed.delta_recommended
+              const expectedShowcase = item.computed.expected_showcase_price
+              const deltaSign = diffRub !== null && diffRub > 0 ? '-' : '+'
+              const deltaLabelRub = absDiffRub !== null ? `${deltaSign}${absDiffRub.toFixed(0)} ₽` : '—'
+              const deltaLabelPercent =
+                absDiffPercent !== null ? `${deltaSign}${absDiffPercent.toFixed(1)}%` : '—'
+              const isShowcaseStale = Boolean(item.staleness?.showcase_price_stale)
+              const staleCellClass = isShowcaseStale ? styles.staleShowcaseCell : undefined
+
+              return (
+                <tr key={key} className={!hasShowcase ? styles.mutedRow : undefined}>
+                  <td className={`${styles.sticky} ${styles.stickySelect} ${styles.selectCol}`}>
+                    <input
+                      type="checkbox"
+                      className={styles.rowCheck}
+                      checked={selectedRows.has(key)}
+                      onChange={() => toggleRow(key)}
+                      aria-label={`Выбрать товар ${item.article || item.nm_id || index + 1}`}
+                    />
+                  </td>
+                  <td className={`${styles.sticky} ${styles.stickyPhoto} ${styles.photoCol}`}>
+                    <PhotoPopover photos={item.photos} size={28} />
+                  </td>
+                  <td className={`${styles.sticky} ${styles.stickySku} ${styles.skuCol}`}>
+                    <div className={styles.skuText}>{item.article || '—'}</div>
+                    {item.nm_id ? (
+                      <a
+                        className={styles.nmLink}
+                        href={`https://www.wildberries.ru/catalog/${item.nm_id}/detail.aspx`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        {item.nm_id}
+                      </a>
+                    ) : (
+                      <span className={styles.nmMuted}>—</span>
+                    )}
+                  </td>
+                  <td className={`${styles.sticky} ${styles.stickyTitle} ${styles.titleCol}`}>
+                    <div className={styles.productTitle}>{item.title || '—'}</div>
+                    <div className={styles.productMeta}>
+                      {item.category?.name || 'Без категории'}
+                      {!hasShowcase && <span> · нет данных витрины</span>}
+                    </div>
+                  </td>
+                  <td className={`${styles.num} ${styles.priceCell}`}>{formatCurrency(item.prices.wb_admin_price)}</td>
+                  <td className={`${styles.num} ${styles.priceCell}`}>{formatCurrency(item.prices.rrp_price)}</td>
+                  <td className={`${styles.num} ${styles.priceCell} ${staleCellClass || ''}`}>
+                    {formatCurrency(item.prices.showcase_price)}
+                    {expectedShowcase !== null && <span className={styles.priceHint}>≈ {formatCurrency(expectedShowcase)}</span>}
+                  </td>
+                  <td className={`${styles.num} ${staleCellClass || ''}`}>
+                    <div>{item.discounts.wb_discount_percent ?? '—'}%</div>
+                    <span className={styles.priceHint}>СПП {item.discounts.spp_percent ?? '—'}%</span>
+                  </td>
+                  <td className={`${styles.num} ${staleCellClass || ''}`}>
+                    {hasShowcase && diffRub !== null ? (
+                      <span
+                        className={`${styles.deltaBadge} ${isBelow ? styles.deltaDanger : styles.deltaNeutral}`}
+                        title={deltaLabelRub}
+                      >
+                        {deltaLabelPercent}
+                      </span>
+                    ) : (
+                      '—'
+                    )}
+                  </td>
+                  <td className={`${styles.num} ${styles.recommend} ${staleCellClass || ''}`}>
+                    {isShowcaseStale ? (
+                      <div className={styles.staleShowcaseNotice}>Ждем обновления витрины WB</div>
+                    ) : recommended !== null ? (
+                      <button
+                        type="button"
+                        className={styles.recommendButton}
+                        onClick={() => onOpenPriceApply(item)}
+                        disabled={!item.nm_id}
+                        title="Установить рекомендованную цену на WB"
+                      >
+                        <div className={styles.recommendPrice}>{formatCurrency(recommended)}</div>
+                        {deltaRecommended !== null && deltaRecommended !== 0 && (
+                          <span>{deltaRecommended > 0 ? `+${deltaRecommended.toFixed(0)} ₽` : `${deltaRecommended.toFixed(0)} ₽`}</span>
+                        )}
+                      </button>
+                    ) : (
+                      '—'
+                    )}
+                  </td>
+                  <td className={`${styles.num} ${styles.stock}`}>
+                    <div>WB {formatInt(item.stocks.wb_stock_qty)}</div>
+                    <span>Скл {formatInt(item.stocks.enterprise_stock_qty)}</span>
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {meta && (
+        <div className={styles.tableFooter}>
+          <span>
+            Показано <strong>{items.length}</strong> из <strong>{meta.total_count}</strong> позиций
+          </span>
+          <button type="button" onClick={onToggleShowAll} disabled={loading}>
+            {showAll ? 'Вернуть пагинацию' : 'Показать все'}
+          </button>
+          {!showAll && (
+            <>
+              <button
+                type="button"
+                onClick={() => onPageChange(Math.max(1, meta.page - 1))}
+                disabled={loading || totalPages <= 1 || meta.page <= 1}
+              >
+                Назад
+              </button>
+              <span>
+                Страница {meta.page} из {totalPages}
+              </span>
+              <button
+                type="button"
+                onClick={() => onPageChange(Math.min(totalPages, meta.page + 1))}
+                disabled={loading || totalPages <= 1 || meta.page >= totalPages}
+              >
+                Вперед
+              </button>
+            </>
+          )}
+        </div>
+      )}
     </div>
   )
 }
 
 export default function WbPriceDiscrepanciesPage() {
   const params = useParams()
+  const pathname = usePathname()
   const router = useRouter()
   const searchParams = useSearchParams()
   const projectId = params.projectId as string
@@ -667,17 +1746,30 @@ export default function WbPriceDiscrepanciesPage() {
   const [meta, setMeta] = useState<PriceDiscrepancyResponse['meta'] | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [loadWarning, setLoadWarning] = useState<string | null>(null)
   const [categories, setCategories] = useState<CategoryOption[]>([])
-  const [diagnosing, setDiagnosing] = useState(false)
-  const [diagnosticMessage, setDiagnosticMessage] = useState<string | null>(null)
+  const [frontSnapshots, setFrontSnapshots] = useState<FrontSnapshotOption[]>([])
+  const [frontSnapshotsLoading, setFrontSnapshotsLoading] = useState(false)
   const [diagnosticInfo, setDiagnosticInfo] = useState<DiagnosticInfo | null>(null)
   const [buildingRrp, setBuildingRrp] = useState(false)
+  const [exportingCsv, setExportingCsv] = useState(false)
   const [rrpBuildMessage, setRrpBuildMessage] = useState<string | null>(null)
   const [reloadToken, setReloadToken] = useState(0)
+  const [isReportsHost, setIsReportsHost] = useState(false)
+  const [priceApplyItem, setPriceApplyItem] = useState<PriceDiscrepancyItem | null>(null)
+  const [bulkPriceApplyItems, setBulkPriceApplyItems] = useState<PriceDiscrepancyItem[]>([])
+  const loadRequestSeqRef = useRef(0)
 
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.location.hostname === 'reports.zakka.ru') {
+      setIsReportsHost(true)
+    }
+  }, [])
+
+  const searchParamsKey = searchParams.toString()
   const filters = useMemo(
-    () => parseFiltersFromSearchParams(searchParams),
-    [searchParams],
+    () => parseFiltersFromSearchParams(new URLSearchParams(searchParamsKey)),
+    [searchParamsKey],
   )
 
   const updateQuery = (patch: Partial<FiltersState>, resetPage: boolean = false) => {
@@ -686,7 +1778,7 @@ export default function WbPriceDiscrepanciesPage() {
     const next: FiltersState = {
       ...filters,
       ...patch,
-      page: resetPage ? 1 : filters.page,
+      page: resetPage ? 1 : (patch.page ?? filters.page),
     }
 
     if (next.q) current.set('q', next.q)
@@ -696,59 +1788,117 @@ export default function WbPriceDiscrepanciesPage() {
     if (catParam) current.set('category_ids', catParam)
     else current.delete('category_ids')
 
+    if (next.frontSnapshotAt) current.set('front_snapshot_at', next.frontSnapshotAt)
+    else current.delete('front_snapshot_at')
+
     current.set('has_wb_stock', next.hasWbStock)
     current.set('has_enterprise_stock', next.hasEnterpriseStock)
     current.set('only_below_rrp', String(next.onlyBelowRrp))
+    current.set('show_all', String(next.showAll))
     current.set('sort', next.sort)
     current.set('page', String(next.page))
     current.set('page_size', String(next.pageSize))
 
     const qs = current.toString()
-    const basePath = `/app/project/${projectId}/wildberries/price-discrepancies`
-    router.push(qs ? `${basePath}?${qs}` : basePath)
+    const basePath = pathname ?? `/app/project/${projectId}/wildberries/price-discrepancies`
+    const target = qs ? `${basePath}?${qs}` : basePath
+
+    router.push(target)
   }
 
   useEffect(() => {
     let cancelled = false
+    const requestSeq = ++loadRequestSeqRef.current
 
     async function loadData() {
       setLoading(true)
       setError(null)
+      setLoadWarning(null)
       try {
-        const qs = new URLSearchParams()
-        if (filters.q) qs.set('q', filters.q)
-        const catsParam = buildCategoryIdsParam(filters.categoryIds)
-        if (catsParam) qs.set('category_ids', catsParam)
-        if (filters.hasWbStock !== 'any') qs.set('has_wb_stock', filters.hasWbStock)
-        if (filters.hasEnterpriseStock !== 'any') {
-          qs.set('has_enterprise_stock', filters.hasEnterpriseStock)
+        const buildBaseQuery = () => {
+          const qs = new URLSearchParams()
+          if (filters.q) qs.set('q', filters.q)
+          const catsParam = buildCategoryIdsParam(filters.categoryIds)
+          if (catsParam) qs.set('category_ids', catsParam)
+          if (filters.frontSnapshotAt) qs.set('front_snapshot_at', filters.frontSnapshotAt)
+          if (filters.hasWbStock !== 'any') qs.set('has_wb_stock', filters.hasWbStock)
+          if (filters.hasEnterpriseStock !== 'any') {
+            qs.set('has_enterprise_stock', filters.hasEnterpriseStock)
+          }
+          if (!filters.onlyBelowRrp) qs.set('only_below_rrp', 'false')
+          else qs.set('only_below_rrp', 'true')
+          qs.set('sort', filters.sort)
+          return qs
         }
-        if (!filters.onlyBelowRrp) qs.set('only_below_rrp', 'false')
-        else qs.set('only_below_rrp', 'true')
-        qs.set('sort', filters.sort)
-        qs.set('page', String(filters.page))
-        qs.set('page_size', String(filters.pageSize))
 
-        const url = `/api/v1/projects/${projectId}/wildberries/price-discrepancies?${qs.toString()}`
-        const resp = await apiGetData<PriceDiscrepancyResponse>(url)
-        if (cancelled) return
+        let resp: PriceDiscrepancyResponse
+        if (filters.showAll) {
+          const allItems: PriceDiscrepancyItem[] = []
+          const pageSize = 200
+          let page = 1
+          let totalCount = 0
+
+          while (true) {
+            const qs = buildBaseQuery()
+            qs.set('page', String(page))
+            qs.set('page_size', String(pageSize))
+            const url = `/api/v1/projects/${projectId}/wildberries/price-discrepancies?${qs.toString()}`
+            const pageResp = await loadPriceDiscrepancyResponse(url)
+            if (cancelled) return
+
+            if (page === 1) {
+              totalCount = pageResp.meta?.total_count || 0
+            }
+
+            const items = pageResp.items || []
+            allItems.push(...items)
+
+            if (!items.length || allItems.length >= totalCount) {
+              resp = {
+                meta: {
+                  total_count: totalCount || allItems.length,
+                  page: 1,
+                  page_size: Math.max(allItems.length, 1),
+                  updated_at: pageResp.meta?.updated_at || new Date().toISOString(),
+                },
+                items: allItems,
+                diagnostic: pageResp.diagnostic,
+              }
+              break
+            }
+            page += 1
+          }
+        } else {
+          const qs = buildBaseQuery()
+          qs.set('page', String(filters.page))
+          qs.set('page_size', String(filters.pageSize))
+          const url = `/api/v1/projects/${projectId}/wildberries/price-discrepancies?${qs.toString()}`
+          resp = await loadPriceDiscrepancyResponse(url)
+        }
+
+        if (cancelled || requestSeq !== loadRequestSeqRef.current) return
         setData(resp.items || [])
         setMeta(resp.meta)
         setDiagnosticInfo(resp.diagnostic || null)
         setError(null)
+        setLoadWarning(null)
       } catch (e: any) {
-        if (cancelled) return
+        if (cancelled || requestSeq !== loadRequestSeqRef.current) return
         console.error('Failed to load price discrepancies', e)
-        setError(e?.detail || e?.message || 'Не удалось загрузить данные')
-        setData([])
-        setMeta({
-          total_count: 0,
-          page: filters.page,
-          page_size: filters.pageSize,
-          updated_at: new Date().toISOString(),
-        })
+        if (e?.status === 0) {
+          setLoadWarning('Не удалось обновить отчет из-за краткого обрыва соединения. Текущие данные оставлены на экране.')
+        } else {
+          setError(e?.detail || e?.message || 'Не удалось загрузить данные')
+          setData([])
+          setMeta({
+            total_count: 0,
+            page: filters.page,
+            page_size: filters.pageSize,
+            updated_at: new Date().toISOString(),
+          })
+        }
       } finally {
-        if (!cancelled) {
+        if (!cancelled && requestSeq === loadRequestSeqRef.current) {
           setLoading(false)
         }
       }
@@ -758,7 +1908,7 @@ export default function WbPriceDiscrepanciesPage() {
     return () => {
       cancelled = true
     }
-  }, [projectId, filters, reloadToken])
+  }, [projectId, searchParamsKey, reloadToken])
 
   useEffect(() => {
     let cancelled = false
@@ -784,33 +1934,57 @@ export default function WbPriceDiscrepanciesPage() {
     }
   }, [projectId])
 
-  const handleExportCsv = () => {
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadFrontSnapshots() {
+      setFrontSnapshotsLoading(true)
+      try {
+        const resp = await apiGetData<{ items: FrontSnapshotOption[] }>(
+          `/api/v1/projects/${projectId}/wildberries/price-discrepancies/front-snapshots?limit=50`,
+        )
+        if (cancelled) return
+        setFrontSnapshots(resp.items || [])
+      } catch (e) {
+        if (cancelled) return
+        console.warn('Failed to load WB frontend snapshots', e)
+        setFrontSnapshots([])
+      } finally {
+        if (!cancelled) setFrontSnapshotsLoading(false)
+      }
+    }
+
+    loadFrontSnapshots()
+    return () => {
+      cancelled = true
+    }
+  }, [projectId])
+
+  const handleExportCsv = async () => {
     const current = new URLSearchParams(searchParams.toString())
     const base = `/api/v1/projects/${projectId}/wildberries/price-discrepancies/export.csv`
     const url = current.toString() ? `${base}?${current.toString()}` : base
-    if (typeof window !== 'undefined') {
-      window.location.href = url
-    }
-  }
 
-  const handleDiagnose = async () => {
-    setDiagnosing(true)
-    setDiagnosticMessage(null)
+    setExportingCsv(true)
     setError(null)
+
     try {
-      const { data: resp } = await apiPost<{ task_id: string; status: string; message: string }>(
-        `/api/v1/projects/${projectId}/wildberries/price-discrepancies/diagnose`
-      )
-      setDiagnosticMessage(
-        `Диагностика запущена (task_id: ${resp.task_id}). Проверьте логи worker для деталей.`
-      )
-      // Clear message after 5 seconds
-      setTimeout(() => setDiagnosticMessage(null), 5000)
+      const { blob, filename } = await apiDownload(url, { method: 'GET' })
+      if (typeof window === 'undefined') return
+
+      const objectUrl = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = objectUrl
+      link.download = filename || 'wb_price_discrepancies.csv'
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.setTimeout(() => window.URL.revokeObjectURL(objectUrl), 1000)
     } catch (e: any) {
-      console.error('Failed to trigger diagnostics', e)
-      setError(e?.detail || e?.message || 'Не удалось запустить диагностику')
+      console.error('Failed to export price discrepancies CSV', e)
+      setError(e?.detail || e?.message || 'Не удалось скачать CSV')
     } finally {
-      setDiagnosing(false)
+      setExportingCsv(false)
     }
   }
 
@@ -841,224 +2015,108 @@ export default function WbPriceDiscrepanciesPage() {
   }
 
   return (
-    <div className="container">
-      <h1>Расхождения цен (РРЦ vs витрина WB)</h1>
-      <Link href={`/app/project/${projectId}/dashboard`}>
-        <button type="button">← Назад к дашборду</button>
-      </Link>
-
-      {meta && (
-        <div className="card" style={{ marginTop: 16 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
-          <div>
-            <strong>Всего позиций:</strong> {meta.total_count}
-          </div>
-          <div style={{ fontSize: 12, color: '#666' }}>
-            <strong>Данные обновлены:</strong> {formatDate(meta.updated_at)}
-          </div>
-        </div>
-        {meta.total_count === 0 && diagnosticInfo && (
-          <div
-            style={{
-              marginTop: 12,
-              padding: 16,
-              background: '#fef3c7',
-              border: '1px solid #f59e0b',
-              borderRadius: 4,
-              fontSize: 14,
-            }}
-          >
-            <div style={{ marginBottom: 12 }}>
-              <strong>⚠️ Отчёт пуст. Диагностика данных:</strong>
-            </div>
-            
-            <div style={{ marginBottom: 12 }}>
-              <strong>Доступность данных:</strong>
-              <ul style={{ marginTop: 4, marginBottom: 0, paddingLeft: 20 }}>
-                <li>Products: {diagnosticInfo.data_availability.products_count}</li>
-                <li>Price snapshots: {diagnosticInfo.data_availability.price_snapshots_count}</li>
-                <li>Frontend prices: {diagnosticInfo.data_availability.frontend_catalog_price_snapshots_count}</li>
-                <li>Stock snapshots: {diagnosticInfo.data_availability.stock_snapshots_count}</li>
-                <li>
-                  <strong style={{ color: diagnosticInfo.data_availability.rrp_snapshots_count === 0 ? '#dc2626' : '#059669' }}>
-                    RRP snapshots: {diagnosticInfo.data_availability.rrp_snapshots_count}
-                  </strong>
-                </li>
-                {diagnosticInfo.data_availability.rrp_snapshots_latest_snapshot_at && (
-                  <li>
-                    Последний RRP snapshot:{' '}
-                    {formatDate(diagnosticInfo.data_availability.rrp_snapshots_latest_snapshot_at)}
-                  </li>
-                )}
-                <li>Products with both RRP and showcase: {diagnosticInfo.data_availability.products_with_both_rrp_and_showcase}</li>
-              </ul>
-            </div>
-
-            {diagnosticInfo.data_availability.internal_data_latest_snapshot && (
-              <div style={{ marginBottom: 12 }}>
-                <strong>Internal Data (источник РРЦ):</strong>
-                <ul style={{ marginTop: 4, marginBottom: 0, paddingLeft: 20 }}>
-                  <li>
-                    Последний snapshot: #{diagnosticInfo.data_availability.internal_data_latest_snapshot.id}{' '}
-                    ({diagnosticInfo.data_availability.internal_data_latest_snapshot.status || '—'}) —{' '}
-                    {formatDate(diagnosticInfo.data_availability.internal_data_latest_snapshot.imported_at || undefined)}
-                  </li>
-                  {typeof diagnosticInfo.data_availability.internal_data_rrp_rows_found === 'number' && (
-                    <li>RRP строк (найдено): {diagnosticInfo.data_availability.internal_data_rrp_rows_found}</li>
-                  )}
-                  {typeof diagnosticInfo.data_availability.internal_data_rrp_rows_matched_products === 'number' && (
-                    <li>
-                      Матчится с products.vendor_code_norm:{' '}
-                      {diagnosticInfo.data_availability.internal_data_rrp_rows_matched_products}
-                    </li>
-                  )}
-                  {typeof diagnosticInfo.data_availability.internal_data_rrp_rows_inserted === 'number' && (
-                    <li>
-                      Уже вставлено в rrp_snapshots (для этого snapshot):{' '}
-                      {diagnosticInfo.data_availability.internal_data_rrp_rows_inserted}
-                    </li>
-                  )}
-                </ul>
-              </div>
-            )}
-
-            {diagnosticInfo.data_availability.internal_data_rrp_errors_preview &&
-              diagnosticInfo.data_availability.internal_data_rrp_errors_preview.length > 0 && (
-                <div style={{ marginBottom: 12 }}>
-                  <strong>Ошибки парсинга/валидации RRP (превью):</strong>
-                  <ul style={{ marginTop: 4, marginBottom: 0, paddingLeft: 20 }}>
-                    {diagnosticInfo.data_availability.internal_data_rrp_errors_preview.slice(0, 5).map((e, idx) => (
-                      <li key={idx}>
-                        {e.message || '—'}
-                        {e.row_index !== null && e.row_index !== undefined ? ` (row ${e.row_index})` : ''}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            
-            {diagnosticInfo.issues.length > 0 && (
-              <div style={{ marginBottom: 12 }}>
-                <strong style={{ color: '#dc2626' }}>Проблемы:</strong>
-                <ul style={{ marginTop: 4, marginBottom: 0, paddingLeft: 20 }}>
-                  {diagnosticInfo.issues.map((issue, idx) => (
-                    <li key={idx}>{issue}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-            
-            {diagnosticInfo.recommendations.length > 0 && (
-              <div>
-                <strong style={{ color: '#059669' }}>Рекомендации:</strong>
-                <ul style={{ marginTop: 4, marginBottom: 0, paddingLeft: 20 }}>
-                  {diagnosticInfo.recommendations.map((rec, idx) => (
-                    <li key={idx}>{rec}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </div>
-        )}
-        
-        {meta.total_count === 0 && !diagnosticInfo && (
-          <div
-            style={{
-              marginTop: 12,
-              padding: 12,
-              background: '#fef3c7',
-              border: '1px solid #f59e0b',
-              borderRadius: 4,
-              fontSize: 14,
-            }}
-          >
-            <strong>Внимание:</strong> Отчёт пуст. Нажмите "Собрать отчёт" для диагностики данных или проверьте логи worker.
-          </div>
-        )}
+    <div className={styles.page}>
+      {isReportsHost && (
+        <div className={styles.portalBack}>
+          <PortalBackButton fallbackHref="/client" />
         </div>
       )}
 
-      <div className="card" style={{ marginTop: 16, marginBottom: 16 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
-          <h2 style={{ margin: 0 }}>Действия</h2>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <button
-              type="button"
-              onClick={handleDiagnose}
-              disabled={diagnosing}
-              style={{ minWidth: 140 }}
-            >
-              {diagnosing ? 'Запуск...' : 'Собрать отчёт'}
-            </button>
-            {diagnosticInfo?.data_availability?.rrp_snapshots_count === 0 && (
-              <button
-                type="button"
-                onClick={handleBuildRrpSnapshots}
-                disabled={buildingRrp}
-                style={{ minWidth: 190 }}
-              >
-                {buildingRrp ? 'Запуск...' : 'Построить RRP snapshots'}
-              </button>
-            )}
-            <button type="button" onClick={handleExportCsv}>
-              Экспорт CSV
-            </button>
+      <div className={styles.reportHeader}>
+        <div className={styles.reportTitleBlock}>
+          <div className={styles.reportTitleRow}>
+            <h1>Расхождения цен</h1>
+            <span className={styles.marketplaceBadge}>
+              <span />
+              Wildberries
+            </span>
           </div>
         </div>
-        {diagnosticMessage && (
-          <div
-            style={{
-              marginTop: 12,
-              padding: 12,
-              background: '#d1fae5',
-              border: '1px solid #10b981',
-              borderRadius: 4,
-              fontSize: 14,
-            }}
-          >
-            {diagnosticMessage}
-          </div>
-        )}
-        {rrpBuildMessage && (
-          <div
-            style={{
-              marginTop: 12,
-              padding: 12,
-              background: '#dbeafe',
-              border: '1px solid #60a5fa',
-              borderRadius: 4,
-              fontSize: 14,
-            }}
-          >
-            {rrpBuildMessage}
-          </div>
-        )}
+        <div className={styles.headerActions}>
+          <button type="button" className={styles.buttonSecondary} onClick={handleExportCsv} disabled={exportingCsv}>
+            <span className={styles.headerActionIcon}>↓</span>
+            {exportingCsv ? 'Экспортируем CSV…' : 'Экспорт CSV'}
+          </button>
+        </div>
       </div>
 
-      <PriceDiscrepancyFilters
+      <RrpSavedViews filters={filters} meta={meta} onChange={updateQuery} />
+
+      {diagnosticInfo?.data_availability?.rrp_snapshots_count === 0 && (
+        <div className={styles.noticeBar}>
+          <div>
+            <strong>Нет RRP snapshots</strong>
+            <span>Данные РРЦ нужно построить из internal data.</span>
+          </div>
+          <button type="button" onClick={handleBuildRrpSnapshots} disabled={buildingRrp}>
+            {buildingRrp ? 'Запуск...' : 'Построить RRP snapshots'}
+          </button>
+        </div>
+      )}
+
+      {rrpBuildMessage && <div className={styles.infoBar}>{rrpBuildMessage}</div>}
+
+      {meta?.total_count === 0 && (
+        <div className={styles.noticeBar}>
+          <div>
+            <strong>Отчет пуст</strong>
+            <span>
+              {diagnosticInfo
+                ? `Products: ${diagnosticInfo.data_availability.products_count}, RRP snapshots: ${diagnosticInfo.data_availability.rrp_snapshots_count}, витрина: ${diagnosticInfo.data_availability.frontend_catalog_price_snapshots_count}.`
+                : 'Проверьте доступность источников данных или логи worker.'}
+            </span>
+          </div>
+        </div>
+      )}
+
+      <RrpFilterToolbar
         filters={filters}
         categories={categories}
+        frontSnapshots={frontSnapshots}
+        frontSnapshotsLoading={frontSnapshotsLoading}
+        meta={meta}
         onChange={updateQuery}
-        onExportCsv={handleExportCsv}
       />
 
-      {loading && <p>Загрузка данных…</p>}
+      {loading && <p className={styles.loadingText}>Загрузка данных…</p>}
+      {loadWarning && <div className={styles.infoBar}>{loadWarning}</div>}
       {error && (
-        <div className="card" style={{ background: '#f8d7da', border: '1px solid #f5c2c7' }}>
-          <p style={{ margin: 0 }}>
+        <div className={styles.errorCard}>
+          <p>
             <strong>Ошибка:</strong> {error}
           </p>
         </div>
       )}
-      {!loading && !error && <PriceDiscrepancyTable items={data} />}
-
-      {meta && (
-        <Pagination
+      {!loading && !error && (
+        <RrpReportTable
+          items={data}
           meta={meta}
-          onPageChange={(page) => updateQuery({ page }, false)}
+          showAll={filters.showAll}
+          loading={loading}
+          onToggleShowAll={() => updateQuery({ showAll: !filters.showAll, page: 1 }, true)}
+          onPageChange={(page) => {
+            updateQuery({ page }, false)
+          }}
+          onOpenPriceApply={setPriceApplyItem}
+          onOpenBulkPriceApply={setBulkPriceApplyItems}
         />
       )}
+      <PriceApplyModal
+        projectId={projectId}
+        item={priceApplyItem}
+        onClose={() => setPriceApplyItem(null)}
+        onApplied={() => {
+          setReloadToken((x) => x + 1)
+        }}
+      />
+      <BulkPriceApplyModal
+        projectId={projectId}
+        items={bulkPriceApplyItems}
+        onClose={() => setBulkPriceApplyItems([])}
+        onApplied={() => {
+          setReloadToken((x) => x + 1)
+        }}
+      />
     </div>
   )
 }
-

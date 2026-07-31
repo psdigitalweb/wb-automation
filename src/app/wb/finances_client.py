@@ -108,6 +108,7 @@ class WBFinancesClient:
         date_from: str,
         date_to: str,
         rrdid: Optional[int] = None,
+        limit: int = 100000,
     ) -> Dict[str, Any]:
         """Fetch reportDetailByPeriod from WB Finances API v5.
         
@@ -117,10 +118,12 @@ class WBFinancesClient:
         Args:
             date_from: Start date in format YYYY-MM-DD
             date_to: End date in format YYYY-MM-DD
-            rrdid: Optional report ID to filter by
+            rrdid: Cursor for pagination. Pass max(rrd_id) from previous batch for next page.
+                   Start with 0 for first page. API returns 204 when no more data.
+            limit: Max rows per request (default 100000, WB max).
             
         Returns:
-            Dict with http_status, payload, headers, text
+            Dict with http_status, payload (list or None), headers, text
         """
         if (self.token or "").upper() == "MOCK":
             print("WBFinancesClient.fetch_report_detail_by_period: MOCK mode, returning empty payload")
@@ -130,9 +133,10 @@ class WBFinancesClient:
         params: Dict[str, Any] = {
             "dateFrom": date_from,
             "dateTo": date_to,
+            "limit": min(limit, 100000),
         }
-        if rrdid is not None:
-            params["rrdid"] = rrdid
+        # rrdid: 0 for first page, then max(rrd_id) from last batch
+        params["rrdid"] = rrdid if rrdid is not None else 0
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await self._request(client, "GET", path, params=params)
@@ -148,17 +152,22 @@ class WBFinancesClient:
                 f"x-request-id={headers.get('X-Request-Id') or headers.get('x-request-id')}, "
                 f"len={len(response.content) if response.content is not None else 0}"
             )
-            print(f"WBFinancesClient: response preview: {text_preview}")
+            if status != 204:
+                print(f"WBFinancesClient: response preview: {text_preview}")
 
             payload: Any
-            try:
-                payload = response.json()
-            except Exception as e:
-                print(
-                    f"WBFinancesClient: JSON parse error for {path}: "
-                    f"{type(e).__name__}: {e}"
-                )
-                payload = None
+            if status == 204:
+                # No more data (empty response)
+                payload = []
+            else:
+                try:
+                    payload = response.json()
+                except Exception as e:
+                    print(
+                        f"WBFinancesClient: JSON parse error for {path}: "
+                        f"{type(e).__name__}: {e}"
+                    )
+                    payload = None
 
             return {
                 "http_status": status,

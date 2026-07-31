@@ -11,7 +11,6 @@ from app.ingest_prices import ingest_prices as _ingest_prices
 from app.ingest_stocks import ingest_warehouses as _ingest_warehouses
 from app.ingest_products import ingest as _ingest_products
 from app.ingest_supplier_stocks import ingest_supplier_stocks as _ingest_supplier_stocks
-from app.tasks.ingestion import ingest_rrp_xml_task
 
 
 RunCallable = Callable[..., Awaitable[Dict[str, Any]]]
@@ -52,7 +51,11 @@ async def _wrap_ingest_stocks(project_id: int, run_id: int) -> Dict[str, Any]:
 
 
 async def _wrap_ingest_prices(project_id: int, run_id: int) -> Dict[str, Any]:
-    await _ingest_prices(project_id=project_id, run_id=run_id)
+    result = await _ingest_prices(project_id=project_id, run_id=run_id)
+    if isinstance(result, dict):
+        if "finished_at" not in result:
+            result = {**result, "finished_at": datetime.utcnow().isoformat()}
+        return result
     return {
         "ok": True,
         "scope": "project",
@@ -62,15 +65,28 @@ async def _wrap_ingest_prices(project_id: int, run_id: int) -> Dict[str, Any]:
     }
 
 
+async def _wrap_wb_product_groups(project_id: int, run_id: int) -> Dict[str, Any]:
+    from app.services.wb_product_groups import ingest_wb_product_groups
+
+    result = await ingest_wb_product_groups(project_id=project_id, run_id=run_id)
+    return {
+        **result,
+        "finished_at": datetime.utcnow().isoformat(),
+    }
+
+
 async def _wrap_ingest_products(project_id: int, run_id: int) -> Dict[str, Any]:
-    await _ingest_products(project_id, loop_delay_s=0)
+    result = await _ingest_products(project_id, loop_delay_s=0, run_id=run_id)
     stats: Dict[str, Any] = {
-        "ok": True,
+        **(result if isinstance(result, dict) else {}),
+        "ok": bool(result.get("ok", True)) if isinstance(result, dict) else True,
         "scope": "project",
         "project_id": project_id,
         "domain": "products",
         "finished_at": datetime.utcnow().isoformat(),
     }
+    if stats["ok"] is False:
+        return stats
 
     # Optional chaining: after products ingestion, build RRP snapshots from Internal Data.
     # This covers the common order on fresh DBs: Internal Data already imported, then products arrive.
@@ -143,6 +159,40 @@ async def _wrap_ingest_supplier_stocks(project_id: int, run_id: int) -> Dict[str
     }
 
 
+async def _wrap_wb_stock_total_daily(project_id: int, run_id: int) -> Dict[str, Any]:
+    """Wrapper for wb_stock_total_daily builder (from stock_snapshots)."""
+    from app.services.ingest.runs import get_run
+    from app.ingest_wb_stock_total_daily import build_wb_stock_total_daily
+    from datetime import date as _date
+
+    run = get_run(run_id)
+    params = (run or {}).get("params_json") or {}
+    if isinstance(params, str):
+        try:
+            import json as _json
+            params = _json.loads(params) if params else {}
+        except Exception:
+            params = {}
+    if not isinstance(params, dict):
+        params = {}
+
+    for k in ("date_from", "date_to", "snapshot_date"):
+        if params.get(k) is not None and not isinstance(params.get(k), _date):
+            try:
+                params[k] = _date.fromisoformat(str(params[k])[:10])
+            except (ValueError, TypeError):
+                pass
+
+    result = await build_wb_stock_total_daily(
+        project_id=project_id,
+        run_id=run_id,
+        params=params,
+    )
+    if isinstance(result, dict) and "finished_at" not in result:
+        result["finished_at"] = datetime.utcnow().isoformat()
+    return result
+
+
 async def _wrap_frontend_prices(project_id: int, run_id: int) -> Dict[str, Any]:
     """Call frontend_prices ingestion directly (async) to avoid nested asyncio.run() calls.
     
@@ -165,7 +215,15 @@ async def _wrap_frontend_prices(project_id: int, run_id: int) -> Dict[str, Any]:
         )
 
         # Avoid overlapping prices runs; strict mode treats this as failure to refresh.
-        if runs_service.has_active_run(project_id=project_id, marketplace_code="wildberries", job_code="prices"):
+        # #region agent log
+        _has_active = runs_service.has_active_run(project_id=project_id, marketplace_code="wildberries", job_code="prices")
+        try:
+            with open(r"d:\Work\EcomCore\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                _f.write(__import__("json").dumps({"location": "registry.py:_wrap_frontend_prices:has_active_run", "message": "has_active_run(prices)", "data": {"project_id": project_id, "run_id": run_id, "has_active_run": _has_active}, "timestamp": int(time.time() * 1000), "hypothesisId": "H1"}) + "\n")
+        except Exception:
+            pass
+        # #endregion
+        if _has_active:
             msg = (
                 "Failed to refresh WB admin prices (job 'prices') before frontend prices ingest; "
                 "prices job is already running or queued; retry later."
@@ -186,8 +244,25 @@ async def _wrap_frontend_prices(project_id: int, run_id: int) -> Dict[str, Any]:
         )
 
         t0 = time.monotonic()
-        prices_result = execute_ingest_task(int(prices_run["id"]))
+        # #region agent log
+        try:
+            with open(r"d:\Work\EcomCore\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                _f.write(__import__("json").dumps({"location": "registry.py:_wrap_frontend_prices:before_execute", "message": "before execute_ingest_task(prices_run_id)", "data": {"prices_run_id": prices_run["id"], "project_id": project_id}, "timestamp": int(time.time() * 1000), "hypothesisId": "H3"}) + "\n")
+        except Exception:
+            pass
+        # #endregion
+        # Run prices job synchronously and get dict result (Celery .apply() runs in current process)
+        prices_result = execute_ingest_task.apply(args=(int(prices_run["id"]),))
+        if not isinstance(prices_result, dict):
+            prices_result = getattr(prices_result, "result", None) or {}
         dt_ms = int(round((time.monotonic() - t0) * 1000))
+        # #region agent log
+        try:
+            with open(r"d:\Work\EcomCore\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                _f.write(__import__("json").dumps({"location": "registry.py:_wrap_frontend_prices:after_execute", "message": "prices_result", "data": {"prices_run_id": prices_run["id"], "result_type": type(prices_result).__name__, "result_status": prices_result.get("status") if isinstance(prices_result, dict) else None, "result_keys": list(prices_result.keys()) if isinstance(prices_result, dict) else [], "duration_ms": dt_ms}, "timestamp": int(time.time() * 1000), "hypothesisId": "H2_H4_H5"}) + "\n")
+        except Exception:
+            pass
+        # #endregion
 
         logger.info(
             f"frontend_prices: prices refresh completed "
@@ -218,6 +293,13 @@ async def _wrap_frontend_prices(project_id: int, run_id: int) -> Dict[str, Any]:
             }
     except Exception as e:
         # Strict mode: do not continue.
+        # #region agent log
+        try:
+            with open(r"d:\Work\EcomCore\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                _f.write(__import__("json").dumps({"location": "registry.py:_wrap_frontend_prices:exception", "message": "exception in refresh prices", "data": {"project_id": project_id, "run_id": run_id, "exc_type": type(e).__name__, "exc_msg": str(e)[:500]}, "timestamp": int(time.time() * 1000), "hypothesisId": "H3"}) + "\n")
+        except Exception:
+            pass
+        # #endregion
         msg = (
             "Failed to refresh WB admin prices (job 'prices') before frontend prices ingest; retry later."
         )
@@ -231,137 +313,272 @@ async def _wrap_frontend_prices(project_id: int, run_id: int) -> Dict[str, Any]:
         )
         return {"ok": False, "reason": msg, "error_summary": msg}
 
+    import random
+    import asyncio
     from sqlalchemy import text
     from app.db import engine
     from app.ingest_frontend_prices import ingest_frontend_brand_prices
-    from app.services.ingest.runs import get_run
-    
-    brand_id: int | None = None
-    sleep_ms: int = 800
-    max_pages: int = 0
-    
-    # Get configuration (same logic as ingest_frontend_prices_task)
+    from app.services.ingest.runs import get_run, set_run_progress
+    from app.services.wb_storefront_brands import extract_frontend_brand_ids
+    from app.tasks.ingestion import _get_frontend_prices_proxy_config
+
+    # Load WB settings: storefront brand scope, base_url_template, frontend_prices (limit, max_pages, sleep).
     with engine.connect() as conn:
-        brand_id_str = conn.execute(
+        wb_row = conn.execute(
             text(
                 """
-                SELECT pm.settings_json->>'brand_id' AS brand_id
+                SELECT pm.settings_json AS settings_json,
+                       pm.settings_json->'frontend_prices'->>'base_url_template' AS base_url_template,
+                       pm.settings_json->'frontend_prices'->>'limit' AS fp_limit,
+                       pm.settings_json->'frontend_prices'->>'max_pages' AS fp_max_pages,
+                       pm.settings_json->'frontend_prices'->>'sleep_base_ms' AS fp_sleep_base_ms,
+                       pm.settings_json->'frontend_prices'->>'sleep_jitter_ms' AS fp_sleep_jitter_ms,
+                       pm.settings_json->'frontend_prices'->>'sleep_ms' AS fp_sleep_ms,
+                       pm.settings_json->'frontend_prices'->>'http_min_retries' AS fp_http_min_retries,
+                       pm.settings_json->'frontend_prices'->>'http_timeout_jitter_sec' AS fp_http_timeout_jitter_sec,
+                       pm.settings_json->'frontend_prices'->>'min_coverage_ratio' AS fp_min_coverage_ratio,
+                       pm.settings_json->'frontend_prices'->>'max_runtime_seconds' AS fp_max_runtime_seconds,
+                       pm.settings_json->'frontend_prices'->>'rate_limit_max_retries' AS fp_rate_limit_max_retries,
+                       pm.settings_json->'frontend_prices'->>'rate_limit_base_sleep_seconds' AS fp_rate_limit_base_sleep_seconds,
+                       pm.settings_json->'frontend_prices'->>'rate_limit_max_sleep_seconds' AS fp_rate_limit_max_sleep_seconds,
+                       pm.settings_json->'frontend_prices'->>'rate_limit_max_total_wait_seconds' AS fp_rate_limit_max_total_wait_seconds
                 FROM project_marketplaces pm
                 JOIN marketplaces m ON m.id = pm.marketplace_id
-                WHERE pm.project_id = :project_id
-                  AND m.code = 'wildberries'
+                WHERE pm.project_id = :project_id AND m.code = 'wildberries'
                 LIMIT 1
                 """
             ),
             {"project_id": project_id},
-        ).scalar_one_or_none()
-        
+        ).mappings().first()
+
         sleep_ms_str = conn.execute(
-            text(
-                """
-                SELECT value->>'value' AS value
-                FROM app_settings
-                WHERE key = 'frontend_prices.sleep_ms'
-                """
-            )
+            text("SELECT value->>'value' AS value FROM app_settings WHERE key = 'frontend_prices.sleep_ms'")
         ).scalar_one_or_none()
-        
         max_pages_str = conn.execute(
-            text(
-                """
-                SELECT value->>'value' AS value
-                FROM app_settings
-                WHERE key = 'frontend_prices.max_pages'
-                """
-            )
+            text("SELECT value->>'value' AS value FROM app_settings WHERE key = 'frontend_prices.max_pages'")
         ).scalar_one_or_none()
-    
-    if brand_id_str:
-        try:
-            brand_id = int(brand_id_str)
-        except (ValueError, TypeError):
-            return {
-                "ok": False,
-                "scope": "project",
-                "project_id": project_id,
-                "domain": "frontend_prices",
-                "reason": "invalid_brand_id",
-                "brand_id": brand_id_str,
-            }
-    else:
+
+        base_url_template = (wb_row or {}).get("base_url_template") or ""
+        if not base_url_template or not str(base_url_template).strip():
+            base_url_template = conn.execute(
+                text("SELECT value->>'url' AS url FROM app_settings WHERE key = 'frontend_prices.brand_base_url'")
+            ).scalar_one_or_none()
+    base_url_template = (base_url_template or "").strip()
+
+    brand_ids: List[int] = extract_frontend_brand_ids((wb_row or {}).get("settings_json"))
+
+    if not brand_ids:
         return {
             "ok": False,
             "scope": "project",
             "project_id": project_id,
             "domain": "frontend_prices",
-            "reason": "brand_id_not_configured_for_project",
+            "reason": "no_storefront_brands_configured",
+            "error": "Добавьте бренд витрины WB в настройках Wildberries для загрузки frontend_prices.",
         }
-    
-    if sleep_ms_str:
+
+    if not base_url_template:
+        return {
+            "ok": False,
+            "scope": "project",
+            "project_id": project_id,
+            "domain": "frontend_prices",
+            "reason": "base_url_template_not_configured",
+            "error": "frontend_prices.base_url_template not set (WB marketplace settings or app_settings) with {brand_id} placeholder.",
+        }
+
+    limit = 50
+    max_pages = 0
+    sleep_base_ms = 800
+    sleep_jitter_ms = 400
+    if wb_row:
         try:
-            sleep_ms = int(sleep_ms_str)
+            if wb_row.get("fp_limit") is not None:
+                limit = int(wb_row["fp_limit"])
         except (ValueError, TypeError):
-            sleep_ms = 800
-    
-    if max_pages_str:
+            pass
+        try:
+            if wb_row.get("fp_max_pages") is not None:
+                max_pages = int(wb_row["fp_max_pages"])
+        except (ValueError, TypeError):
+            pass
+        try:
+            if wb_row.get("fp_sleep_base_ms") is not None:
+                sleep_base_ms = int(wb_row["fp_sleep_base_ms"])
+            elif wb_row.get("fp_sleep_ms") is not None:
+                sleep_base_ms = int(wb_row["fp_sleep_ms"])
+        except (ValueError, TypeError):
+            pass
+        try:
+            if wb_row.get("fp_sleep_jitter_ms") is not None:
+                sleep_jitter_ms = int(wb_row["fp_sleep_jitter_ms"])
+        except (ValueError, TypeError):
+            pass
+    fp_http_min_retries: Optional[int] = None
+    fp_http_timeout_jitter_sec: Optional[int] = None
+    if wb_row:
+        try:
+            if wb_row.get("fp_http_min_retries") is not None:
+                fp_http_min_retries = int(wb_row["fp_http_min_retries"])
+        except (ValueError, TypeError):
+            pass
+        try:
+            if wb_row.get("fp_http_timeout_jitter_sec") is not None:
+                fp_http_timeout_jitter_sec = int(wb_row["fp_http_timeout_jitter_sec"])
+        except (ValueError, TypeError):
+            pass
+    fp_min_coverage_ratio: Optional[float] = None
+    fp_max_runtime_seconds: Optional[int] = None
+    fp_rate_limit_max_retries: Optional[int] = None
+    fp_rate_limit_base_sleep_seconds: Optional[int] = None
+    fp_rate_limit_max_sleep_seconds: Optional[int] = None
+    fp_rate_limit_max_total_wait_seconds: Optional[int] = None
+    if wb_row:
+        try:
+            if wb_row.get("fp_min_coverage_ratio") is not None:
+                fp_min_coverage_ratio = float(wb_row["fp_min_coverage_ratio"])
+        except (ValueError, TypeError):
+            pass
+        try:
+            if wb_row.get("fp_max_runtime_seconds") is not None:
+                fp_max_runtime_seconds = int(wb_row["fp_max_runtime_seconds"])
+        except (ValueError, TypeError):
+            pass
+        try:
+            if wb_row.get("fp_rate_limit_max_retries") is not None:
+                fp_rate_limit_max_retries = int(wb_row["fp_rate_limit_max_retries"])
+        except (ValueError, TypeError):
+            pass
+        try:
+            if wb_row.get("fp_rate_limit_base_sleep_seconds") is not None:
+                fp_rate_limit_base_sleep_seconds = int(wb_row["fp_rate_limit_base_sleep_seconds"])
+        except (ValueError, TypeError):
+            pass
+        try:
+            if wb_row.get("fp_rate_limit_max_sleep_seconds") is not None:
+                fp_rate_limit_max_sleep_seconds = int(wb_row["fp_rate_limit_max_sleep_seconds"])
+        except (ValueError, TypeError):
+            pass
+        try:
+            if wb_row.get("fp_rate_limit_max_total_wait_seconds") is not None:
+                fp_rate_limit_max_total_wait_seconds = int(wb_row["fp_rate_limit_max_total_wait_seconds"])
+        except (ValueError, TypeError):
+            pass
+    # app_settings.sleep_ms only as fallback when project did not set sleep_base_ms/fp_sleep_ms
+    project_has_sleep = wb_row and (
+        wb_row.get("fp_sleep_base_ms") is not None or wb_row.get("fp_sleep_ms") is not None
+    )
+    if sleep_ms_str and not project_has_sleep:
+        try:
+            sleep_base_ms = int(sleep_ms_str)
+        except (ValueError, TypeError):
+            pass
+    # app_settings.max_pages only as fallback when project did not set fp_max_pages
+    project_has_max_pages = wb_row and wb_row.get("fp_max_pages") is not None
+    if max_pages_str and not project_has_max_pages:
         try:
             max_pages = int(max_pages_str)
         except (ValueError, TypeError):
             max_pages = 0
-    
-    # Hard safety cap
     if max_pages > 0:
         max_pages = min(max_pages, 50)
-    
-    # Get run_started_at for stable snapshot buckets
-    run_started_at = None
-    if run_id is not None:
-        run = get_run(run_id)
-        if run:
-            run_started_at = run.get("started_at") or run.get("created_at")
-    
-    # Call async function directly (no nested asyncio.run())
-    result = await ingest_frontend_brand_prices(
-        brand_id=brand_id,
-        base_url=None,
-        max_pages=max_pages,
-        sleep_ms=sleep_ms,
-        run_id=run_id,
-        project_id=project_id,
-        run_started_at=run_started_at,
-    )
-    
-    if isinstance(result, dict) and "error" in result:
-        return {
-            "ok": False,
-            "scope": "project",
-            "project_id": project_id,
-            "domain": "frontend_prices",
-            "brand_id": brand_id,
-            **result,
-        }
-    
-    # Normalize stats_json contract (same as ingest_frontend_prices_task)
+
+    run = get_run(run_id) if run_id else None
+    run_started_at = (run.get("started_at") or run.get("created_at")) if run else None
+    proxy_url, proxy_scheme = _get_frontend_prices_proxy_config(int(project_id))
+
+    # Optional debug: run only one brand
+    params_json = (run.get("params_json") or {}) if run else {}
+    debug_brand_id = params_json.get("brand_id")
+    if debug_brand_id is not None:
+        try:
+            brand_ids = [int(debug_brand_id)]
+        except (ValueError, TypeError):
+            pass
+
+    succeeded_brands: List[Dict[str, Any]] = []
+    failed_brands: List[Dict[str, Any]] = []
+    items_total = 0
+
+    for i, bid in enumerate(brand_ids):
+        if i > 0:
+            await asyncio.sleep(random.uniform(0.4, 1.2))
+        if run_id:
+            set_run_progress(
+                run_id,
+                {
+                    "phase": "frontend_prices",
+                    "current_brand_id": bid,
+                    "brands_done": len(succeeded_brands) + len(failed_brands),
+                    "brands_total": len(brand_ids),
+                    "succeeded_brands": succeeded_brands,
+                    "failed_brands": failed_brands,
+                },
+            )
+        logger.info(f"frontend_prices: brand {i+1}/{len(brand_ids)} brand_id={bid} project_id={project_id} run_id={run_id}")
+        result = await ingest_frontend_brand_prices(
+            brand_id=bid,
+            base_url=base_url_template,
+            max_pages=max_pages,
+            sleep_ms=sleep_base_ms,
+            sleep_jitter_ms=sleep_jitter_ms,
+            limit=limit,
+            run_id=run_id,
+            project_id=project_id,
+            run_started_at=run_started_at,
+            proxy_url=proxy_url,
+            proxy_scheme=proxy_scheme,
+            http_min_retries=fp_http_min_retries,
+            http_timeout_jitter_sec=fp_http_timeout_jitter_sec,
+            min_coverage_ratio=fp_min_coverage_ratio,
+            max_runtime_seconds=fp_max_runtime_seconds,
+            rate_limit_max_retries=fp_rate_limit_max_retries,
+            rate_limit_base_sleep_seconds=fp_rate_limit_base_sleep_seconds,
+            rate_limit_max_sleep_seconds=fp_rate_limit_max_sleep_seconds,
+            rate_limit_max_total_wait_seconds=fp_rate_limit_max_total_wait_seconds,
+        )
+        if isinstance(result, dict) and result.get("error"):
+            failed_brands.append({
+                "brand_id": bid,
+                "reason": result.get("error"),
+                "detail": result.get("detail"),
+            })
+            logger.warning(f"frontend_prices: brand_id={bid} failed: {result.get('error')}")
+        else:
+            cnt = result.get("distinct_nm_id") or result.get("items_saved") or 0
+            succeeded_brands.append({
+                "brand_id": bid,
+                "products_count": cnt,
+                "pages_count": result.get("pages_processed") or 0,
+            })
+            items_total += cnt
+
+    failed_n = len(failed_brands)
+    ok = failed_n == 0
+    status_kind = "partial" if (failed_n > 0 and len(succeeded_brands) > 0) else ("success" if ok else "failed")
     stats: Dict[str, Any] = {
-        "ok": "error" not in result,
+        "ok": ok,
+        "scope": "project",
         "project_id": project_id,
-        "brand_id": brand_id,
-        "max_pages": max_pages,
-        "items_total": result.get("distinct_nm_id") or result.get("items_saved") or 0,
-        "current_upserts": result.get("current_upserts_total", 0),
-        "snapshots_inserted": result.get("showcase_snapshots_inserted_total", 0),
-        "spp_events_inserted": result.get("spp_events_inserted_total", 0),
-        **{k: v for k, v in result.items() if k not in {
-            "current_upserts_total",
-            "showcase_snapshots_inserted_total",
-            "spp_events_inserted_total",
-        }},
+        "domain": "frontend_prices",
+        "brands_total": len(brand_ids),
+        "succeeded_brands": succeeded_brands,
+        "failed_brands": failed_brands,
+        "items_total": items_total,
+        "status": status_kind,
+        "finished_at": datetime.utcnow().isoformat(),
     }
-    
+    # So run error_message shows real cause (execute_ingest uses stats.reason/error/message)
+    if not ok and failed_brands:
+        first = failed_brands[0]
+        stats["reason"] = first.get("reason") or first.get("error") or "brand_failed"
+        stats["error"] = first.get("reason") or first.get("detail")
     return stats
 
 
 async def _wrap_rrp_xml(project_id: int, run_id: int) -> Dict[str, Any]:
+    # Lazy import to avoid circular import: registry -> tasks.ingestion -> celery_app -> tasks.ingest_execute -> registry
+    from app.tasks.ingestion import ingest_rrp_xml_task
     result = ingest_rrp_xml_task.run(project_id, run_id=run_id)
     if isinstance(result, dict):
         return result
@@ -516,6 +733,13 @@ _JOB_DEFINITIONS: Dict[str, JobDefinition] = {
         "supports_schedule": True,
         "supports_manual": True,
     },
+    "wb_product_groups": {
+        "job_code": "wb_product_groups",
+        "title": "Загрузка связок товаров WB",
+        "source_code": "wildberries",
+        "supports_schedule": True,
+        "supports_manual": True,
+    },
     "warehouses": {
         "job_code": "warehouses",
         "title": "Загрузка складов",
@@ -537,6 +761,13 @@ _JOB_DEFINITIONS: Dict[str, JobDefinition] = {
         "supports_schedule": True,
         "supports_manual": True,
     },
+    "wb_stock_total_daily": {
+        "job_code": "wb_stock_total_daily",
+        "title": "Снимок суммарного остатка (daily)",
+        "source_code": "wildberries",
+        "supports_schedule": True,
+        "supports_manual": True,
+    },
     "prices": {
         "job_code": "prices",
         "title": "Загрузка цен WB",
@@ -551,11 +782,39 @@ _JOB_DEFINITIONS: Dict[str, JobDefinition] = {
         "supports_schedule": True,
         "supports_manual": True,
     },
+    "wb_communications": {
+        "job_code": "wb_communications",
+        "title": "Загрузка отзывов и вопросов WB",
+        "source_code": "wildberries",
+        "supports_schedule": True,
+        "supports_manual": True,
+    },
     "wb_finances": {
         "job_code": "wb_finances",
         "title": "Загрузка финансовых отчётов WB",
         "source_code": "wildberries",
         "supports_schedule": False,  # Не поддерживает расписание (требует параметры)
+        "supports_manual": True,
+    },
+    "wb_card_stats_daily": {
+        "job_code": "wb_card_stats_daily",
+        "title": "Статистика карточек WB (воронка)",
+        "source_code": "wildberries",
+        "supports_schedule": True,
+        "supports_manual": True,
+    },
+    "wb_search_queries_daily": {
+        "job_code": "wb_search_queries_daily",
+        "title": "Поисковые запросы WB",
+        "source_code": "wildberries",
+        "supports_schedule": True,
+        "supports_manual": True,
+    },
+    "wb_search_report_tabular": {
+        "job_code": "wb_search_report_tabular",
+        "title": "Отчёт по поиску WB (таблица)",
+        "source_code": "wildberries",
+        "supports_schedule": True,
         "supports_manual": True,
     },
     # Internal jobs
@@ -573,6 +832,13 @@ _JOB_DEFINITIONS: Dict[str, JobDefinition] = {
         "supports_schedule": True,
         "supports_manual": True,
     },
+    "build_wb_communications_aggregates": {
+        "job_code": "build_wb_communications_aggregates",
+        "title": "Построение daily агрегатов (feedbacks/questions)",
+        "source_code": "internal",
+        "supports_schedule": False,
+        "supports_manual": True,
+    },
     "build_tax_statement": {
         "job_code": "build_tax_statement",
         "title": "Расчёт налогового отчёта",
@@ -583,17 +849,274 @@ _JOB_DEFINITIONS: Dict[str, JobDefinition] = {
 }
 
 
+async def _wrap_wb_card_stats_daily(project_id: int, run_id: int) -> Dict[str, Any]:
+    """Wrapper for wb_card_stats_daily ingest. Reads params_json from run and passes to ingest.
+    For backfill: source of truth for resume is wb_backfill_range_state. If range is completed,
+    short-circuit without calling ingest. If paused/failed, pass cursor from range state.
+    """
+    from datetime import date as _date
+    from app.services.ingest.runs import get_run, get_last_wb_card_stats_daily_checkpoint
+    from app.ingest_wb_analytics import ingest_wb_card_stats_daily
+    from app.db_wb_backfill_state import get_backfill_state, JOB_CODE_WB_CARD_STATS_DAILY
+
+    run = get_run(run_id)
+    params = dict((run or {}).get("params_json") or {})
+
+    if (params.get("mode") or "daily").lower() == "backfill":
+        date_from = params.get("date_from")
+        date_to = params.get("date_to")
+        if date_from is not None and date_to is not None:
+            try:
+                df = _date.fromisoformat(str(date_from)[:10]) if not isinstance(date_from, _date) else date_from
+                dto = _date.fromisoformat(str(date_to)[:10]) if not isinstance(date_to, _date) else date_to
+            except (ValueError, TypeError):
+                df = dto = None
+            if df is not None and dto is not None:
+                range_state = get_backfill_state(
+                    project_id, JOB_CODE_WB_CARD_STATS_DAILY, df, dto
+                )
+                range_status = (range_state or {}).get("status")
+                logger.info(
+                    "wb_card_stats_daily backfill: range_state found status=%s date_from=%s date_to=%s",
+                    range_status or "none",
+                    df.isoformat(),
+                    dto.isoformat(),
+                )
+
+                # completed: short-circuit, no ingest, no WB
+                if range_state and range_status == "completed":
+                    logger.info(
+                        "wb_card_stats_daily backfill: resume decision=already_completed, short-circuit",
+                    )
+                    nm_count = range_state.get("cursor_nm_offset")
+                    if nm_count is None or nm_count == 0:
+                        from app.db_wb_analytics import get_wb_nm_ids_for_project
+                        nm_count = len(get_wb_nm_ids_for_project(project_id))
+                    result = {
+                        "ok": True,
+                        "scope": "project",
+                        "project_id": project_id,
+                        "domain": "wb_card_stats_daily",
+                        "rows_upserted": 0,
+                        "nm_ids_total": nm_count,
+                        "reason": "already_completed",
+                        "date_from": df.isoformat(),
+                        "date_to": dto.isoformat(),
+                        "cursor_end": {"date": dto.isoformat(), "nm_offset": nm_count},
+                        "range_status": "completed",
+                        "finished_at": datetime.utcnow().isoformat(),
+                    }
+                    return result
+
+                # running: short-circuit, no ingest, no WB, no ingest_runs fallback
+                if range_state and range_status == "running":
+                    logger.info(
+                        "wb_card_stats_daily backfill: resume decision=already_running_for_range, "
+                        "second run blocked, no WB calls",
+                    )
+                    cursor_date = range_state.get("cursor_date")
+                    cursor_nm_offset = range_state.get("cursor_nm_offset")
+                    cursor_payload = None
+                    if cursor_date is not None and cursor_nm_offset is not None:
+                        cursor_payload = {
+                            "date": cursor_date.isoformat() if hasattr(cursor_date, "isoformat") else str(cursor_date)[:10],
+                            "nm_offset": int(cursor_nm_offset),
+                        }
+                    result = {
+                        "ok": True,
+                        "scope": "project",
+                        "project_id": project_id,
+                        "domain": "wb_card_stats_daily",
+                        "rows_upserted": 0,
+                        "reason": "already_running_for_range",
+                        "date_from": df.isoformat(),
+                        "date_to": dto.isoformat(),
+                        "loaded_cursor_source": "wb_backfill_range_state",
+                        "range_status": "running",
+                        "finished_at": datetime.utcnow().isoformat(),
+                    }
+                    if cursor_payload is not None:
+                        result["cursor"] = cursor_payload
+                    return result
+
+                # paused / failed: resume only from wb_backfill_range_state
+                if range_state and range_status in ("paused", "failed"):
+                    has_cursor = isinstance(params.get("cursor"), dict) and params["cursor"].get("date") is not None
+                    if not has_cursor:
+                        cursor_date = range_state.get("cursor_date")
+                        cursor_nm_offset = range_state.get("cursor_nm_offset")
+                        if cursor_date is not None and cursor_nm_offset is not None:
+                            params["cursor"] = {
+                                "date": cursor_date.isoformat() if hasattr(cursor_date, "isoformat") else str(cursor_date)[:10],
+                                "nm_offset": int(cursor_nm_offset),
+                            }
+                            params["_loaded_cursor_source"] = "wb_backfill_range_state"
+                    logger.info(
+                        "wb_card_stats_daily backfill: resume decision=range_state status=%s",
+                        range_status,
+                    )
+
+                # no range state: migration fallback from ingest_runs allowed
+                elif not range_state:
+                    has_cursor = isinstance(params.get("cursor"), dict) and params["cursor"].get("date") is not None
+                    if not has_cursor:
+                        date_from_iso = df.isoformat()
+                        date_to_iso = dto.isoformat()
+                        checkpoint = get_last_wb_card_stats_daily_checkpoint(
+                            project_id, date_from_iso, date_to_iso
+                        )
+                        if checkpoint:
+                            params["cursor"] = checkpoint["cursor"]
+                            params["_loaded_cursor_source"] = f"ingest_runs:{checkpoint['run_id']}"
+                            logger.info(
+                                "wb_card_stats_daily backfill: resume decision=ingest_runs run_id=%s",
+                                checkpoint["run_id"],
+                            )
+                        else:
+                            logger.info(
+                                "wb_card_stats_daily backfill: resume decision=start (no state, no checkpoint)",
+                            )
+                    else:
+                        logger.info(
+                            "wb_card_stats_daily backfill: resume decision=request (cursor in params)",
+                        )
+
+    result = await ingest_wb_card_stats_daily(
+        project_id=project_id,
+        run_id=run_id,
+        params=params,
+    )
+    if isinstance(result, dict) and "finished_at" not in result:
+        result["finished_at"] = datetime.utcnow().isoformat()
+    return result
+
+
+async def _wrap_wb_search_queries_daily(project_id: int, run_id: int) -> Dict[str, Any]:
+    """Wrapper for wb_search_queries_daily ingest."""
+    from app.services.ingest.runs import get_run
+    from app.ingest_wb_analytics import ingest_wb_search_queries_daily
+    from datetime import date as _date
+
+    run = get_run(run_id)
+    params = (run or {}).get("params_json") or {}
+    date_from = None
+    date_to = None
+    top_nm_limit = params.get("top_nm_limit")
+    if top_nm_limit is not None:
+        try:
+            top_nm_limit = int(top_nm_limit)
+        except (ValueError, TypeError):
+            top_nm_limit = None
+    if params.get("date_from"):
+        try:
+            date_from = _date.fromisoformat(str(params["date_from"])[:10])
+        except (ValueError, TypeError):
+            pass
+    if params.get("date_to"):
+        try:
+            date_to = _date.fromisoformat(str(params["date_to"])[:10])
+        except (ValueError, TypeError):
+            pass
+
+    result = await ingest_wb_search_queries_daily(
+        project_id=project_id,
+        run_id=run_id,
+        date_from=date_from,
+        date_to=date_to,
+        top_nm_limit=top_nm_limit,
+    )
+    if isinstance(result, dict) and "finished_at" not in result:
+        result["finished_at"] = datetime.utcnow().isoformat()
+    return result
+
+
+async def _wrap_wb_search_report_tabular(project_id: int, run_id: int) -> Dict[str, Any]:
+    """Wrapper for wb_search_report_tabular ingest."""
+    from app.services.ingest.runs import get_run
+    from app.ingest_wb_search_report_tabular import ingest_wb_search_report_tabular
+    from datetime import date as _date
+
+    run = get_run(run_id)
+    params = (run or {}).get("params_json") or {}
+    if isinstance(params, str):
+        try:
+            import json as _json
+            params = _json.loads(params) if params else {}
+        except Exception:
+            params = {}
+    if not isinstance(params, dict):
+        params = {}
+
+    for k in ("date_from", "date_to", "period_from", "period_to"):
+        if params.get(k) is not None and not isinstance(params.get(k), _date):
+            try:
+                params[k] = _date.fromisoformat(str(params[k])[:10])
+            except (ValueError, TypeError):
+                pass
+
+    result = await ingest_wb_search_report_tabular(
+        project_id=project_id,
+        run_id=run_id,
+        params=params,
+    )
+    if isinstance(result, dict) and "finished_at" not in result:
+        result["finished_at"] = datetime.utcnow().isoformat()
+    return result
+
+
+async def _wrap_wb_communications(project_id: int, run_id: int) -> Dict[str, Any]:
+    """Wrapper for WB communications (feedbacks/questions) ingest. Supports mode=reviews_backfill via params_json."""
+    from app.services.ingest.runs import get_run
+    from app.ingest_wb_communications import ingest_wb_communications
+
+    run = get_run(run_id)
+    params = (run or {}).get("params_json") or {}
+    result = await ingest_wb_communications(project_id=project_id, run_id=run_id, params=params)
+    if isinstance(result, dict) and result.get("ok") is False:
+        return result
+    return {
+        "ok": True,
+        "scope": "project",
+        "project_id": project_id,
+        "domain": "wb_communications",
+        "finished_at": datetime.utcnow().isoformat(),
+        **(result if isinstance(result, dict) else {}),
+    }
+
+
+async def _wrap_build_wb_communications_aggregates(project_id: int, run_id: int) -> Dict[str, Any]:
+    """Wrapper for build_wb_communications_daily_aggregates job."""
+    from app.ingest_wb_communications import build_wb_communications_daily_aggregates
+
+    result = build_wb_communications_daily_aggregates(project_id=project_id, run_id=run_id)
+    return {
+        "ok": True,
+        "scope": "project",
+        "project_id": project_id,
+        "domain": "build_wb_communications_aggregates",
+        "finished_at": datetime.utcnow().isoformat(),
+        **(result if isinstance(result, dict) else {}),
+    }
+
+
 _REGISTRY: Dict[Tuple[str, str], RunCallable] = {
     # marketplace_code (source_code), job_code -> callable(project_id) -> stats_json
     ("wildberries", "products"): _wrap_ingest_products,
+    ("wildberries", "wb_product_groups"): _wrap_wb_product_groups,
     ("wildberries", "warehouses"): _wrap_ingest_warehouses,
     ("wildberries", "stocks"): _wrap_ingest_stocks,
     ("wildberries", "supplier_stocks"): _wrap_ingest_supplier_stocks,
+    ("wildberries", "wb_stock_total_daily"): _wrap_wb_stock_total_daily,
     ("wildberries", "prices"): _wrap_ingest_prices,
     ("wildberries", "frontend_prices"): _wrap_frontend_prices,
+    ("wildberries", "wb_communications"): _wrap_wb_communications,
     ("wildberries", "wb_finances"): _wrap_wb_finances,
+    ("wildberries", "wb_card_stats_daily"): _wrap_wb_card_stats_daily,
+    ("wildberries", "wb_search_queries_daily"): _wrap_wb_search_queries_daily,
+    ("wildberries", "wb_search_report_tabular"): _wrap_wb_search_report_tabular,
     ("internal", "rrp_xml"): _wrap_rrp_xml,
     ("internal", "build_rrp_snapshots"): _wrap_build_rrp_snapshots,
+    ("internal", "build_wb_communications_aggregates"): _wrap_build_wb_communications_aggregates,
     ("internal", "build_tax_statement"): _wrap_build_tax_statement,
 }
 
@@ -628,5 +1151,9 @@ def list_job_definitions() -> List[JobDefinition]:
 
 
 def get_job_definition(job_code: str) -> Optional[JobDefinition]:
-    return _JOB_DEFINITIONS.get(job_code)
-
+    if ('wildberries', job_code) in _REGISTRY:
+        return _JOB_DEFINITIONS.get(job_code)
+    for (m, j) in _REGISTRY:
+        if j == job_code:
+            return _JOB_DEFINITIONS.get(job_code)
+    return None

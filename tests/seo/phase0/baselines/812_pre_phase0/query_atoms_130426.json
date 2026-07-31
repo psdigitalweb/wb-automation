@@ -1,0 +1,20 @@
+{
+  "atoms": {
+    "buyer_intent": "",
+    "cluster_key": null,
+    "confidence": {},
+    "evidence_refs": [],
+    "excluded_atoms": [],
+    "genericness": "specific",
+    "negative_fit_atoms": [],
+    "preferred_atoms": [],
+    "product_type": "кружка",
+    "query": null,
+    "required_atoms": [],
+    "schema_version": "meaning_atoms_v0",
+    "source_query_examples": []
+  },
+  "normalized_query_text": "кружка для кофе",
+  "query_id": 130426,
+  "ranking_value_used": 96658.0
+}

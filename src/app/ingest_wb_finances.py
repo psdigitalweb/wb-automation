@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import date
 from typing import Any, Dict, List, Optional
 
@@ -64,81 +65,119 @@ async def ingest_wb_finance_reports_by_period(
             "error": str(e),
         }
 
-    # Fetch from API
+    # Fetch from API with pagination (rrdid cursor)
     client = WBFinancesClient(token=token)
     date_from_str = date_from.isoformat()
     date_to_str = date_to.isoformat()
-    
-    response = await client.fetch_report_detail_by_period(
-        date_from=date_from_str,
-        date_to=date_to_str,
-    )
+    limit = 100000
+    max_batches = 1000
+    rate_limit_sec = 60  # WB: 1 req/min
 
-    http_status = response.get("http_status", 0)
-    payload = response.get("payload")
+    reports_dict: Dict[int, List[Dict[str, Any]]] = {}
+    rrdid_cursor = 0
+    batch_idx = 0
+    total_loaded = 0
+    http_status = 200
     error: Optional[str] = None
 
-    if http_status != 200:
-        error = f"HTTP {http_status}"
-        if payload and isinstance(payload, dict) and "error" in payload:
-            error = f"HTTP {http_status}: {payload.get('error')}"
-        return {
-            "http_status": http_status,
-            "total_reports": 0,
-            "inserted_reports": 0,
-            "updated_reports": 0,
-            "inserted_lines": 0,
-            "skipped_lines": 0,
-            "error": error,
-        }
+    while True:
+        batch_idx += 1
+        if batch_idx > max_batches:
+            raise RuntimeError(
+                f"WB finances pagination: max_batches={max_batches} exceeded. "
+                "Possible infinite loop or very large report."
+            )
 
-    # Parse response
-    # WB API returns list of report lines (rows)
-    # Each line has:
-    #   - realizationreport_id: ID of the report (all lines with same ID belong to one report)
-    #   - rrd_id: ID of the individual line/row within the report
-    # We need to group lines by realizationreport_id to create report headers
-    if not isinstance(payload, list):
-        return {
-            "http_status": http_status,
-            "total_reports": 0,
-            "inserted_reports": 0,
-            "updated_reports": 0,
-            "inserted_lines": 0,
-            "skipped_lines": 0,
-            "error": "Invalid response format: expected list",
-        }
+        response = await client.fetch_report_detail_by_period(
+            date_from=date_from_str,
+            date_to=date_to_str,
+            rrdid=rrdid_cursor,
+            limit=limit,
+        )
 
-    lines = payload if isinstance(payload, list) else []
-    
-    # WB API fields (from reportDetailByPeriod response):
-    # - realizationreport_id: ID of the report (all lines with same realizationreport_id belong to one report)
-    # - rrd_id: ID of the individual line/row within the report
-    # Group lines by realizationreport_id (report header ID)
-    reports_dict: Dict[int, List[Dict[str, Any]]] = {}
-    
-    for line in lines:
-        if not isinstance(line, dict):
-            continue
-        
-        # Extract realizationreport_id (report header ID)
-        report_id_value = None
-        for key in ["realizationreport_id", "realizationReportId"]:
-            if key in line and line[key] is not None:
-                try:
-                    report_id_value = int(line[key])
-                    break
-                except (ValueError, TypeError):
-                    continue
-        
-        if report_id_value is None:
-            # Skip lines without realizationreport_id (shouldn't happen, but be safe)
-            print(f"ingest_wb_finance_reports_by_period: skipping line without realizationreport_id: {list(line.keys())[:5]}")
-            continue
-        
-        if report_id_value not in reports_dict:
-            reports_dict[report_id_value] = []
-        reports_dict[report_id_value].append(line)
+        batch_status = response.get("http_status", 0)
+        payload = response.get("payload")
+
+        if batch_status not in (200, 204):
+            error = f"HTTP {batch_status}"
+            if payload and isinstance(payload, dict) and "error" in payload:
+                error = f"HTTP {batch_status}: {payload.get('error')}"
+            return {
+                "http_status": batch_status,
+                "total_reports": len(reports_dict),
+                "inserted_reports": 0,
+                "updated_reports": 0,
+                "inserted_lines": 0,
+                "skipped_lines": 0,
+                "error": error,
+            }
+
+        if batch_status == 204 or not payload or not isinstance(payload, list):
+            if batch_status == 204:
+                print(f"ingest_wb_finance_reports_by_period: batch {batch_idx} 204 No data (done)")
+            break
+
+        lines = payload
+        if not lines:
+            break
+
+        # Cursor from data: max(rrd_id) for next page
+        max_rrd_id = None
+        for line in lines:
+            if isinstance(line, dict):
+                for key in ("rrd_id", "rrdId"):
+                    if key in line and line[key] is not None:
+                        try:
+                            vid = int(line[key])
+                            if max_rrd_id is None or vid > max_rrd_id:
+                                max_rrd_id = vid
+                            break
+                        except (ValueError, TypeError):
+                            pass
+
+        if max_rrd_id is not None and max_rrd_id == rrdid_cursor:
+            raise RuntimeError(
+                f"WB finances pagination stuck: new max(rrd_id)={max_rrd_id} == cursor={rrdid_cursor}. "
+                "API may return same data repeatedly."
+            )
+
+        total_loaded += len(lines)
+        print(
+            f"ingest_wb_finance_reports_by_period: batch_idx={batch_idx} batch_size={len(lines)} "
+            f"total_loaded={total_loaded} rrdid_cursor={rrdid_cursor} next_cursor={max_rrd_id}"
+        )
+
+        # Group lines by realizationreport_id (append to accumulated)
+        for line in lines:
+            if not isinstance(line, dict):
+                continue
+
+            report_id_value = None
+            for key in ["realizationreport_id", "realizationReportId"]:
+                if key in line and line[key] is not None:
+                    try:
+                        report_id_value = int(line[key])
+                        break
+                    except (ValueError, TypeError):
+                        continue
+
+            if report_id_value is None:
+                print(
+                    f"ingest_wb_finance_reports_by_period: skipping line without realizationreport_id: "
+                    f"{list(line.keys())[:5]}"
+                )
+                continue
+
+            if report_id_value not in reports_dict:
+                reports_dict[report_id_value] = []
+            reports_dict[report_id_value].append(line)
+
+        rrdid_cursor = max_rrd_id if max_rrd_id is not None else rrdid_cursor
+
+        if len(lines) < limit:
+            break
+
+        await asyncio.sleep(rate_limit_sec)
 
     # Process each report
     inserted_reports = 0

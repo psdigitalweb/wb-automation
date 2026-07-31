@@ -78,25 +78,61 @@ def get_wb_credentials_for_project(project_id: int) -> Optional[Dict[str, any]]:
     }
 
 
-def get_wb_token_for_project(project_id: int) -> Optional[str]:
-    """Get Wildberries API token from project_marketplaces for a specific project.
-    
-    DEPRECATED: Use get_wb_credentials_for_project instead.
-    This function is kept for backward compatibility.
-    
-    Reads from api_token_encrypted field and decrypts it.
-    
-    Args:
-        project_id: Project ID to get token for.
-    
-    Returns:
-        API token string if found and enabled, None otherwise.
+def get_wb_analytics_token_for_project(project_id: int) -> Optional[str]:
+    """Get WB Analytics API token for project.
+
+    Reads settings_json.analytics_token first (Analytics category token).
+    Fallback: api_token_encrypted (main WB token).
+    Returns None if marketplace disabled or no token.
     """
-    try:
-        credentials = get_wb_credentials_for_project(project_id)
-        return credentials.get("token")
-    except ValueError:
+    pm = _get_project_marketplace_by_code(project_id, "wildberries")
+    if not pm or not pm.get("is_enabled", False):
         return None
+
+    # settings_json.analytics_token (Analytics category) first
+    settings = pm.get("settings_json")
+    if settings:
+        if isinstance(settings, str):
+            import json
+            settings = json.loads(settings)
+        analytics_token = settings.get("analytics_token")
+        if analytics_token and analytics_token != "***" and analytics_token.upper() != "MOCK":
+            return analytics_token
+
+    # Fallback: api_token_encrypted
+    return get_wb_token_for_project(project_id)
+
+
+def get_wb_token_for_project(project_id: int) -> Optional[str]:
+    """Get Wildberries API token for project (no brand_id check).
+
+    For APIs that only need token (e.g. WB Communications).
+    Returns token from project_marketplaces for wildberries if enabled.
+    """
+    pm = _get_project_marketplace_by_code(project_id, "wildberries")
+    if not pm or not pm.get("is_enabled", False):
+        return None
+
+    # api_token_encrypted first
+    encrypted_token = pm.get("api_token_encrypted")
+    if encrypted_token:
+        try:
+            token = decrypt_token(encrypted_token)
+            if token and token.upper() != "MOCK":
+                return token
+        except Exception:
+            pass
+
+    # fallback settings_json
+    settings = pm.get("settings_json")
+    if settings:
+        if isinstance(settings, str):
+            import json
+            settings = json.loads(settings)
+        token = settings.get("api_token") or settings.get("token")
+        if token and token != "***" and token.upper() != "MOCK":
+            return token
+    return None
 
 
 def _get_project_marketplace_by_code(project_id: int, marketplace_code: str) -> Optional[dict]:

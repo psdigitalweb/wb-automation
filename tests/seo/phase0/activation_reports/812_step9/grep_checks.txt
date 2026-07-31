@@ -1,0 +1,17 @@
+del category_profile check:
+- command: Select-String -Path src/app/services/seo/**/*.py -Pattern "del category_profile"
+- result: 0 matches
+
+active literal check:
+- command: Select-String -Path src/app/services/seo/matcher_v2/*.py,src/app/services/seo/matcher_v2/stages/*.py,src/app/services/seo/query_meaning_matcher/matcher.py,src/app/services/seo/query_meaning_matcher/profile_matcher.py -Pattern "термокруж|круж|пивн|кофемаш|рюкзак|сумка|в машину"
+- result: 0 matches
+
+matcher_v2 legacy import check:
+- command: Select-String -Path src/app/services/seo/matcher_v2/*.py,src/app/services/seo/matcher_v2/stages/*.py -Pattern "query_meaning_matcher\\._legacy|from app\\.services\\.seo\\.query_meaning_matcher\\.matcher import"
+- result:
+  src/app/services/seo/matcher_v2/api.py:79 -> from app.services.seo.query_meaning_matcher.matcher import (...)
+  imported names are public exception classes only:
+  CategoryBootstrapBuildingError
+  MissingQueryMeaningLibraryError
+  MissingSkuMeaningAnnotationError
+  No matcher helpers or _legacy modules remain in matcher_v2 active path.

@@ -21,6 +21,7 @@ interface IngestResponse {
   status: string
   days_ahead: number
   task: string
+  task_id?: string | null
 }
 
 export default function WBTariffsAdminPage() {

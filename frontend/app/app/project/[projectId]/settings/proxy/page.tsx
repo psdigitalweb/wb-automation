@@ -10,6 +10,7 @@ import {
   updateProjectProxySettings,
 } from '../../../../../../lib/apiClient'
 import { usePageTitle } from '../../../../../../hooks/usePageTitle'
+import styles from './proxy.module.css'
 
 export default function ProjectProxySettingsPage() {
   const params = useParams()
@@ -164,7 +165,7 @@ export default function ProjectProxySettingsPage() {
   }
 
   return (
-    <div className="container">
+    <div className="container ec-settings-page">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
         <h1>Прокси для витрины WB</h1>
         <Link href={`/app/project/${projectId}/settings`}>← Настройки проекта</Link>
@@ -208,17 +209,10 @@ export default function ProjectProxySettingsPage() {
               </div>
             )}
 
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-                gap: 16,
-                alignItems: 'stretch',
-              }}
-            >
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div className={styles.proxyGrid}>
+              <div className={styles.field}>
                 <label style={{ fontSize: 13, fontWeight: 500 }}>Использовать прокси</label>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, height: 38 }}>
+                <div className={styles.checkboxRow}>
                   <input
                     type="checkbox"
                     checked={enabled}
@@ -229,7 +223,7 @@ export default function ProjectProxySettingsPage() {
                 </div>
               </div>
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div className={styles.field}>
                 <label style={{ fontSize: 13, fontWeight: 500 }}>Scheme</label>
                 <select
                   value={scheme}
@@ -248,7 +242,7 @@ export default function ProjectProxySettingsPage() {
                 </select>
               </div>
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div className={styles.field}>
                 <label style={{ fontSize: 13, fontWeight: 500 }}>Host</label>
                 <input
                   type="text"
@@ -266,7 +260,7 @@ export default function ProjectProxySettingsPage() {
                 />
               </div>
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div className={styles.field}>
                 <label style={{ fontSize: 13, fontWeight: 500 }}>Port</label>
                 <input
                   type="number"
@@ -285,7 +279,7 @@ export default function ProjectProxySettingsPage() {
                 />
               </div>
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div className={styles.field}>
                 <label style={{ fontSize: 13, fontWeight: 500 }}>Username (optional)</label>
                 <input
                   type="text"
@@ -303,7 +297,7 @@ export default function ProjectProxySettingsPage() {
                 />
               </div>
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div className={styles.field}>
                 <label style={{ fontSize: 13, fontWeight: 500 }}>Password (optional)</label>
                 {passwordSet && (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
@@ -337,7 +331,7 @@ export default function ProjectProxySettingsPage() {
                 />
               </div>
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, gridColumn: '1 / -1' }}>
+              <div className={`${styles.field} ${styles.fullWidth}`}>
                 <label style={{ fontSize: 13, fontWeight: 500 }}>Test URL</label>
                 <input
                   type="text"
@@ -359,7 +353,7 @@ export default function ProjectProxySettingsPage() {
               </div>
             </div>
 
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, marginTop: 18, flexWrap: 'wrap' }}>
+            <div className={styles.footerRow}>
               <div style={{ fontSize: 13, color: '#6b7280' }}>
                 <div>
                   <strong>Последняя проверка:</strong> {fmtDate(loaded?.last_test_at)}
@@ -379,7 +373,7 @@ export default function ProjectProxySettingsPage() {
                 </div>
               </div>
 
-              <div style={{ display: 'flex', gap: 8 }}>
+              <div className={styles.actions}>
                 <button onClick={onTest} disabled={testing || saving || !enabled}>
                   {testing ? 'Проверка…' : 'Проверить'}
                 </button>

@@ -13,6 +13,7 @@ from app.tasks.ingest_execute import execute_ingest
 
 IngestDomain = Literal[
     "products",
+    "wb_product_groups",
     "warehouses",
     "stocks",
     "supplier_stocks",
@@ -20,6 +21,10 @@ IngestDomain = Literal[
     "frontend_prices",
     "rrp_xml",
     "build_rrp_snapshots",
+    "wb_communications",
+    "build_wb_communications_aggregates",
+    "wb_card_stats_daily",
+    "wb_search_queries_daily",
 ]
 
 

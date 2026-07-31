@@ -28,6 +28,14 @@ interface AdminUserListResponse {
   total: number
 }
 
+function roleLabel(role: string): string {
+  if (role === 'viewer') return 'Просмотр'
+  if (role === 'member') return 'Участник'
+  if (role === 'admin') return 'Администратор'
+  if (role === 'owner') return 'Владелец'
+  return role
+}
+
 export default function ProjectMembersPage() {
   const params = useParams()
   const router = useRouter()
@@ -223,7 +231,7 @@ export default function ProjectMembersPage() {
   }
 
   return (
-    <div className="container">
+    <div className="container ec-settings-page">
       {/* Toast */}
       {toast && (
         <div
@@ -245,7 +253,7 @@ export default function ProjectMembersPage() {
 
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '24px', gap: '16px' }}>
-        <h1 style={{ margin: 0 }}>Project Members</h1>
+        <h1 style={{ margin: 0 }}>Пользователи</h1>
         <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
           {/* Only render Link after mount to avoid hydration mismatch */}
           {mounted && isUserSuperuser && (
@@ -267,7 +275,7 @@ export default function ProjectMembersPage() {
             </Link>
           )}
           <button onClick={() => router.back()} className="btn-secondary" style={{ padding: '8px 16px', height: '36px' }}>
-            ← Back
+            Назад
           </button>
         </div>
       </div>
@@ -275,7 +283,7 @@ export default function ProjectMembersPage() {
       {/* Members Table */}
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-          <h2 style={{ margin: 0 }}>Members</h2>
+          <h2 style={{ margin: 0 }}>Участники проекта</h2>
           {/* Only render button after mount to avoid hydration mismatch */}
           {mounted && canManage && (
             <button
@@ -283,13 +291,13 @@ export default function ProjectMembersPage() {
               className="btn-primary"
               style={{ padding: '8px 16px', height: '36px' }}
             >
-              + Add Member
+              + Добавить участника
             </button>
           )}
         </div>
 
         {loading ? (
-          <p>Loading...</p>
+          <p>Загрузка...</p>
         ) : members.length === 0 ? (
           <p>Участники не найдены</p>
         ) : (
@@ -297,10 +305,10 @@ export default function ProjectMembersPage() {
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ borderBottom: '2px solid #ddd' }}>
-                  <th style={{ padding: '12px', textAlign: 'left', width: '35%' }}>Username</th>
+                  <th style={{ padding: '12px', textAlign: 'left', width: '35%' }}>Пользователь</th>
                   <th style={{ padding: '12px', textAlign: 'left', width: '35%' }}>Email</th>
-                  <th style={{ padding: '12px', textAlign: 'left', width: '20%' }}>Role</th>
-                  <th style={{ padding: '12px', textAlign: 'center', width: '10%' }}>Actions</th>
+                  <th style={{ padding: '12px', textAlign: 'left', width: '20%' }}>Роль</th>
+                  <th style={{ padding: '12px', textAlign: 'center', width: '10%' }}>Действия</th>
                 </tr>
               </thead>
               <tbody>
@@ -325,13 +333,13 @@ export default function ProjectMembersPage() {
                             backgroundColor: 'white',
                           }}
                         >
-                          <option value="viewer">Viewer</option>
-                          <option value="member">Member</option>
-                          <option value="admin">Admin</option>
-                          <option value="owner">Owner</option>
+                          <option value="viewer">Просмотр</option>
+                          <option value="member">Участник</option>
+                          <option value="admin">Администратор</option>
+                          <option value="owner">Владелец</option>
                         </select>
                       ) : (
-                        <strong>{member.role}</strong>
+                        <strong>{roleLabel(member.role)}</strong>
                       )}
                     </td>
                     <td style={{ padding: '12px', textAlign: 'center' }}>
@@ -355,7 +363,7 @@ export default function ProjectMembersPage() {
                             e.currentTarget.style.backgroundColor = '#dc3545'
                           }}
                         >
-                          Remove
+                          Удалить
                         </button>
                       )}
                     </td>

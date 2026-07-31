@@ -1,0 +1,52 @@
+.page { padding: 28px 32px 48px; max-width: 1480px; margin: 0 auto; color: var(--color-text, #1f2937); }
+.header { display: flex; justify-content: space-between; margin-bottom: 20px; }
+.header h1 { margin: 4px 0 6px; font-size: 24px; line-height: 1.2; }
+.header p { margin: 0; color: var(--color-text-2, #64748b); font-size: 13px; }
+.eyebrow { color: var(--color-text-3, #64748b); font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; }
+.filters { display: grid; grid-template-columns: minmax(300px, 2fr) repeat(3, minmax(135px, .72fr)) auto; gap: 12px; align-items: end; padding: 16px; background: var(--color-surface, #fff); border: .5px solid var(--color-border, #d8dee8); border-radius: 10px; box-shadow: var(--shadow-sm, 0 1px 2px #0000000d); }
+.filters label, .productField > label { display: grid; gap: 6px; color: var(--color-text-2, #475569); font-size: 12px; font-weight: 500; }
+.filters input, .filters select { width: 100%; height: 34px; padding: 0 10px; color: var(--color-text, #1f2937); background: var(--color-surface, #fff); border: .5px solid var(--color-border, #cbd5e1); border-radius: 6px; font: inherit; font-size: 13px; outline: none; }
+.filters input:focus, .filters select:focus { border-color: var(--color-accent, #17623c); box-shadow: var(--shadow-focus, 0 0 0 3px #17623c22); }
+.productField { min-width: 0; }
+.searchWrap { position: relative; }
+.suggestions { position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; right: 0; overflow: hidden; background: #fff; border: .5px solid var(--color-border, #d1d5db); border-radius: 8px; box-shadow: 0 12px 30px #0f172a1c; }
+.suggestions button { display: grid; width: 100%; gap: 2px; padding: 9px 11px; text-align: left; background: transparent; border: 0; border-bottom: .5px solid #eef0f3; cursor: pointer; }
+.suggestions button:hover { background: var(--color-surface-2, #f6f7f8); }
+.suggestions strong { font-size: 13px; }
+.suggestions span { overflow: hidden; color: var(--color-text-3, #64748b); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.chips { display: flex; min-height: 24px; gap: 5px; align-items: center; flex-wrap: wrap; margin-top: 7px; }
+.chip { display: inline-flex; height: 22px; align-items: center; gap: 5px; padding: 0 5px 0 8px; color: var(--color-text, #1f2937); background: var(--color-surface-2, #f5f6f7); border-radius: 999px; font: 500 11px var(--font-mono, monospace); }
+.chip::before { width: 7px; height: 7px; background: var(--series-color); border-radius: 50%; content: ''; }
+.chip button { padding: 0 2px; color: #64748b; background: transparent; border: 0; cursor: pointer; font-size: 15px; line-height: 1; }
+.hint { color: var(--color-text-3, #64748b); font-size: 11px; }
+.primaryButton { height: 34px; padding: 0 16px; color: #fff; background: var(--color-accent, #17623c); border: 0; border-radius: 6px; box-shadow: var(--shadow-xs, 0 1px 1px #0002); cursor: pointer; font-size: 13px; font-weight: 600; white-space: nowrap; }
+.primaryButton:hover { background: var(--color-accent-hover, #124d30); }
+.primaryButton:disabled { cursor: wait; opacity: .65; }
+.error { margin-top: 12px; padding: 10px 12px; color: #9f1239; background: #fff1f2; border: .5px solid #fecdd3; border-radius: 8px; font-size: 13px; }
+.chartCard, .tableCard { margin-top: 16px; background: var(--color-surface, #fff); border: .5px solid var(--color-border, #d8dee8); border-radius: 10px; box-shadow: var(--shadow-sm, 0 1px 2px #0000000d); }
+.chartHeader { display: flex; min-height: 64px; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 16px; border-bottom: .5px solid var(--color-border, #e2e8f0); }
+.chartHeader h2 { margin: 0 0 3px; font-size: 14px; }
+.chartHeader span { color: var(--color-text-3, #64748b); font-size: 11px; }
+.chartControls { display: flex; align-items: center; gap: 16px; }
+.segmented { display: flex; padding: 2px; background: var(--color-surface-2, #f1f5f9); border-radius: 6px; }
+.segmented button { height: 26px; padding: 0 10px; color: var(--color-text-2, #475569); background: transparent; border: 0; border-radius: 4px; cursor: pointer; font-size: 11px; }
+.segmented .active { color: var(--color-text, #1f2937); background: #fff; box-shadow: 0 1px 2px #0001; font-weight: 600; }
+.checkbox { display: flex; align-items: center; gap: 6px; color: var(--color-text-2, #475569); font-size: 11px; white-space: nowrap; }
+.chartScroll { overflow-x: auto; padding: 8px 8px 0; }
+.chart { display: block; width: 100%; min-width: 700px; height: auto; }
+.gridLine { stroke: #e7eaee; stroke-width: 1; }
+.axisText { fill: #7b8491; font: 11px var(--font-sans, sans-serif); }
+.empty { display: grid; min-height: 360px; place-items: center; color: var(--color-text-3, #64748b); font-size: 13px; }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; padding: 0 20px 16px 72px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; color: var(--color-text-2, #475569); font: 11px var(--font-mono, monospace); }
+.legend i { width: 16px; height: 3px; border-radius: 2px; }
+.tableCard { overflow-x: auto; }
+.tableCard table { width: 100%; min-width: 900px; border-collapse: collapse; }
+.tableCard th { padding: 10px 14px; color: var(--color-text-3, #64748b); background: var(--color-surface-2, #f7f8fa); border-bottom: .5px solid var(--color-border, #e2e8f0); font-size: 10px; font-weight: 600; letter-spacing: .04em; text-align: right; text-transform: uppercase; }
+.tableCard th:first-child, .tableCard td:first-child { text-align: left; }
+.tableCard td { padding: 11px 14px; border-bottom: .5px solid #edf0f2; font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }
+.tableCard td:first-child { display: grid; gap: 2px; }
+.tableCard td span { max-width: 280px; overflow: hidden; color: var(--color-text-3, #64748b); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.mono { font-family: var(--font-mono, monospace); }
+@media (max-width: 1100px) { .filters { grid-template-columns: repeat(3, 1fr); } .productField { grid-column: 1 / -1; } .primaryButton { width: 100%; } }
+@media (max-width: 760px) { .page { padding: 20px 16px 36px; } .filters { grid-template-columns: 1fr 1fr; } .filters label:nth-of-type(3), .primaryButton { grid-column: 1 / -1; } .chartHeader { align-items: flex-start; flex-direction: column; } .chartControls { width: 100%; justify-content: space-between; } }

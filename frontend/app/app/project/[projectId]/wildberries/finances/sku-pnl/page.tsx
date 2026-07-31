@@ -770,10 +770,10 @@ export default function WBSkuPnlPage() {
                                       title="WB"
                                       items={[
                                         { label: 'Комиссия WB / шт, руб', value: (row.wb_commission_total ?? 0) / soldQty },
-                                        { label: 'Комиссия WB, % / шт', value: row.wb_commission_pct_unit },
+                                        { label: 'Комиссия WB, % / шт', value: row.wb_commission_pct_unit ?? 0 },
                                         { label: 'Эквайринг / шт', value: (row.acquiring_fee ?? 0) / soldQty },
                                         { label: 'WB итого / шт, руб', value: row.wb_total_unit ?? wbTotalTotal(row) / soldQty },
-                                        { label: 'WB итого, % / шт', value: row.wb_total_pct_unit },
+                                        { label: 'WB итого, % / шт', value: row.wb_total_pct_unit ?? 0 },
                                       ]}
                                     />
                                   ) : (

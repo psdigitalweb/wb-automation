@@ -1,0 +1,49 @@
+{
+  "step": "phase0_step9",
+  "status": "wired",
+  "project_id": 1,
+  "category_id": 812,
+  "active_profile": {
+    "id": 1,
+    "version": "v1.812.skeleton.243953b2",
+    "self_check_status": "passed"
+  },
+  "matcher_v2_contract": {
+    "active_profile_required": true,
+    "silent_legacy_fallback": false,
+    "del_category_profile_hits": 0,
+    "active_literal_hits": 0,
+    "direct_legacy_import_hits": 0,
+    "matcher_facade_imports": [
+      {
+        "file": "src/app/services/seo/matcher_v2/api.py",
+        "imports": [
+          "CategoryBootstrapBuildingError",
+          "MissingQueryMeaningLibraryError",
+          "MissingSkuMeaningAnnotationError"
+        ],
+        "reason": "Public exception compatibility only; no helper imports remain."
+      }
+    ]
+  },
+  "runtime_runs": {
+    "matcher_run_ids": [
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29
+    ],
+    "category_profile_version_recorded": "v1.812.skeleton.243953b2",
+    "quality_mode": "preview"
+  },
+  "notes": [
+    "matcher_v2 now loads the active CategoryProfile once per run.",
+    "Stages consume profile-driven subject/conflict/scoring data.",
+    "No `del category_profile` markers remain under src/app/services/seo."
+  ]
+}
+

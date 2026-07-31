@@ -1,16 +1,16 @@
 'use client'
 
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import {
   apiGet,
-  getProjectProxySettings,
-  ProjectProxySettings,
   getWBIngestStatus,
+  markIngestRunTimeout,
   runWBIngest,
   WBIngestStatus,
 } from '../../../../../lib/apiClient'
 import { usePageTitle } from '../../../../../hooks/usePageTitle'
+import styles from './settings.module.css'
 
 interface ProjectMember {
   id: number
@@ -29,159 +29,169 @@ interface ProjectDetail {
   members: ProjectMember[]
 }
 
+interface ProjectMarketplace {
+  id: number
+  marketplace_id: number
+  is_enabled: boolean
+  marketplace_code: string
+  marketplace_name: string
+  settings_json?: {
+    brand_id?: number
+    frontend_prices?: {
+      brands?: { enabled?: boolean }[]
+    }
+  } | null
+}
+
+type RunParams = {
+  date_from?: string
+  date_to?: string
+  mode?: 'daily' | 'backfill' | 'reviews_full_sync' | 'reviews_incremental_all_nm_ids'
+  max_seconds?: number
+  max_batches?: number
+  cursor?: { date: string; nm_offset: number }
+}
+
+type WbCardStatsRunMode = 'daily' | 'last30' | 'custom'
+
+function toDateInputValue(value: Date): string {
+  const year = value.getFullYear()
+  const month = String(value.getMonth() + 1).padStart(2, '0')
+  const day = String(value.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function shiftedDateInputValue(days: number): string {
+  const value = new Date()
+  value.setDate(value.getDate() + days)
+  return toDateInputValue(value)
+}
+
+function formatDateTime(value: string | null | undefined): string {
+  if (!value) return '—'
+  try {
+    return new Date(value).toLocaleString('ru-RU')
+  } catch {
+    return value
+  }
+}
+
+function marketplaceLabel(marketplace: ProjectMarketplace): string {
+  if (marketplace.marketplace_code === 'wildberries') return 'Wildberries'
+  if (marketplace.marketplace_code === 'ozon') return 'Ozon'
+  if (marketplace.marketplace_code === 'ym') return 'YM'
+  return marketplace.marketplace_name || marketplace.marketplace_code
+}
+
+function statusLabel(status: string | null, isRunning: boolean): string {
+  if (isRunning) return 'выполняется'
+  if (status === 'success') return 'успешно'
+  if (status === 'failed') return 'ошибка'
+  if (status === 'queued') return 'в очереди'
+  if (status === 'running') return 'выполняется'
+  return 'нет запусков'
+}
+
+function statusTone(status: string | null, isRunning: boolean): string {
+  if (isRunning || status === 'running' || status === 'queued') return styles.infoBadge
+  if (status === 'success') return styles.successBadge
+  if (status === 'failed') return styles.dangerBadge
+  return styles.neutralBadge
+}
+
+function normalizeStatuses(items: WBIngestStatus[]): WBIngestStatus[] {
+  return [...items].sort((a, b) => String(a.job_code).localeCompare(String(b.job_code)))
+}
+
+function statusesHash(items: WBIngestStatus[]): string {
+  return JSON.stringify(
+    items.map((status) => ({
+      job_code: status.job_code,
+      title: status.title,
+      has_schedule: status.has_schedule,
+      schedule_summary: status.schedule_summary,
+      last_run_at: status.last_run_at,
+      last_status: status.last_status,
+      is_running: status.is_running,
+      progress_current: status.progress_current,
+      progress_total: status.progress_total,
+      progress_pct: status.progress_pct,
+      progress_text: status.progress_text,
+      progress_detail: status.progress_detail,
+      active_run_id: status.active_run_id,
+      active_mode: status.active_mode,
+    })),
+  )
+}
+
 export default function ProjectSettingsPage({ params }: { params: { projectId: string } }) {
   const projectId = params.projectId
   usePageTitle('Настройки проекта', projectId)
+
   const [loading, setLoading] = useState(true)
   const [project, setProject] = useState<ProjectDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [toast, setToast] = useState<string | null>(null)
   const [wbEnabled, setWbEnabled] = useState(false)
   const [connectedMarketplaces, setConnectedMarketplaces] = useState<ProjectMarketplace[]>([])
-  const [cogsCoverage, setCogsCoverage] = useState<{
-    internal_data_available: boolean
-    internal_skus_total: number
-    covered_total: number
-    missing_total: number
-    coverage_pct: number
-  } | null>(null)
-  const [cogsLoading, setCogsLoading] = useState(false)
-
-  interface ProjectMarketplace {
-    id: number
-    marketplace_id: number
-    is_enabled: boolean
-    marketplace_code: string
-    marketplace_name: string
-  }
-
   const [wbIngestStatuses, setWbIngestStatuses] = useState<WBIngestStatus[]>([])
   const [wbIngestLoading, setWbIngestLoading] = useState(false)
   const [runningJobs, setRunningJobs] = useState<Set<string>>(new Set())
-  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null)
   const [isPolling, setIsPolling] = useState(false)
-  const lastStatusesHashRef = useRef<string>('')
-  const [proxySettings, setProxySettings] = useState<ProjectProxySettings | null>(null)
+  const [frontendPricesBrandCount, setFrontendPricesBrandCount] = useState(0)
+  const [wbCardStatsRunMode, setWbCardStatsRunMode] = useState<WbCardStatsRunMode>('daily')
+  const [wbCardStatsDateFrom, setWbCardStatsDateFrom] = useState(() => shiftedDateInputValue(-29))
+  const [wbCardStatsDateTo, setWbCardStatsDateTo] = useState(() => toDateInputValue(new Date()))
 
-  useEffect(() => {
-    const load = async () => {
-      try {
-        setLoading(true)
-        setError(null)
-        const [projectData, cogsCoverageData, proxyData] = await Promise.all([
-          apiGet<ProjectDetail>(`/api/v1/projects/${projectId}`),
-          apiGet<{
-            internal_data_available: boolean
-            internal_skus_total: number
-            covered_total: number
-            missing_total: number
-            coverage_pct: number
-          }>(`/api/v1/projects/${projectId}/cogs/coverage`).catch(() => null),
-          getProjectProxySettings(projectId).catch(() => null),
-        ])
-        setProject(projectData.data)
+  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const lastStatusesHashRef = useRef('')
 
-        if (cogsCoverageData) {
-          setCogsCoverage(cogsCoverageData.data)
-        } else {
-          setCogsCoverage(null)
-        }
+  const projectMeta = useMemo(
+    () => [
+      { label: 'ID', value: project?.id != null ? String(project.id) : '—' },
+      { label: 'Обновлён', value: formatDateTime(project?.updated_at) },
+      { label: 'Участники', value: String(project?.members?.length ?? 0) },
+    ],
+    [project],
+  )
 
-        setProxySettings(proxyData)
-      } catch (e: any) {
-        setError(e?.detail || 'Failed to load project')
-      } finally {
-        setLoading(false)
-      }
-    }
-    load()
-    checkWbEnabled()
-    
-    // Cleanup polling on unmount
-    return () => {
-      if (pollingIntervalRef.current) {
-        clearInterval(pollingIntervalRef.current)
-      }
-    }
-  }, [projectId])
-
-  // Load ingest statuses when wbEnabled changes
-  useEffect(() => {
-    if (wbEnabled) {
-      loadWBIngestStatuses()
-    } else {
-      setWbIngestStatuses([])
-      stopPolling()
-    }
-  }, [wbEnabled])
-
-  const checkWbEnabled = async () => {
-    try {
-      const { data: marketplaces } = await apiGet<ProjectMarketplace[]>(`/api/v1/projects/${projectId}/marketplaces`)
-      const enabled = (marketplaces || []).filter((m) => m.is_enabled)
-      setConnectedMarketplaces(enabled)
-      const wb = marketplaces.find(m => m.marketplace_code === 'wildberries')
-      setWbEnabled(wb?.is_enabled || false)
-    } catch (error) {
-      console.error('Failed to check WB status:', error)
-    }
+  const showToast = (message: string, timeout = 4000) => {
+    setToast(message)
+    window.setTimeout(() => setToast(null), timeout)
   }
 
-  const normalizeStatuses = (items: WBIngestStatus[]) => {
-    // Stable ordering to avoid row jumping on refresh
-    return [...items].sort((a, b) => String(a.job_code).localeCompare(String(b.job_code)))
-  }
-
-  const computeStatusesHash = (items: WBIngestStatus[]) => {
-    // Hash only fields that affect this table rendering
-    return JSON.stringify(
-      items.map((s) => ({
-        job_code: s.job_code,
-        title: s.title,
-        has_schedule: s.has_schedule,
-        schedule_summary: s.schedule_summary,
-        last_run_at: s.last_run_at,
-        last_status: s.last_status,
-        is_running: s.is_running,
-      }))
-    )
+  const stopPolling = () => {
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current)
+      pollingIntervalRef.current = null
+    }
+    setIsPolling(false)
   }
 
   const loadWBIngestStatuses = async (opts?: { silent?: boolean }) => {
     if (!wbEnabled) {
       setWbIngestStatuses([])
+      stopPolling()
       return
     }
+
     try {
       if (!opts?.silent) setWbIngestLoading(true)
-      const statuses = await getWBIngestStatus(projectId)
+      const statuses = normalizeStatuses(await getWBIngestStatus(projectId))
+      const nextHash = statusesHash(statuses)
 
-      const normalized = normalizeStatuses(statuses)
-      const nextHash = computeStatusesHash(normalized)
       if (nextHash !== lastStatusesHashRef.current) {
         lastStatusesHashRef.current = nextHash
-        setWbIngestStatuses(normalized)
+        setWbIngestStatuses(statuses)
       }
-      
-      // Update running jobs set
-      const running = new Set<string>()
-      normalized.forEach(s => {
-        if (s.is_running) {
-          running.add(s.job_code)
-        }
-      })
+
+      const running = new Set(statuses.filter((status) => status.is_running).map((status) => status.job_code))
       setRunningJobs((prev) => {
-        // Avoid rerender if unchanged
-        if (prev.size === running.size && [...prev].every((x) => running.has(x))) return prev
+        if (prev.size === running.size && [...prev].every((jobCode) => running.has(jobCode))) return prev
         return running
       })
-      
-      // Start polling if any job is running
-      if (running.size > 0 && !pollingIntervalRef.current) {
-        startPolling()
-      } else if (running.size === 0 && pollingIntervalRef.current) {
-        stopPolling()
-      }
+
+      if (running.size === 0) stopPolling()
     } catch (error) {
       console.error('Failed to load WB ingest statuses:', error)
     } finally {
@@ -194,535 +204,436 @@ export default function ProjectSettingsPage({ params }: { params: { projectId: s
     setIsPolling(true)
     pollingIntervalRef.current = setInterval(() => {
       loadWBIngestStatuses({ silent: true })
-    }, 10000) // Poll every 10 seconds (stable UI)
+    }, 10000)
   }
 
-  const stopPolling = () => {
-    if (pollingIntervalRef.current) {
-      clearInterval(pollingIntervalRef.current)
-      pollingIntervalRef.current = null
+  useEffect(() => {
+    let alive = true
+
+    async function load() {
+      try {
+        setLoading(true)
+        setError(null)
+
+        const [projectResult, marketplacesResult] = await Promise.all([
+          apiGet<ProjectDetail>(`/api/v1/projects/${projectId}`),
+          apiGet<ProjectMarketplace[]>(`/api/v1/projects/${projectId}/marketplaces`),
+        ])
+
+        if (!alive) return
+
+        const marketplaces = marketplacesResult.data || []
+        const enabledMarketplaces = marketplaces.filter((marketplace) => marketplace.is_enabled)
+        const wbMarketplace = marketplaces.find((marketplace) => marketplace.marketplace_code === 'wildberries')
+        const frontendPriceBrands = wbMarketplace?.settings_json?.frontend_prices?.brands
+        const brandCount = Array.isArray(frontendPriceBrands)
+          ? frontendPriceBrands.filter((brand) => brand.enabled !== false).length
+          : wbMarketplace?.settings_json?.brand_id != null ? 1 : 0
+
+        setProject(projectResult.data)
+        setConnectedMarketplaces(enabledMarketplaces)
+        setWbEnabled(!!wbMarketplace?.is_enabled)
+        setFrontendPricesBrandCount(brandCount)
+      } catch (error) {
+        if (!alive) return
+        setError((error as { detail?: string; message?: string })?.detail || 'Не удалось загрузить настройки проекта')
+      } finally {
+        if (alive) setLoading(false)
+      }
     }
-    setIsPolling(false)
-  }
 
-  const handleRunIngest = async (jobCode: string) => {
+    load()
+
+    return () => {
+      alive = false
+      stopPolling()
+    }
+  }, [projectId])
+
+  useEffect(() => {
+    if (wbEnabled) {
+      loadWBIngestStatuses()
+    } else {
+      setWbIngestStatuses([])
+      stopPolling()
+    }
+  }, [wbEnabled])
+
+  const runIngestWithParams = async (jobCode: string, params?: RunParams) => {
     if (!wbEnabled) {
-      setToast('WB marketplace is not enabled. Enable it in Marketplaces section.')
-      setTimeout(() => setToast(null), 5000)
-      return
-    }
-
-    // For wb_finances, manual запуск перенесён на страницу отчётов
-    if (jobCode === 'wb_finances') {
-      setToast('Ручная загрузка финансовых отчётов перенесена на страницу «Финансовые отчёты».')
-      setTimeout(() => setToast(null), 5000)
-      return
-    }
-
-    // For other jobs, run immediately
-    await runIngestWithParams(jobCode)
-  }
-
-  const runIngestWithParams = async (jobCode: string, params?: { date_from?: string; date_to?: string }) => {
-    if (!wbEnabled) {
-      setToast('WB marketplace is not enabled. Enable it in Marketplaces section.')
-      setTimeout(() => setToast(null), 5000)
+      showToast('WB не подключён. Включите Wildberries в разделе маркетплейсов.', 5000)
       return
     }
 
     try {
-      // Optimistic update
-      setRunningJobs(prev => new Set(prev).add(jobCode))
-      setWbIngestStatuses(prev => prev.map(s => 
-        s.job_code === jobCode 
-          ? { ...s, is_running: true, last_status: 'queued' }
-          : s
-      ))
+      setRunningJobs((prev) => new Set(prev).add(jobCode))
+      setWbIngestStatuses((prev) =>
+        prev.map((status) =>
+          status.job_code === jobCode ? { ...status, is_running: true, last_status: 'queued' } : status,
+        ),
+      )
 
-      setToast(`Запуск ${jobCode}...`)
       await runWBIngest(projectId, jobCode, params)
-      
-      // Start polling to track progress
-      if (!pollingIntervalRef.current) {
-        startPolling()
-      }
-      
-      // Reload statuses after a short delay
-      setTimeout(() => {
-        loadWBIngestStatuses()
-      }, 1000)
-      
-      setToast(`Ингест ${jobCode} запущен`)
-      setTimeout(() => setToast(null), 3000)
-    } catch (error: any) {
-      // Revert optimistic update
-      setRunningJobs(prev => {
+      showToast(`Загрузка ${jobCode} запущена`)
+      startPolling()
+      window.setTimeout(() => loadWBIngestStatuses(), 1000)
+    } catch (error) {
+      setRunningJobs((prev) => {
         const next = new Set(prev)
         next.delete(jobCode)
         return next
       })
-      setWbIngestStatuses(prev => prev.map(s => 
-        s.job_code === jobCode 
-          ? { ...s, is_running: false }
-          : s
-      ))
-      
-      setToast(`Ошибка (${jobCode}): ${error.detail || error.message}`)
-      setTimeout(() => setToast(null), 5000)
+      setWbIngestStatuses((prev) =>
+        prev.map((status) => (status.job_code === jobCode ? { ...status, is_running: false } : status)),
+      )
+      showToast(`Ошибка (${jobCode}): ${(error as { detail?: string; message?: string })?.detail || 'не удалось запустить'}`, 6000)
     }
   }
 
-  const formatDate = (dateStr: string | null) => {
-    if (!dateStr) return '—'
+  const handleRunIngest = async (jobCode: string) => {
+    if (jobCode === 'wb_finances') {
+      showToast('Ручная загрузка финансовых отчётов перенесена на страницу «Финансовые отчёты».')
+      return
+    }
+
+    await runIngestWithParams(
+      jobCode,
+      jobCode === 'wb_communications' ? { mode: 'reviews_full_sync' } : undefined,
+    )
+  }
+
+  const handleStopIngest = async (status: WBIngestStatus) => {
+    if (!status.active_run_id) return
+
     try {
-      return new Date(dateStr).toLocaleString('ru-RU')
-    } catch {
-      return '—'
+      await markIngestRunTimeout(projectId, status.active_run_id, {
+        reason_code: 'manual_stop',
+        reason_text:
+          status.job_code === 'wb_communications' && status.active_mode === 'reviews_full_sync'
+            ? 'Остановлено пользователем: полный сбор отзывов'
+            : `Остановлено пользователем: ${status.job_code}`,
+      })
+
+      showToast(`Загрузка ${status.job_code} остановлена`)
+      window.setTimeout(() => loadWBIngestStatuses(), 500)
+    } catch (error) {
+      showToast(`Ошибка остановки: ${(error as { detail?: string; message?: string })?.detail || 'не удалось остановить'}`, 6000)
     }
   }
 
-  const getStatusIcon = (status: string | null, isRunning: boolean) => {
-    if (isRunning) {
-      return <span style={{ color: '#2563eb' }}>⟳</span>
+  const getWbCardStatsPlan = (): { params: RunParams; summary: string; invalid?: string } => {
+    if (wbCardStatsRunMode === 'daily') {
+      const day = shiftedDateInputValue(-1)
+      return {
+        params: {
+          mode: 'daily',
+          date_from: day,
+          date_to: day,
+        },
+        summary: `Обычная дневная загрузка за ${day}`,
+      }
     }
-    if (status === 'success') {
-      return <span style={{ color: '#28a745' }}>✓</span>
+
+    const dateFrom = wbCardStatsRunMode === 'last30' ? shiftedDateInputValue(-29) : wbCardStatsDateFrom
+    const dateTo = wbCardStatsRunMode === 'last30' ? toDateInputValue(new Date()) : wbCardStatsDateTo
+    if (!dateFrom || !dateTo) {
+      return {
+        params: {},
+        summary: 'backfill · даты не выбраны',
+        invalid: 'Выберите date_from и date_to',
+      }
     }
-    if (status === 'failed') {
-      return <span style={{ color: '#dc3545' }}>✗</span>
+    if (dateFrom > dateTo) {
+      return {
+        params: {},
+        summary: `Догрузка периода ${dateFrom}..${dateTo}`,
+        invalid: 'date_from позже date_to',
+      }
     }
-    return <span style={{ color: '#999' }}>—</span>
+    return {
+      params: {
+        mode: 'backfill',
+        date_from: dateFrom,
+        date_to: dateTo,
+        max_seconds: 1500,
+        max_batches: 200,
+      },
+      summary: `Догрузка периода ${dateFrom}..${dateTo}`,
+    }
   }
 
-  const frontendPricesProxyEnabled = !!proxySettings?.enabled
-
-  const formatDateTime = (value: string | null | undefined) => {
-    if (!value) return '—'
-    try {
-      return new Date(value).toLocaleString('ru-RU')
-    } catch {
-      return value
+  const runSelectedCardStats = async () => {
+    const plan = getWbCardStatsPlan()
+    if (plan.invalid) {
+      showToast(plan.invalid, 5000)
+      return
     }
+    await runIngestWithParams('wb_card_stats_daily', plan.params)
   }
-
 
   return (
-    <div className="container">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-        <h1>{project ? `Настройки проекта ${project.name}` : 'Project Settings'}</h1>
-        <Link href="/app/projects">← Проекты</Link>
-      </div>
+    <div className={styles.settingsPage}>
+      <header className={styles.header}>
+        <div>
+          <div className={styles.eyebrow}>Настройки</div>
+          <h1>{project ? `Настройки проекта ${project.name}` : 'Настройки проекта'}</h1>
+        </div>
+        <Link className={styles.backLink} href="/app/projects">
+          ← Проекты
+        </Link>
+      </header>
 
-      {toast && <div className="toast">{toast}</div>}
+      {toast ? <div className={styles.toast}>{toast}</div> : null}
 
       {loading ? (
-        <p>Loading...</p>
-      ) : error ? (
-        <div className="card">
-          <p style={{ color: 'crimson' }}>{error}</p>
-        </div>
-      ) : !project ? (
-        <div className="card">
-          <p>Project not found</p>
-        </div>
-      ) : (
+        <section className={styles.panel}>
+          <div className={styles.skeletonTitle} />
+          <div className={styles.skeletonGrid}>
+            <div />
+            <div />
+            <div />
+          </div>
+        </section>
+      ) : null}
+
+      {!loading && error ? (
+        <section className={styles.notice} role="alert">
+          <strong>Не удалось загрузить настройки.</strong>
+          <span>{error}</span>
+        </section>
+      ) : null}
+
+      {!loading && !error && !project ? (
+        <section className={styles.notice}>
+          <strong>Проект не найден.</strong>
+        </section>
+      ) : null}
+
+      {!loading && !error && project ? (
         <>
-          <div className="card" style={{ padding: '20px' }}>
-            <h2 style={{ marginTop: 0 }}>{project.name}</h2>
-            {project.description && <p style={{ color: '#666' }}>{project.description}</p>}
-            <div style={{ marginTop: '14px' }}>
-              <div style={{ fontSize: '0.9rem', color: '#666', marginBottom: '6px' }}>
-                Подключённые маркетплейсы
-              </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                {connectedMarketplaces.length === 0 ? (
-                  <span style={{ color: '#999', fontSize: '0.9rem' }}>—</span>
-                ) : (
-                  connectedMarketplaces.map((mp) => (
-                    <span
-                      key={`${mp.marketplace_code}-${mp.id}`}
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        padding: '4px 10px',
-                        borderRadius: '999px',
-                        fontSize: '0.85rem',
-                        fontWeight: 600,
-                        backgroundColor: '#eef2ff',
-                        color: '#1e40af',
-                      }}
-                    >
-                      {mp.marketplace_name || mp.marketplace_code}
+          <section className={styles.projectPanel}>
+            <div>
+              <h2>{project.name}</h2>
+              {project.description ? <p>{project.description}</p> : null}
+              <div className={styles.marketplaces}>
+                {connectedMarketplaces.length > 0 ? (
+                  connectedMarketplaces.map((marketplace) => (
+                    <span key={`${marketplace.marketplace_code}-${marketplace.id}`} className={styles.marketplaceChip}>
+                      {marketplaceLabel(marketplace)}
                     </span>
                   ))
+                ) : (
+                  <span className={styles.mutedText}>Маркетплейсы не подключены</span>
                 )}
               </div>
             </div>
-            <div style={{ marginTop: '12px', color: '#999', fontSize: '0.9rem' }}>
-              <div>Updated: {new Date(project.updated_at).toLocaleString()}</div>
-              <div>Members: {project.members?.length ?? 0}</div>
-            </div>
-          </div>
+            <dl className={styles.metaGrid}>
+              {projectMeta.map((item) => (
+                <div key={item.label}>
+                  <dt>{item.label}</dt>
+                  <dd>{item.value}</dd>
+                </div>
+              ))}
+            </dl>
+          </section>
 
-          <div className="card" style={{ padding: '20px' }}>
-            <h2 style={{ marginTop: 0 }}>Быстрый доступ</h2>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
-              <Link href={`/app/project/${projectId}/dashboard`}>
-                <button>На страницу проекта</button>
-              </Link>
-              <Link href={`/app/project/${projectId}/marketplaces`}>
-                <button>Подключение маркетплейсов</button>
-              </Link>
-              <Link href={`/app/project/${projectId}/members`}>
-                <button>Пользователи</button>
-              </Link>
-            </div>
-          </div>
-
-          <div className="card" style={{ padding: '20px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px' }}>
-                <h2 style={{ marginTop: 0, marginBottom: '8px' }}>Загрузка данных WB</h2>
-                {isPolling && (
-                  <span style={{ color: '#999', fontSize: '0.85rem' }}>⟳ обновление…</span>
-                )}
+          <section className={styles.panel}>
+            <div className={styles.panelHeader}>
+              <div>
+                <div className={styles.eyebrow}>Wildberries</div>
+                <h2>Загрузка данных WB</h2>
+                <p>Состояние и ручной запуск существующих загрузок Wildberries.</p>
               </div>
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: '14px' }}>
-                <Link
-                  href={`/app/project/${projectId}/wildberries/finances/reports`}
-                  style={{
-                    fontSize: '0.9rem',
-                    color: '#1e40af',
-                    textDecoration: 'none',
-                    padding: '6px 10px',
-                    borderRadius: '999px',
-                    backgroundColor: '#eef2ff',
-                    border: '1px solid #c7d2fe',
-                    fontWeight: 600,
-                  }}
-                >
-                  Финансовые отчёты →
+              <div className={styles.headerActions}>
+                {isPolling ? <span className={`${styles.badge} ${styles.infoBadge}`}>обновление</span> : null}
+                <Link className={styles.secondaryLink} href={`/app/project/${projectId}/wildberries/finances/reports`}>
+                  Финансовые отчёты
                 </Link>
-                <Link
-                  href={`/app/project/${projectId}/wildberries/finances/sku-pnl`}
-                  style={{
-                    fontSize: '0.9rem',
-                    color: '#1e40af',
-                    textDecoration: 'none',
-                    padding: '6px 10px',
-                    borderRadius: '999px',
-                    backgroundColor: '#eef2ff',
-                    border: '1px solid #c7d2fe',
-                    fontWeight: 600,
-                  }}
-                >
-                  SKU PnL →
-                </Link>
-                <Link
-                  href={`/app/project/${projectId}/ingestion`}
-                  style={{ fontSize: '0.9rem', color: '#2563eb', textDecoration: 'none' }}
-                >
-                  Настройка расписания загрузки данных →
+                <Link className={styles.secondaryLink} href={`/app/project/${projectId}/ingestion`}>
+                  Расписание
                 </Link>
               </div>
             </div>
-            <p style={{ color: '#666', marginBottom: '20px', fontSize: '0.95rem' }}>
-              Состояние и управление загрузками данных из Wildberries.
-            </p>
 
-            {!wbEnabled && (
-              <div style={{ 
-                padding: '12px', 
-                marginBottom: '20px', 
-                backgroundColor: '#fff3cd', 
-                border: '1px solid #ffc107',
-                borderRadius: '4px'
-              }}>
-                <p style={{ margin: 0, color: '#856404' }}>
-                  <strong>WB не включен.</strong> Включите его в разделе{' '}
-                  <Link href={`/app/project/${projectId}/marketplaces`} style={{ color: '#0070f3' }}>
-                    Маркетплейсы
-                  </Link>
-                  {' '}для использования функций загрузки Wildberries.
-                </p>
+            {!wbEnabled ? (
+              <div className={styles.noticeInline}>
+                <strong>WB не подключён.</strong>
+                <span>Включите Wildberries в разделе маркетплейсов для управления загрузками.</span>
+                <Link href={`/app/project/${projectId}/marketplaces`}>Маркетплейсы</Link>
               </div>
-            )}
+            ) : null}
 
-            {wbIngestStatuses.length === 0 ? (
-              <p style={{ color: '#666' }}>Нет доступных ингестов</p>
+            {wbIngestLoading ? (
+              <div className={styles.tableEmpty}>Загружаем статусы...</div>
+            ) : wbIngestStatuses.length === 0 ? (
+              <div className={styles.tableEmpty}>Нет доступных загрузок</div>
             ) : (
-              <div style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <div className={styles.tableWrap}>
+                <table className={styles.ingestTable}>
                   <thead>
-                    <tr style={{ borderBottom: '2px solid #ddd' }}>
-                      <th style={{ padding: '12px', textAlign: 'left', fontWeight: 600 }}>Название</th>
-                      <th style={{ padding: '12px', textAlign: 'left', fontWeight: 600 }}>Расписание</th>
-                      <th style={{ padding: '12px', textAlign: 'left', fontWeight: 600 }}>Последнее обновление</th>
-                      <th style={{ padding: '12px', textAlign: 'left', fontWeight: 600 }}>Действия</th>
+                    <tr>
+                      <th>Название</th>
+                      <th>Расписание</th>
+                      <th>Последний запуск</th>
+                      <th>Действия</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {wbIngestStatuses.map((status) => (
-                      <tr key={status.job_code} style={{ borderBottom: '1px solid #eee' }}>
-                        <td style={{ padding: '12px' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            {getStatusIcon(status.last_status, status.is_running)}
-                            <div>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                <span>{status.title}</span>
-                                {status.job_code === 'frontend_prices' && frontendPricesProxyEnabled && (
-                                  <span
-                                    style={{
-                                      display: 'inline-block',
-                                      padding: '2px 8px',
-                                      borderRadius: '999px',
-                                      backgroundColor: '#e0f2fe',
-                                      color: '#0369a1',
-                                      fontSize: 11,
-                                      fontWeight: 600,
-                                    }}
-                                  >
-                                    proxy
-                                  </span>
-                                )}
-                              </div>
-                              {status.job_code === 'frontend_prices' && (
-                                <div style={{ fontSize: '0.85rem', color: '#666', marginTop: '2px' }}>
-                                  Примечание: перед загрузкой витринных цен автоматически обновляются «Цены WB» (prices).
+                    {wbIngestStatuses.map((status) => {
+                      const isRunning = status.is_running || runningJobs.has(status.job_code)
+                      const cardStatsPlan = status.job_code === 'wb_card_stats_daily' ? getWbCardStatsPlan() : null
+
+                      return (
+                        <tr key={status.job_code}>
+                          <td>
+                            <div className={styles.jobCell}>
+                              <span className={`${styles.badge} ${statusTone(status.last_status, isRunning)}`}>
+                                {statusLabel(status.last_status, isRunning)}
+                              </span>
+                              <div>
+                                <div className={styles.jobTitle}>
+                                  <span>{status.title}</span>
+                                  {status.job_code === 'frontend_prices' ? (
+                                    <span className={`${styles.badge} ${styles.neutralBadge}`}>
+                                      {frontendPricesBrandCount > 0 ? `Брендов: ${frontendPricesBrandCount}` : 'Бренды не настроены'}
+                                    </span>
+                                  ) : null}
                                 </div>
-                              )}
+                                {status.job_code === 'frontend_prices' ? (
+                                  <div className={styles.jobHint}>
+                                    Перед витринными ценами автоматически обновляются цены WB.
+                                  </div>
+                                ) : null}
+                                {status.progress_text ? (
+                                  <div className={styles.progressBlock}>
+                                    <div>
+                                      {status.progress_text}
+                                      {typeof status.progress_pct === 'number' ? ` (${status.progress_pct.toFixed(1)}%)` : ''}
+                                    </div>
+                                    {status.progress_detail ? <span>{status.progress_detail}</span> : null}
+                                    {typeof status.progress_pct === 'number' ? (
+                                      <div className={styles.progressBar}>
+                                        <i style={{ width: `${Math.max(0, Math.min(100, status.progress_pct))}%` }} />
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                ) : null}
+                              </div>
                             </div>
-                          </div>
-                        </td>
-                        <td style={{ padding: '12px', color: '#666' }}>
-                          {status.has_schedule ? (
-                            <span>{status.schedule_summary || 'По расписанию'}</span>
-                          ) : (
-                            <span style={{ color: '#999' }}>Не настроено</span>
-                          )}
-                        </td>
-                        <td style={{ padding: '12px', color: '#666' }}>
-                          {formatDate(status.last_run_at)}
-                        </td>
-                        <td style={{ padding: '12px' }}>
-                          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                            {status.job_code === 'wb_finances' ? (
-                              <Link
-                                href={`/app/project/${projectId}/wildberries/finances/reports`}
-                                style={{
-                                  fontSize: '0.9rem',
-                                  color: '#2563eb',
-                                  textDecoration: 'none',
-                                  fontWeight: 600,
-                                }}
-                              >
-                                Финансовые отчёты →
-                              </Link>
-                            ) : (
-                              <button
-                                onClick={() => handleRunIngest(status.job_code)}
-                                disabled={!wbEnabled || status.is_running}
-                                style={{
-                                  padding: '6px 12px',
-                                  backgroundColor: status.is_running ? '#ccc' : '#2563eb',
-                                  color: 'white',
-                                  border: 'none',
-                                  borderRadius: '4px',
-                                  cursor: status.is_running ? 'not-allowed' : 'pointer',
-                                  fontSize: '0.9rem',
-                                }}
-                              >
-                                {status.is_running ? 'Выполняется…' : 'Загрузить сейчас'}
-                              </button>
-                            )}
-                            {status.job_code !== 'wb_finances' && status.last_run_at ? (
-                              <Link
-                                href={`/app/project/${projectId}/ingestion?job_code=${status.job_code}`}
-                                style={{
-                                  fontSize: '0.9rem',
-                                  color: '#2563eb',
-                                  textDecoration: 'none',
-                                }}
-                              >
-                                История запусков
-                              </Link>
-                            ) : null}
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
+                          </td>
+                          <td>{status.has_schedule ? status.schedule_summary || 'По расписанию' : 'Не настроено'}</td>
+                          <td>{formatDateTime(status.last_run_at)}</td>
+                          <td>
+                            <div className={styles.rowActions}>
+                              {status.job_code === 'wb_finances' ? (
+                                <Link className={styles.inlineLink} href={`/app/project/${projectId}/wildberries/finances/reports`}>
+                                  Финансовые отчёты
+                                </Link>
+                              ) : status.job_code === 'wb_communications' ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    className={styles.smallPrimary}
+                                    onClick={() => runIngestWithParams(status.job_code, { mode: 'reviews_full_sync' })}
+                                    disabled={!wbEnabled || isRunning}
+                                  >
+                                    Полный сбор
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className={styles.smallSecondary}
+                                    onClick={() => runIngestWithParams(status.job_code, { mode: 'reviews_incremental_all_nm_ids' })}
+                                    disabled={!wbEnabled || isRunning}
+                                  >
+                                    Догрузить новое
+                                  </button>
+                                </>
+                              ) : status.job_code === 'wb_card_stats_daily' ? (
+                                <div className={styles.cardStatsControls}>
+                                  <label className={styles.inlineField}>
+                                    <span>Что загрузить</span>
+                                    <select
+                                      value={wbCardStatsRunMode}
+                                      onChange={(event) => setWbCardStatsRunMode(event.target.value as WbCardStatsRunMode)}
+                                    >
+                                      <option value="daily">Вчера</option>
+                                      <option value="last30">Последние 30 дней</option>
+                                      <option value="custom">Свой период</option>
+                                    </select>
+                                  </label>
+
+                                  {wbCardStatsRunMode === 'custom' ? (
+                                    <div className={styles.dateRangeControls}>
+                                      <input
+                                        type="date"
+                                        value={wbCardStatsDateFrom}
+                                        onChange={(event) => setWbCardStatsDateFrom(event.target.value)}
+                                        aria-label="date_from"
+                                      />
+                                      <span>...</span>
+                                      <input
+                                        type="date"
+                                        value={wbCardStatsDateTo}
+                                        onChange={(event) => setWbCardStatsDateTo(event.target.value)}
+                                        aria-label="date_to"
+                                      />
+                                    </div>
+                                  ) : null}
+
+                                  <div className={styles.runPlan} title={JSON.stringify(cardStatsPlan?.params ?? {})}>
+                                    {cardStatsPlan?.summary}
+                                  </div>
+
+                                  <button
+                                    type="button"
+                                    className={styles.smallPrimary}
+                                    onClick={runSelectedCardStats}
+                                    disabled={!wbEnabled || isRunning || Boolean(cardStatsPlan?.invalid)}
+                                  >
+                                    {isRunning ? 'Выполняется...' : 'Запустить'}
+                                  </button>
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  className={styles.smallPrimary}
+                                  onClick={() => handleRunIngest(status.job_code)}
+                                  disabled={!wbEnabled || isRunning}
+                                >
+                                  {isRunning ? 'Выполняется...' : 'Загрузить сейчас'}
+                                </button>
+                              )}
+
+                              {isRunning && status.active_run_id != null ? (
+                                <button type="button" className={styles.smallDanger} onClick={() => handleStopIngest(status)}>
+                                  Остановить
+                                </button>
+                              ) : null}
+
+                              {(status.job_code === 'wb_search_report_tabular' || status.job_code === 'wb_stock_total_daily') ? (
+                                <Link className={styles.inlineLink} href={`/app/project/${projectId}/wildberries/search-report`}>
+                                  Открыть
+                                </Link>
+                              ) : null}
+
+                              {status.job_code !== 'wb_finances' && (status.last_run_at || status.job_code === 'wb_card_stats_daily') ? (
+                                <Link className={styles.inlineLink} href={`/app/project/${projectId}/ingestion?job_code=${status.job_code}`}>
+                                  История
+                                </Link>
+                              ) : null}
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })}
                   </tbody>
                 </table>
               </div>
             )}
-          </div>
+          </section>
 
-          <div className="card" style={{ padding: '20px', marginTop: '20px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-                <h2 style={{ marginTop: 0, marginBottom: '8px' }}>Прокси для витрины WB</h2>
-                {proxySettings && (
-                  <span
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      padding: '2px 10px',
-                      borderRadius: 999,
-                      fontSize: 12,
-                      fontWeight: 600,
-                      backgroundColor: proxySettings.enabled ? '#dcfce7' : '#f3f4f6',
-                      color: proxySettings.enabled ? '#166534' : '#4b5563',
-                      border: '1px solid ' + (proxySettings.enabled ? '#a7f3d0' : '#e5e7eb'),
-                    }}
-                  >
-                    {proxySettings.enabled ? 'включено' : 'выключено'}
-                  </span>
-                )}
-              </div>
-              <Link
-                href={`/app/project/${projectId}/settings/proxy`}
-                style={{ fontSize: '0.9rem', color: '#2563eb', textDecoration: 'none' }}
-              >
-                Открыть →
-              </Link>
-            </div>
-            <p style={{ color: '#666', marginBottom: '12px', fontSize: '0.95rem' }}>
-              Прокси применяется только для загрузки витринных цен (frontend_prices).
-            </p>
-            {proxySettings && (
-              <div style={{ fontSize: '0.9rem', color: '#6b7280' }}>
-                <div>
-                  Последняя проверка: <strong>{formatDateTime(proxySettings.last_test_at)}</strong>{' '}
-                  {proxySettings.last_test_ok === true ? (
-                    <span style={{ color: '#166534' }}>OK</span>
-                  ) : proxySettings.last_test_ok === false ? (
-                    <span style={{ color: '#b91c1c' }}>Ошибка</span>
-                  ) : (
-                    <span style={{ color: '#6b7280' }}>—</span>
-                  )}
-                </div>
-                {proxySettings.last_test_ok === false && proxySettings.last_test_error ? (
-                  <div style={{ marginTop: 4, color: '#b91c1c' }}>{proxySettings.last_test_error}</div>
-                ) : null}
-              </div>
-            )}
-            <div style={{ marginTop: 14 }}>
-              <Link href={`/app/project/${projectId}/settings/proxy`}>
-                <button>Настроить прокси</button>
-              </Link>
-            </div>
-          </div>
-
-          <div className="card" style={{ padding: '20px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-              <h2 style={{ marginTop: 0, marginBottom: '8px' }}>Загрузка каталога</h2>
-            </div>
-            <p style={{ color: '#666', marginBottom: '20px', fontSize: '0.95rem' }}>
-              Настройка источников внутренних данных о товарах: загрузка из URL или файла, сопоставление полей, категории.
-            </p>
-            <div>
-              <Link href={`/app/project/${projectId}/internal-data/settings`}>
-                <button>Открыть настройки</button>
-              </Link>
-            </div>
-          </div>
-
-          <div className="card" style={{ padding: '20px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-              <h2 style={{ marginTop: 0, marginBottom: '8px' }}>Настройка себестоимости</h2>
-              <Link
-                href={`/app/project/${projectId}/cogs`}
-                style={{ fontSize: '0.9rem', color: '#2563eb', textDecoration: 'none' }}
-              >
-                Управление правилами расчета себестоимости →
-              </Link>
-            </div>
-            <p style={{ color: '#666', marginBottom: '20px', fontSize: '0.95rem' }}>
-              Настройка правил расчета себестоимости товаров.
-            </p>
-
-            {cogsLoading ? (
-              <p style={{ color: '#666' }}>Загрузка статистики...</p>
-            ) : !cogsCoverage ? (
-              <div style={{ marginBottom: '20px' }}>
-                <p style={{ color: '#666', fontSize: '0.9rem', marginBottom: '12px' }}>
-                  Покрытие себестоимости: —
-                </p>
-                <div>
-                  <Link href={`/app/project/${projectId}/cogs`}>
-                    <button>Управление правилами расчета себестоимости</button>
-                  </Link>
-                </div>
-              </div>
-            ) : !cogsCoverage.internal_data_available ? (
-              <div style={{ marginBottom: '20px' }}>
-                <p style={{ color: '#666', fontSize: '0.9rem', marginBottom: '12px' }}>
-                  Покрытие себестоимости: — (нет Internal Data)
-                </p>
-                <div>
-                  <Link href={`/app/project/${projectId}/cogs`}>
-                    <button>Управление правилами расчета себестоимости</button>
-                  </Link>
-                </div>
-              </div>
-            ) : (
-              <div style={{ marginBottom: '20px' }}>
-                <p style={{ color: '#666', fontSize: '0.9rem', marginBottom: '12px' }}>
-                  Покрытие себестоимости: {cogsCoverage.coverage_pct.toFixed(1)}%
-                </p>
-                <div style={{ marginTop: '12px' }}>
-                  <Link href={`/app/project/${projectId}/cogs`}>
-                    <button>Управление правилами расчета себестоимости</button>
-                  </Link>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="card" style={{ padding: '20px', marginTop: '20px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-              <h2 style={{ marginTop: 0, marginBottom: '8px' }}>Управление расходами</h2>
-              <Link
-                href={`/app/project/${projectId}/additional-costs`}
-                style={{ fontSize: '0.9rem', color: '#2563eb', textDecoration: 'none' }}
-              >
-                Открыть →
-              </Link>
-            </div>
-            <p style={{ color: '#666', marginBottom: '20px', fontSize: '0.95rem' }}>
-              Учет дополнительных расходов проекта: маркетинг, логистика, налоги и другие затраты.
-            </p>
-            <div>
-              <Link href={`/app/project/${projectId}/additional-costs`}>
-                <button>Открыть</button>
-              </Link>
-            </div>
-          </div>
-
-          <div className="card" style={{ padding: '20px', marginTop: '20px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-              <h2 style={{ marginTop: 0, marginBottom: '8px' }}>Налоги</h2>
-              <Link
-                href={`/app/project/${projectId}/settings/taxes`}
-                style={{ fontSize: '0.9rem', color: '#2563eb', textDecoration: 'none' }}
-              >
-                Управление налогами →
-              </Link>
-            </div>
-            <p style={{ color: '#666', marginBottom: '20px', fontSize: '0.95rem' }}>
-              Профили и расчёт налогов по периодам.
-            </p>
-            <div>
-              <Link href={`/app/project/${projectId}/settings/taxes`}>
-                <button>Открыть настройки налогов</button>
-              </Link>
-            </div>
-          </div>
         </>
-      )}
+      ) : null}
     </div>
   )
 }
-
-
-

@@ -1,0 +1,49 @@
+{
+  "limitation": "Activation does not affect matcher_v2 yet; full e2e regression deferred to Step 10.",
+  "run_id": 41,
+  "verdict": "preview_only",
+  "labels_used": 149,
+  "labels_missing": 42,
+  "metrics": {
+    "primary_precision": 0.2987,
+    "labels_missing": 42.0,
+    "bad_primary_rate": 0.3766,
+    "accuracy": 0.2349,
+    "primary_expected": 46.0,
+    "hard_conflict_primary_count": 0.0,
+    "buckets": {
+      "rejected": 8,
+      "primary": 77,
+      "secondary": 32,
+      "broad": 32
+    },
+    "labels_scored": 149.0,
+    "primary_predicted": 77.0,
+    "primary_recall": 0.5
+  },
+  "thresholds": {
+    "accuracy_min": 0.85,
+    "hard_conflict_primary_count_max": 0.0,
+    "bad_primary_rate_max": 0.05
+  },
+  "matcher_run_ids": [
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21
+  ],
+  "nm_ids": [
+    291861306,
+    277132340,
+    292541341,
+    346647412,
+    677255519,
+    677255521,
+    678529108,
+    678529109
+  ]
+}

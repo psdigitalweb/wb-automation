@@ -4,6 +4,7 @@ import json
 import logging
 import traceback
 import threading
+from datetime import date as date_type
 
 from app.celery_app import celery_app
 from billiard.exceptions import SoftTimeLimitExceeded
@@ -15,11 +16,295 @@ from app.services.ingest.runs import (
     finish_run_failed,
     touch_run,
     mark_run_skipped,
+    create_run_queued,
+    set_run_celery_task_id,
 )
 from app.services.ingest.registry import execute_ingest_job, IngestJobNotFound
 from app.utils.asyncio_runner import run_async_safe
+from app.db_wb_backfill_state import (
+    JOB_CODE_WB_CARD_STATS_DAILY,
+    JOB_CODE_WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS,
+    JOB_CODE_WB_COMMUNICATIONS_REVIEWS_FULL_SYNC,
+    MAX_AUTO_CONTINUES_PER_DAY,
+    MAX_AUTO_CONTINUES_WB_COMMUNICATIONS_INCREMENTAL_ALL_NM_IDS,
+    MAX_AUTO_CONTINUES_WB_COMMUNICATIONS_FULL_SYNC,
+    WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE,
+    WB_COMMUNICATIONS_REVIEWS_FULL_SYNC_STATE_DATE,
+    get_backfill_state,
+    try_increment_auto_continue_count,
+)
 
 logger = logging.getLogger(__name__)
+
+WB_CARD_STATS_RATE_LIMIT_CONTINUE_DELAY_SECONDS = 10 * 60
+
+
+def _maybe_schedule_wb_communications_full_sync_continuation(
+    run_id: int,
+    run: dict,
+    project_id: int,
+    marketplace_code: str,
+    stats: dict,
+) -> None:
+    """If reviews_full_sync ended with progress_saved and state is paused, schedule next run."""
+    params = run.get("params_json")
+    if isinstance(params, str):
+        try:
+            params = json.loads(params) if params else {}
+        except Exception:
+            params = {}
+    if not isinstance(params, dict):
+        return
+    if (params.get("mode") or "").strip().lower() != "reviews_full_sync":
+        return
+
+    range_state = get_backfill_state(
+        project_id,
+        JOB_CODE_WB_COMMUNICATIONS_REVIEWS_FULL_SYNC,
+        WB_COMMUNICATIONS_REVIEWS_FULL_SYNC_STATE_DATE,
+        WB_COMMUNICATIONS_REVIEWS_FULL_SYNC_STATE_DATE,
+    )
+    if not range_state:
+        return
+    status = range_state.get("status")
+    if status == "completed":
+        logger.info("wb_communications full_sync auto-continue: skipped because completed")
+        return
+    if status == "running":
+        logger.info("wb_communications full_sync auto-continue: skipped because already_running")
+        return
+    if status == "failed":
+        return
+    if status != "paused":
+        return
+
+    new_count = try_increment_auto_continue_count(
+        project_id,
+        JOB_CODE_WB_COMMUNICATIONS_REVIEWS_FULL_SYNC,
+        WB_COMMUNICATIONS_REVIEWS_FULL_SYNC_STATE_DATE,
+        WB_COMMUNICATIONS_REVIEWS_FULL_SYNC_STATE_DATE,
+        MAX_AUTO_CONTINUES_WB_COMMUNICATIONS_FULL_SYNC,
+    )
+    if new_count is None:
+        logger.warning(
+            "wb_communications full_sync auto-continue: stopped by max_auto_continues (limit=%s)",
+            MAX_AUTO_CONTINUES_WB_COMMUNICATIONS_FULL_SYNC,
+        )
+        return
+
+    logger.info(
+        "wb_communications full_sync auto-continue: scheduling next run count=%s",
+        new_count,
+    )
+    params_json = {
+        "mode": "reviews_full_sync",
+    }
+    if params.get("max_seconds") is not None:
+        params_json["max_seconds"] = params.get("max_seconds")
+    if params.get("max_nm_ids_per_run") is not None:
+        params_json["max_nm_ids_per_run"] = params.get("max_nm_ids_per_run")
+
+    new_run = create_run_queued(
+        project_id=project_id,
+        marketplace_code=marketplace_code,
+        job_code="wb_communications",
+        schedule_id=run.get("schedule_id"),
+        triggered_by="auto_continue",
+        params_json=params_json,
+    )
+    new_run_id = new_run["id"]
+    res = execute_ingest.delay(new_run_id)
+    set_run_celery_task_id(new_run_id, res.id)
+
+
+def _maybe_schedule_wb_communications_incremental_all_nm_ids_continuation(
+    run_id: int,
+    run: dict,
+    project_id: int,
+    marketplace_code: str,
+    stats: dict,
+) -> None:
+    """If reviews_incremental_all_nm_ids ended with progress_saved and state is paused, schedule next run."""
+    params = run.get("params_json")
+    if isinstance(params, str):
+        try:
+            params = json.loads(params) if params else {}
+        except Exception:
+            params = {}
+    if not isinstance(params, dict):
+        return
+    if (params.get("mode") or "").strip().lower() != "reviews_incremental_all_nm_ids":
+        return
+
+    range_state = get_backfill_state(
+        project_id,
+        JOB_CODE_WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS,
+        WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE,
+        WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE,
+    )
+    if not range_state:
+        return
+    status = range_state.get("status")
+    if status == "completed":
+        logger.info("wb_communications incremental_all_nm_ids auto-continue: skipped because completed")
+        return
+    if status == "running":
+        logger.info("wb_communications incremental_all_nm_ids auto-continue: skipped because already_running")
+        return
+    if status == "failed":
+        return
+    if status != "paused":
+        return
+
+    new_count = try_increment_auto_continue_count(
+        project_id,
+        JOB_CODE_WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS,
+        WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE,
+        WB_COMMUNICATIONS_REVIEWS_INCREMENTAL_ALL_NM_IDS_STATE_DATE,
+        MAX_AUTO_CONTINUES_WB_COMMUNICATIONS_INCREMENTAL_ALL_NM_IDS,
+    )
+    if new_count is None:
+        logger.warning(
+            "wb_communications incremental_all_nm_ids auto-continue: stopped by max_auto_continues (limit=%s)",
+            MAX_AUTO_CONTINUES_WB_COMMUNICATIONS_INCREMENTAL_ALL_NM_IDS,
+        )
+        return
+
+    logger.info(
+        "wb_communications incremental_all_nm_ids auto-continue: scheduling next run count=%s",
+        new_count,
+    )
+    params_json = {
+        "mode": "reviews_incremental_all_nm_ids",
+    }
+    if params.get("max_seconds") is not None:
+        params_json["max_seconds"] = params.get("max_seconds")
+    if params.get("max_nm_ids_per_run") is not None:
+        params_json["max_nm_ids_per_run"] = params.get("max_nm_ids_per_run")
+
+    new_run = create_run_queued(
+        project_id=project_id,
+        marketplace_code=marketplace_code,
+        job_code="wb_communications",
+        schedule_id=run.get("schedule_id"),
+        triggered_by="auto_continue",
+        params_json=params_json,
+    )
+    new_run_id = new_run["id"]
+    res = execute_ingest.delay(new_run_id)
+    set_run_celery_task_id(new_run_id, res.id)
+
+
+def _maybe_schedule_wb_card_stats_daily_continuation(
+    run_id: int,
+    run: dict,
+    project_id: int,
+    marketplace_code: str,
+    stats: dict,
+) -> None:
+    """If run ended with progress_saved and range state is paused, schedule next run."""
+    params = run.get("params_json")
+    if isinstance(params, str):
+        try:
+            params = json.loads(params) if params else {}
+        except Exception:
+            params = {}
+    if not isinstance(params, dict):
+        return
+    date_from_val = params.get("date_from")
+    date_to_val = params.get("date_to")
+    if date_from_val is None or date_to_val is None:
+        return
+    try:
+        date_from = (
+            date_from_val
+            if isinstance(date_from_val, date_type)
+            else date_type.fromisoformat(str(date_from_val)[:10])
+        )
+        date_to = (
+            date_to_val
+            if isinstance(date_to_val, date_type)
+            else date_type.fromisoformat(str(date_to_val)[:10])
+        )
+    except (ValueError, TypeError):
+        return
+
+    range_state = get_backfill_state(
+        project_id, JOB_CODE_WB_CARD_STATS_DAILY, date_from, date_to
+    )
+    if not range_state:
+        return
+    status = range_state.get("status")
+    if status == "completed":
+        logger.info(
+            "wb_card_stats_daily auto-continue: skipped because completed date=%s",
+            f"{date_from.isoformat()}..{date_to.isoformat()}",
+        )
+        return
+    if status == "running":
+        logger.info(
+            "wb_card_stats_daily auto-continue: skipped because already_running_for_range date=%s",
+            f"{date_from.isoformat()}..{date_to.isoformat()}",
+        )
+        return
+    if status == "failed":
+        return
+    if status != "paused":
+        return
+    range_days = max(1, (date_to - date_from).days + 1)
+    default_max_auto_continues = max(MAX_AUTO_CONTINUES_PER_DAY, range_days * MAX_AUTO_CONTINUES_PER_DAY)
+    try:
+        max_auto_continues = int(params.get("max_auto_continues") or default_max_auto_continues)
+    except (ValueError, TypeError):
+        max_auto_continues = default_max_auto_continues
+    max_auto_continues = max(1, max_auto_continues)
+
+    new_count = try_increment_auto_continue_count(
+        project_id, JOB_CODE_WB_CARD_STATS_DAILY, date_from, date_to, max_auto_continues
+    )
+    if new_count is None:
+        logger.warning(
+            "wb_card_stats_daily auto-continue: stopped by max_auto_continues (limit=%s) date=%s",
+            max_auto_continues,
+            f"{date_from.isoformat()}..{date_to.isoformat()}",
+        )
+        return
+
+    logger.info(
+        "wb_card_stats_daily auto-continue: scheduling next run for range=%s count=%s",
+        f"{date_from.isoformat()}..{date_to.isoformat()}",
+        new_count,
+    )
+    params_json = {
+        "mode": "backfill",
+        "date_from": date_from.isoformat(),
+        "date_to": date_to.isoformat(),
+    }
+    for key in ("use_fast_path", "max_seconds", "max_batches", "max_auto_continues"):
+        if key in params:
+            params_json[key] = params[key]
+    new_run = create_run_queued(
+        project_id=project_id,
+        marketplace_code=marketplace_code,
+        job_code=JOB_CODE_WB_CARD_STATS_DAILY,
+        schedule_id=run.get("schedule_id"),
+        triggered_by="auto_continue",
+        params_json=params_json,
+    )
+    new_run_id = new_run["id"]
+    if stats.get("pause_reason") == "wb_analytics_rate_limited":
+        logger.info(
+            "wb_card_stats_daily auto-continue: delaying rate_limited continuation range=%s delay_seconds=%s",
+            f"{date_from.isoformat()}..{date_to.isoformat()}",
+            WB_CARD_STATS_RATE_LIMIT_CONTINUE_DELAY_SECONDS,
+        )
+        res = execute_ingest.apply_async(
+            args=[new_run_id],
+            countdown=WB_CARD_STATS_RATE_LIMIT_CONTINUE_DELAY_SECONDS,
+        )
+    else:
+        res = execute_ingest.delay(new_run_id)
+    set_run_celery_task_id(new_run_id, res.id)
 
 
 @celery_app.task(
@@ -97,13 +382,57 @@ def execute_ingest(run_id: int) -> dict:
                 or "ingest_failed"
             )
             tb = json.dumps(stats, ensure_ascii=False)[:50000]
-            logger.warning(f"execute_ingest: job returned ok=False, failing run_id={run_id}, reason={reason}")
+            logger.warning(f"execute_ingest: job returned ok=False, run_id={run_id}, reason={reason}")
+            # Preserve debug progress and backfill checkpoint from set_run_progress
+            current = get_run(run_id)
+            if current and isinstance(current.get("stats_json"), dict):
+                preserve_keys = (
+                    "phase_label", "last_request", "last_events", "sleeping", "sleep_remaining_seconds",
+                    "cursor", "saved_date_from", "saved_date_to", "processed_batches", "processed_days",
+                    "rows_upserted", "rows_upserted_batch", "failed_batches_count", "quarantined_nm_ids",
+                    "loaded_cursor", "loaded_cursor_source",
+                )
+                for k in preserve_keys:
+                    if k in current["stats_json"]:
+                        stats = {**stats, k: current["stats_json"][k]}
+            if reason == "progress_saved" and job_code == "wb_card_stats_daily":
+                finish_run_success(run_id=run_id, stats_json=stats)
+                _maybe_schedule_wb_card_stats_daily_continuation(
+                    run_id=run_id,
+                    run=run,
+                    project_id=project_id,
+                    marketplace_code=marketplace_code,
+                    stats=stats,
+                )
+                return {
+                    "status": "success",
+                    "run_id": run_id,
+                    "project_id": project_id,
+                    "marketplace_code": marketplace_code,
+                    "job_code": job_code,
+                    "stats": stats,
+                }
             finish_run_failed(
                 run_id=run_id,
                 error_message=str(reason),
                 error_trace=tb,
                 stats_json=stats,
             )
+            if reason == "progress_saved" and job_code == "wb_communications":
+                _maybe_schedule_wb_communications_full_sync_continuation(
+                    run_id=run_id,
+                    run=run,
+                    project_id=project_id,
+                    marketplace_code=marketplace_code,
+                    stats=stats,
+                )
+                _maybe_schedule_wb_communications_incremental_all_nm_ids_continuation(
+                    run_id=run_id,
+                    run=run,
+                    project_id=project_id,
+                    marketplace_code=marketplace_code,
+                    stats=stats,
+                )
             return {
                 "status": "failed",
                 "run_id": run_id,
@@ -116,6 +445,12 @@ def execute_ingest(run_id: int) -> dict:
             }
 
         logger.info(f"execute_ingest: calling finish_run_success, run_id={run_id}")
+        # Preserve debug progress from set_run_progress for UI
+        current = get_run(run_id)
+        if current and isinstance(current.get("stats_json"), dict):
+            for k in ("phase_label", "last_request", "last_events", "sleeping", "sleep_remaining_seconds"):
+                if k in current["stats_json"]:
+                    stats = {**stats, k: current["stats_json"][k]}
         finish_run_success(run_id, stats_json=stats)
         logger.info(f"execute_ingest: finish_run_success completed, run_id={run_id}")
         

@@ -244,9 +244,90 @@ def list_reports(
         return [dict(row) for row in rows]
 
 
+def get_latest_report(
+    project_id: int,
+    marketplace_code: str = "wildberries",
+) -> Optional[Dict[str, Any]]:
+    """Get the latest finance report by period_to DESC (fallback: last_seen_at DESC).
+
+    Returns:
+        Single report dict or None if no reports
+    """
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("""
+                SELECT
+                    report_id,
+                    period_from,
+                    period_to,
+                    currency,
+                    total_amount,
+                    rows_count,
+                    first_seen_at,
+                    last_seen_at
+                FROM wb_finance_reports
+                WHERE project_id = :project_id
+                  AND marketplace_code = :marketplace_code
+                ORDER BY
+                    period_to DESC NULLS LAST,
+                    last_seen_at DESC NULLS LAST,
+                    report_id DESC
+                LIMIT 1
+            """),
+            {
+                "project_id": project_id,
+                "marketplace_code": marketplace_code,
+            },
+        ).mappings().first()
+        return dict(row) if row else None
+
+
+def search_reports(
+    project_id: int,
+    query: str,
+    limit: int = 20,
+    marketplace_code: str = "wildberries",
+) -> List[Dict[str, Any]]:
+    """Search finance reports for autocomplete.
+    Matches report_id, period_from, period_to, last_seen_at.
+    """
+    if not query or not query.strip():
+        return list_reports(project_id=project_id, marketplace_code=marketplace_code)[:limit]
+    q = f"%{query.strip()}%"
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("""
+                SELECT
+                    report_id,
+                    period_from,
+                    period_to,
+                    currency,
+                    total_amount,
+                    rows_count,
+                    first_seen_at,
+                    last_seen_at
+                FROM wb_finance_reports
+                WHERE project_id = :project_id
+                  AND marketplace_code = :marketplace_code
+                  AND (
+                    report_id::text ILIKE :q
+                    OR period_from::text ILIKE :q
+                    OR period_to::text ILIKE :q
+                    OR last_seen_at::text ILIKE :q
+                  )
+                ORDER BY last_seen_at DESC
+                LIMIT :limit
+            """),
+            {"project_id": project_id, "marketplace_code": marketplace_code, "q": q, "limit": limit},
+        ).mappings().all()
+        return [dict(row) for row in rows]
+
+
 __all__ = [
     "compute_payload_hash",
     "upsert_report_header",
     "insert_report_line_if_new",
     "list_reports",
+    "get_latest_report",
+    "search_reports",
 ]

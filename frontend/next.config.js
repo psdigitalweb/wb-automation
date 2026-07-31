@@ -2,6 +2,9 @@
 const nextConfig = {
   output: 'standalone',
   reactStrictMode: true,
+  async redirects() {
+    return []
+  },
   async rewrites() {
     // Dev/prod-safe proxy:
     // - Browser calls http://localhost:3000/api/...

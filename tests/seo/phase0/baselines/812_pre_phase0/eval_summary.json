@@ -1,0 +1,49 @@
+{
+  "category_id": 812,
+  "label_set_id": 1,
+  "labels_missing": 42,
+  "labels_used": 149,
+  "matcher_run_ids": [
+    6,
+    5,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12
+  ],
+  "metrics": {
+    "accuracy": 0.1678,
+    "bad_primary_rate": 0.3977,
+    "buckets": {
+      "broad": 21,
+      "primary": 88,
+      "secondary": 40
+    },
+    "hard_conflict_primary_count": 0.0,
+    "labels_missing": 42.0,
+    "labels_scored": 149.0,
+    "primary_expected": 46.0,
+    "primary_precision": 0.2614,
+    "primary_predicted": 88.0,
+    "primary_recall": 0.5
+  },
+  "nm_ids": [
+    277132340,
+    291861306,
+    292541341,
+    346647412,
+    677255519,
+    677255521,
+    678529108,
+    678529109
+  ],
+  "project_id": 1,
+  "thresholds": {
+    "accuracy_min": 0.85,
+    "bad_primary_rate_max": 0.05,
+    "hard_conflict_primary_count_max": 0.0
+  },
+  "verdict": "preview_only"
+}

@@ -28,6 +28,7 @@ class IngestRunResponse(BaseModel):
   error_message: Optional[str]
   error_trace: Optional[str]
   stats_json: Optional[Dict[str, Any]]
+  params_json: Optional[Dict[str, Any]] = None
   heartbeat_at: Optional[datetime] = None
   celery_task_id: Optional[str] = None
   meta_json: Optional[Dict[str, Any]] = None
@@ -64,6 +65,13 @@ class WBIngestStatusResponse(BaseModel):
     last_run_at: Optional[datetime]  # finished_at последнего успешного/неуспешного run
     last_status: Optional[str]  # "success", "failed", "running", "queued" или None
     is_running: bool  # есть ли активный run (running или queued)
+    progress_current: Optional[int] = None
+    progress_total: Optional[int] = None
+    progress_pct: Optional[float] = None
+    progress_text: Optional[str] = None
+    progress_detail: Optional[str] = None
+    active_run_id: Optional[int] = None
+    active_mode: Optional[str] = None
 
 
 class WBIngestRunRequest(BaseModel):

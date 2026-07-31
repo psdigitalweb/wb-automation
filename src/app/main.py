@@ -1,5 +1,7 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import HTTPException
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import ProgrammingError
 import os
@@ -18,6 +20,8 @@ from app.api_articles import router as articles_router
 from app.api_rrp import router as rrp_router
 from app.api_wb_price_discrepancies import router as wb_price_discrepancies_router
 from app.api_wb_stock_without_photos import router as wb_stock_without_photos_router
+from app.api_wb_spp_dynamics import router as wb_spp_dynamics_router
+from app.api_wb_product_groups import router as wb_product_groups_router
 from app.api_articles_base import router as articles_base_router
 from app.routers.auth import router as auth_router
 from app.routers.admin_tasks import router as admin_tasks_router
@@ -28,9 +32,31 @@ from app.routers.ingest_run import router as ingest_run_router
 from app.routers.ingest import router as ingest_router
 from app.routers.projects import router as projects_router
 from app.routers.marketplaces import router as marketplaces_router
+from app.routers.wildberries_analytics import router as wildberries_analytics_router
+from app.routers.wildberries_funnel_import import router as wildberries_funnel_import_router
+from app.routers.wb_product_content_history import router as wb_product_content_history_router
+from app.routers.wb_catalog import router as wb_catalog_router
+from app.routers.wb_review_opinion import router as wb_review_opinion_router
+from app.routers.wb_competitor_reviews import router as wb_competitor_reviews_router
+from app.routers.seo_query_import import router as seo_query_import_router
+from app.routers.seo_query_pipeline_debug import router as seo_query_pipeline_debug_router
+from app.routers.seo_meaning_extraction_debug import router as seo_meaning_extraction_debug_router
+from app.routers.seo_sku_meaning import router as seo_sku_meaning_router
+from app.routers.seo_matcher_v2 import router as seo_matcher_v2_router
+from app.routers.seo_query_meaning_matcher import router as seo_query_meaning_matcher_router
+from app.routers.seo_category_bootstrap import router as seo_category_bootstrap_router
+from app.routers.seo_category_profile import router as seo_category_profile_router
+from app.routers.seo_generation import router as seo_generation_router
+from app.routers.seo_products import router as seo_products_router
+from app.routers.seo_eval import router as seo_eval_router
+from app.routers.seo_query_set_candidate import router as seo_query_set_candidate_router
+from app.routers.seo_compare import router as seo_compare_router
+from app.routers.seo_retention import router as seo_retention_router
+from app.routers.hypothesis_mvp import router_experiments, router_hypotheses
 from app.routers.internal_data import router as internal_data_router
 # Project-scoped proxy settings (frontend_prices)
 from app.routers.project_proxy_settings import router as project_proxy_settings_router
+from app.routers.frontend_brand_pool import router as frontend_brand_pool_router
 # Import category import endpoints (they register on the same router)
 import app.routers.internal_data_category_import  # noqa: F401
 from app.routers.cogs import router as cogs_router
@@ -45,14 +71,35 @@ from app.api_example_protected import router as protected_router
 
 app = FastAPI(title="E-com Core")
 
-# Настройка CORS для работы с frontend
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Return 500 with exception message so frontend can log it (debug). Skip HTTPException."""
+    if isinstance(exc, HTTPException):
+        raise exc
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"Internal Server Error: {exc!s}"},
+    )
+
+
+# Настройка CORS для работы с frontend (на сервере задайте CORS_ORIGINS через запятую)
+_cors_origins = [
+    "http://localhost:3000",
+    "http://localhost:80",
+    "http://localhost",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:80",
+    "http://127.0.0.1",
+]
+_cors_extra = os.getenv("CORS_ORIGINS", "")
+if _cors_extra:
+    _cors_origins.extend(o.strip() for o in _cors_extra.split(",") if o.strip())
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",  # Next.js dev server
-        "http://localhost:80",    # Nginx proxy
-        "http://localhost",       # Nginx proxy (без порта)
-    ],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -67,11 +114,39 @@ app.include_router(projects_router)
 # Marketplaces router (requires authentication and membership)
 app.include_router(marketplaces_router)
 
+# WB content analytics & reviews (project-scoped, requires membership)
+app.include_router(wildberries_analytics_router)
+app.include_router(wildberries_funnel_import_router)
+app.include_router(wb_product_content_history_router)
+app.include_router(wb_catalog_router)
+app.include_router(wb_review_opinion_router)
+app.include_router(wb_competitor_reviews_router)
+app.include_router(seo_query_import_router)
+app.include_router(seo_query_pipeline_debug_router)
+app.include_router(seo_meaning_extraction_debug_router)
+app.include_router(seo_sku_meaning_router)
+app.include_router(seo_query_meaning_matcher_router)
+app.include_router(seo_matcher_v2_router)
+app.include_router(seo_category_bootstrap_router)
+app.include_router(seo_category_profile_router)
+app.include_router(seo_products_router)
+app.include_router(seo_generation_router)
+app.include_router(seo_eval_router)
+app.include_router(seo_query_set_candidate_router)
+app.include_router(seo_compare_router)
+app.include_router(seo_retention_router)
+
+# Hypotheses library (requires authentication)
+app.include_router(router_hypotheses)
+app.include_router(router_experiments)
+
 # Internal Data router (project-scoped)
 app.include_router(internal_data_router)
 
 # Project proxy settings router (project-scoped)
 app.include_router(project_proxy_settings_router)
+# Frontend brand pool (WB frontend prices by-pool ingestion)
+app.include_router(frontend_brand_pool_router)
 
 # COGS router (project-scoped)
 app.include_router(cogs_router)
@@ -127,6 +202,8 @@ app.include_router(rrp_router)
 app.include_router(articles_base_router)
 app.include_router(wb_price_discrepancies_router)
 app.include_router(wb_stock_without_photos_router)
+app.include_router(wb_spp_dynamics_router)
+app.include_router(wb_product_groups_router)
 
 # Читаем URL из окружения или формируем из POSTGRES_* переменных
 DATABASE_URL = os.getenv("DATABASE_URL")

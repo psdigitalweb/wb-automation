@@ -3,12 +3,13 @@
 import logging
 import traceback
 from typing import List
-from fastapi import APIRouter, HTTPException, status, Depends, Path
+from fastapi import APIRouter, HTTPException, status, Depends, Path, Query
 
 from app.db_projects import (
     create_project,
     get_project_by_id,
     get_user_projects,
+    list_all_projects,
     get_project_members,
     get_project_member,
     update_project,
@@ -34,6 +35,8 @@ from app.deps import (
     require_project_owner,
     require_project_admin,
 )
+from app.schemas.data_availability import DataAvailabilityResponse
+from app.services.data_availability import compute_project_data_availability
 
 router = APIRouter(prefix="/api/v1/projects", tags=["projects"])
 
@@ -41,6 +44,27 @@ logger = logging.getLogger(__name__)
 
 # Note: Schema should be created by Alembic migrations, not at runtime.
 # ensure_schema() is NOT called here to avoid import-time DB operations.
+
+
+def _load_projects_for_user(current_user: dict) -> List[dict]:
+    """Load projects visible to the current user.
+
+    Superusers should not depend on explicit membership rows to see projects in
+    the operator UI. When a superuser has no memberships, fall back to the full
+    project list with a synthetic owner role so the UI remains usable.
+    """
+
+    projects = get_user_projects(current_user["id"])
+    if projects or not current_user.get("is_superuser"):
+        return projects
+
+    return [
+        {
+            **project,
+            "role": ProjectRole.OWNER,
+        }
+        for project in list_all_projects()
+    ]
 
 
 @router.post("", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
@@ -79,7 +103,7 @@ async def get_user_projects_endpoint(
 ):
     """Get all projects where current user is a member."""
     try:
-        projects = get_user_projects(current_user["id"])
+        projects = _load_projects_for_user(current_user)
         result = [
             ProjectWithRole(
                 id=p["id"],
@@ -92,27 +116,15 @@ async def get_user_projects_endpoint(
             )
             for p in projects
         ]
-        # #region agent log
-        logger.info(f"get_user_projects_endpoint: serialized {len(result)} projects, returning")
-        try:
-            import json, time
-            with open("d:\\Work\\EcomCore\\.cursor\\debug.log", "a", encoding="utf-8") as _f:
-                _f.write(json.dumps({"sessionId":"debug-session","runId":"projects-get","hypothesisId":"H4","location":"routers/projects.py:92","message":"get_user_projects_endpoint exit","data":{"result_count":len(result)},"timestamp":int(time.time()*1000)})+"\n")
-        except Exception as log_err:
-            logger.error(f"Failed to write debug log: {log_err}")
-        # #endregion
         return result
-    except Exception as e:
-        # #region agent log
-        logger.error(f"get_user_projects_endpoint error: {e}\n{traceback.format_exc()}")
-        try:
-            import json, time, traceback
-            with open("d:\\Work\\EcomCore\\.cursor\\debug.log", "a", encoding="utf-8") as _f:
-                _f.write(json.dumps({"sessionId":"debug-session","runId":"projects-get","hypothesisId":"H4","location":"routers/projects.py:94","message":"get_user_projects_endpoint error","data":{"error":str(e),"traceback":traceback.format_exc()},"timestamp":int(time.time()*1000)})+"\n")
-        except Exception as log_err:
-            logger.error(f"Failed to write debug log: {log_err}")
-        # #endregion
+    except HTTPException:
         raise
+    except Exception as e:
+        logger.error(f"get_user_projects_endpoint error: {e}\n{traceback.format_exc()}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"get_user_projects failed: {e!s}",
+        )
 
 
 @router.get("/{project_id}", response_model=ProjectDetailResponse)
@@ -325,4 +337,21 @@ async def remove_project_member_endpoint(
     return None
 
 
-
+@router.get("/{project_id}/data-availability", response_model=DataAvailabilityResponse)
+async def get_project_data_availability_endpoint(
+    project_id: int = Path(..., description="Project ID"),
+    days: int = Query(90, ge=1, le=365, description="Window size in days"),
+    current_user: dict = Depends(get_current_active_user),
+    membership: dict = Depends(get_project_membership),  # any member can view
+):
+    """Return facts of data presence (segments and gaps) for last N days."""
+    try:
+        return compute_project_data_availability(project_id, days=days)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        logger.error(f"get_project_data_availability_endpoint failed: {e!s}\n{traceback.format_exc()}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to compute data availability",
+        )

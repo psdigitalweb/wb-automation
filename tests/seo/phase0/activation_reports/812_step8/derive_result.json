@@ -1,0 +1,29 @@
+{
+  "persist": {
+    "run_id": "033e53cd-0dbf-4e05-b256-90612ff3ece6",
+    "status": "succeeded",
+    "profile_version": "v1.812.skeleton.243953b2",
+    "persisted_inactive": true,
+    "profile_id": 1,
+    "self_check_status": "passed",
+    "dry_run": false,
+    "snapshot_path": "/app/config/seo/category_profiles/1/812/v1.812.skeleton.243953b2.json",
+    "derive_run_id": 1
+  },
+  "dry_run": {
+    "status": "succeeded",
+    "run_id": "01defe2d-331e-40f8-a9b1-5a4ba86b77f7",
+    "snapshot_path": "/app/config/seo/category_profiles/1/812/v1.812.skeleton.243953b2.json",
+    "self_check_status": "passed",
+    "dry_run": true,
+    "profile_version": "v1.812.skeleton.243953b2",
+    "persisted_inactive": false
+  },
+  "activation": {
+    "project_id": 1,
+    "profile_id": 1,
+    "category_id": 812,
+    "is_active": true,
+    "version": "v1.812.skeleton.243953b2"
+  }
+}

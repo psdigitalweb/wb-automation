@@ -158,8 +158,12 @@ def upsert_warehouse_labor_day(project_id: int, data: dict) -> dict:
                     "currency": rate.get("currency", "RUB"),
                 })
         
-        # Fetch complete day with rates
-        return get_warehouse_labor_day_by_id(day_id)
+        # Fetch complete day with rates on the same transaction connection:
+        # a separate connection cannot see the uncommitted upsert yet.
+        day = _get_warehouse_labor_day_by_id(conn, day_id)
+        if day is None:
+            raise RuntimeError(f"Warehouse labor day {day_id} was not found after upsert")
+        return day
 
 
 def list_warehouse_labor_days(
@@ -251,12 +255,12 @@ def list_warehouse_labor_days(
         return list(days_dict.values())
 
 
-def get_warehouse_labor_day_by_id(day_id: int) -> Optional[dict]:
-    """Get warehouse labor day by ID with rates.
-    
+def _get_warehouse_labor_day_by_id(conn, day_id: int) -> Optional[dict]:
+    """Get warehouse labor day by ID with rates using an existing connection.
+
     Args:
         day_id: Day ID
-        
+
     Returns:
         Day with nested rates as dict, or None if not found
     """
@@ -271,45 +275,57 @@ def get_warehouse_labor_day_by_id(day_id: int) -> Optional[dict]:
         WHERE d.id = :day_id
         ORDER BY r.id
     """)
-    
+
+    rows = conn.execute(sql, {"day_id": day_id}).fetchall()
+
+    if not rows:
+        return None
+
+    day = {
+        "id": rows[0][0],
+        "project_id": rows[0][1],
+        "work_date": rows[0][2],
+        "marketplace_code": rows[0][3],
+        "notes": rows[0][4],
+        "created_at": rows[0][5],
+        "updated_at": rows[0][6],
+        "rates": [],
+    }
+
+    # Add rates
+    for row in rows:
+        if row[7] is not None:  # rate_id
+            day["rates"].append({
+                "id": row[7],
+                "labor_day_id": day_id,
+                "rate_name": row[8],
+                "employees_count": row[9],
+                "rate_amount": row[10],
+                "currency": row[11],
+                "created_at": row[12],
+                "updated_at": row[13],
+            })
+
+    # Calculate total_amount
+    total = Decimal("0")
+    for rate in day["rates"]:
+        total += Decimal(str(rate["rate_amount"])) * Decimal(str(rate["employees_count"]))
+    day["total_amount"] = total
+
+    return day
+
+
+def get_warehouse_labor_day_by_id(day_id: int) -> Optional[dict]:
+    """Get warehouse labor day by ID with rates.
+
+    Args:
+        day_id: Day ID
+
+    Returns:
+        Day with nested rates as dict, or None if not found
+    """
     with engine.connect() as conn:
-        rows = conn.execute(sql, {"day_id": day_id}).fetchall()
-        
-        if not rows:
-            return None
-        
-        day = {
-            "id": rows[0][0],
-            "project_id": rows[0][1],
-            "work_date": rows[0][2],
-            "marketplace_code": rows[0][3],
-            "notes": rows[0][4],
-            "created_at": rows[0][5],
-            "updated_at": rows[0][6],
-            "rates": [],
-        }
-        
-        # Add rates
-        for row in rows:
-            if row[7] is not None:  # rate_id
-                day["rates"].append({
-                    "id": row[7],
-                    "labor_day_id": day_id,
-                    "rate_name": row[8],
-                    "employees_count": row[9],
-                    "rate_amount": row[10],
-                    "currency": row[11],
-                    "created_at": row[12],
-                    "updated_at": row[13],
-                })
-        
-        # Calculate total_amount
-        total = Decimal("0")
-        for rate in day["rates"]:
-            total += Decimal(str(rate["rate_amount"])) * Decimal(str(rate["employees_count"]))
-        day["total_amount"] = total
-        
-        return day
+        return _get_warehouse_labor_day_by_id(conn, day_id)
 
 
 def delete_warehouse_labor_day(project_id: int, day_id: int) -> bool:

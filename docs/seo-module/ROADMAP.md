@@ -1,0 +1,502 @@
+# SEO Module — Roadmap (v1, 2026-04-24)
+
+> Статус: **нормативный**. Этот документ описывает путь от текущего состояния (тестовые экраны + захардкоженная логика под категорию 812) до production-UI/UX и работающего по любой категории бэкенда.
+
+> Этот roadmap заменяет `docs/seo-module/02_roadmap.md` (тот документ — артефакт предыдущей итерации, оставлен для истории).
+
+---
+
+## 0. TL;DR для агента
+
+Пять фаз. Phase 0 закрыта 2026-04-24: backend теперь использует `SeoCategoryProfile` как runtime-источник категорийных правил для `matcher_v2`. Phase 1–4 — контуры с явными inputs/outputs; Phase 1 стартует только от completed Phase 0 state. Phase 5 отложена сознательно.
+
+```
+Phase 0  — Backend Unification         (Т-shirt: L,   COMPLETED 2026-04-24)
+Phase 1  — Validation on 2nd category  (Т-shirt: S,   NEXT)
+Phase 2  — Onboard 5–7 categories      (Т-shirt: M,   after 1)
+Phase 3  — Production UI reorganization(Т-shirt: M,   parallel to 2)
+Phase 4  — Brief export / draft        (Т-shirt: S–M, after 2+3)
+Phase 5  — Economic/feedback loops     (Т-shirt: ?,   DEFERRED)
+```
+
+Цель всего roadmap: **дать оператору пайплайн «залил CSV → получил одобренный бриф по SKU» для произвольной категории без правки кода.**
+
+Текущее состояние после Phase 0: для 812 активен профиль `v1.812.skeleton.243953b2`; `matcher_v2` требует активный профиль и пишет `category_profile_version` / `category_profile_active` в метрики рана; `del category_profile = 0`; активные matcher/query-guards пути не содержат категорийных литералов. Следующая проверка — Phase 1 на второй категории, чтобы доказать, что это не «812 переименовали».
+
+---
+
+## 1. Где мы сейчас (2026-04-24, после Phase 0)
+
+### 1.1. Что работает
+
+- Импорт CSV запросов в категорию → `category_bootstrap` → `SeoQueryNormalized` + `SeoQueryCluster` + `SeoQueryMeaning` + `SeoCategoryMeaningAxes` + эмбеддинги + query-атомы.
+- `matcher_v2` API-endpoint работает, создаёт `SeoMatcherRun` и `SeoMatcherResult`.
+- `matcher_v2` теперь читает активный `SeoCategoryProfile`; для категорий без активного профиля это явная ошибка, а не hidden legacy fallback.
+- `eval` работает поверх `SeoEvalLabel`, но только когда явно переданы `nm_ids`.
+- `seo_category_profiles` содержит активный профиль 812: `id=1`, `version=v1.812.skeleton.243953b2`, `schema_version=category_profile_v1`, `self_check.status=passed`.
+- `seo_category_profile_derive_runs` существует и фиксирует derive/activation observability.
+- Активные guards/query matcher пути profile-driven; legacy matcher изолирован под `_legacy` и не является скрытым fallback для `matcher_v2`.
+- Phase 0 Step 10 regression gate для 812 пройден: baseline accuracy `0.1678`, current accuracy `0.2349`, drift `+0.0671`, minimum acceptable `0.1378`.
+- UI Iteration 1+2 реализован: категории, товары, compare, matcher-run viewer, generation page (research preview), human review.
+- `SeoCategoryMeaningAxes` реально строится по корпусу + отзывам (через `expressive_llm`).
+- `SeoMeaningAtom` автогенерируются при bootstrap (query-атомы) и при анализе SKU (sku-атомы) — pipeline работает.
+
+### 1.2. Что не работает
+
+| Проблема | Где |
+|---|---|
+| `eval`-метки (191 строка) существуют только для 812 | `seo_eval_labels` |
+| Строгий eval baseline существует только для 812 | Phase 1/2 используют qualitative validation до появления labels |
+| `matcher_v2` для новой категории требует активный профиль | Нужно сначала прогнать derive/self-check/activation для категории |
+| UI — микс отладочных экранов и iter1/iter2 элементов, нет operator-пайплайна «от и до» | `frontend/app/app/project/[projectId]/seo/**` |
+| Нет экспорта брифа / черновика текста | — |
+| Экономический слой отключён по решению (homogenization trap) | — |
+
+### 1.3. Что мы считаем верной ценностью продукта (для валидации roadmap)
+
+Бэкенд должен:
+- строить **шортлист релевантных запросов для конкретного SKU** по смысловой и вайбовой релевантности, а не по объёму спроса;
+- работать для произвольной категории WB без правки кода;
+- уметь обосновать каждый вердикт (bucket + reasons + trace).
+
+UI должен:
+- дать оператору пройти путь «новая категория → новый SKU → подбор запросов → одобрение → бриф» без отладочных артефактов;
+- чётко показывать, что всё это research preview, пока оператор не нажал approve.
+
+Этот roadmap — о том, как туда дойти.
+
+---
+
+## 2. Общий обзор фаз
+
+| Фаза | Цель | Входы | Выходы | Exit criteria |
+|---|---|---|---|---|
+| 0 | Унификация бэкенда через `SeoCategoryProfile` | Код Iter2 + 812 корпус | `derive_category_profile` работает; литералы удалены; профиль 812 активен; eval ≥ baseline | ✅ COMPLETED 2026-04-24; см. §3.10 |
+| 1 | Валидация унификации на 2-й категории | Completed Phase 0 + 1 enriched CSV от оператора | Профиль категории B активен, matcher_v2 даёт осмысленные бакеты | см. §4.3 |
+| 2 | Онбординг 5–7 категорий оператора | Enriched CSV'ы по каждой | Активные профили, шортлисты per SKU | см. §5.3 |
+| 3 | Production UI | Текущие отладочные экраны + `OPERATOR_WORKFLOW.md` | Чистый operator-поток без iter1/iter2 миксов | см. §6.3 |
+| 4 | Экспорт брифа | Одобренные `SeoSkuQuerySet` | Brief-документ, готовый к передаче копирайтеру | см. §7.3 |
+| 5 | Эконом / WB feedback / AI Vision | — | — | DEFERRED |
+
+Все фазы, кроме 5, привязаны к измеримым артефактам в коде или БД.
+
+---
+
+## 3. Phase 0 — Backend Unification
+
+### 3.1. Цель
+
+Сделать `SeoCategoryProfile` реальным, а не декоративным источником категорийных правил. После этого — любая категория с активным профилем работает в `matcher_v2` без правки Python-кода.
+
+### 3.2. Опорные документы
+
+- `CATEGORY_PROFILE_SPEC.md` — контракт профиля (read first).
+- `phase0/PHASE_0_EXECUTION_PLAN.md` — атомарные шаги реализации.
+- `phase0/TEST_PLAN.md` — тесты на каждом шаге.
+- `AGENTS.md` — правила работы агента.
+
+### 3.3. Входы
+
+- Код ветки `main` на коммите T0 (на момент старта Phase 0).
+- Активный CSV-корпус для категории 812 (с enriched-метриками, см. транскрипт 2026-04-24).
+- 191 seed-метка в `seo_eval_labels` для 812.
+- ~10 `SeoMatcherRun` для labeled SKU — baseline качества.
+
+### 3.4. Выходы
+
+- `config/seo/global_vocabulary.json` — кросс-категорийная лексика (см. `CATEGORY_PROFILE_SPEC.md §4`).
+- `src/app/services/seo/category_profile_derive.py` — автогенератор профиля.
+- `src/app/services/seo/category_profile_validator.py` — self-check (§9 SPEC).
+- Таблица `seo_category_profile_derive_runs` (миграция Alembic) — наблюдаемость derive-ранов.
+- Снимок `config/seo/category_profiles/1/812/v1.812.2026-XX-XX-auto.json` в git.
+- Активный профиль для 812 в БД.
+- Удалены `del category_profile` в трёх стадиях `matcher_v2`.
+- `apply_query_guards(profile=...)` и `apply_sku_guards(profile=...)` — обязательный параметр.
+- Удалены категорийные литералы из `query_meaning_matcher/matcher.py` и `atoms/v1/guards.py`.
+- Легаси `query_meaning_matcher/matcher.py` переведён в режим `_legacy` (импортируется только из явного fallback-пути, помеченного deprecation-warning).
+- Тесты (unit + integration + eval-snapshot) в `tests/seo/phase0/`.
+
+### 3.5. Дорожка шагов (подробно — в `phase0/PHASE_0_EXECUTION_PLAN.md`)
+
+```
+Step 1. Заморозка baseline (eval snapshot на текущем коде, записываем accuracy/bucket distribution по 812).
+Step 2. Вынос глобальной лексики в config/seo/global_vocabulary.json.
+Step 3. Создание derive_category_profile + derive-runs таблицы.
+Step 4. Миграция hardcoded логики → чтение из CategoryProfile (category_profile.py расширяется).
+Step 5. Рефакторинг atoms/v1/guards.py под чтение профиля.
+Step 6. Рефакторинг query_meaning_matcher/matcher.py под чтение профиля + легаси-изоляция.
+Step 7. Admin API + CLI.
+Step 8. Прогон derive для 812 → self-check → eval → активация.
+Step 9. Снос `del category_profile`.
+Step 10. Регресс-прогон eval для 812 → accuracy не хуже baseline.
+Step 11. Документация (changelog, update existing docs).
+```
+
+### 3.6. Exit criteria
+
+- [x] Ни одного вхождения `del category_profile` в `src/app/services/seo/**`.
+- [x] Активные matcher/query paths не содержат категорийных литералов; литералы 812 остаются только в profile/config/tests/reports/legacy.
+- [x] `seo_category_profiles` содержит ровно одну `is_active=true` строку для 812 со `schema_version = "category_profile_v1"`.
+- [x] `self_check.status = "passed"` для активного профиля 812.
+- [x] `eval` для 812 после активации → accuracy **не хуже** baseline из Step 1 минус 3 п.п. (регресс-бюджет).
+- [x] `matcher_v2` отказывается стартовать, если для `category_id` нет активного профиля (с понятной ошибкой `ProfileMissingError`).
+- [x] Phase 0 targeted tests зелёные; optional full SEO имеет unrelated retention failure, см. `TEST_PLAN.md`.
+- [x] Агент-документация (`CONTEXT_PRIMER.md`, roadmap/spec/test plan/retro) обновлена.
+
+### 3.7. Что НЕ делаем в Phase 0
+
+- ❌ Не трогаем UI (кроме исправления ошибок, найденных регресс-прогоном).
+- ❌ Не перегенерируем `CategoryMeaningAxes` для 812 (они уже свежие после enriched-CSV импорта).
+- ❌ Не меняем `SeoQueryMeaning` или `SeoMeaningAtom` схему — только producer-логику.
+- ❌ Не добавляем поддержку второй категории (это Phase 1).
+- ❌ Не трогаем экономический слой / orders / conversion.
+
+### 3.8. Risks
+
+| Риск | Вероятность | Митигация |
+|---|---|---|
+| `eval` после активации просядет >3 п.п. | средняя | Step 1 baseline + жёсткий порог в Step 8, rollback на предыдущий коммит если не прошло |
+| LLM в derive галлюцинирует `related_but_different` | высокая | Double-check: LLM-кандидаты проходят проверку «встречается ли subject ≥N раз в корпусе» |
+| Рефакторинг `guards.py` ломает генерацию атомов для уже существующих SKU | средняя | Snapshot-тесты на 3–5 SKU с зафиксированным выходом атомов до и после |
+| Скрытая зависимость где-то ещё, кроме двух известных файлов | средняя | Step 1 — `rg` с whitelist'ом ключевых литералов по всему `src/`; любое совпадение вне `_legacy/` и тестов — fix в этой же фазе |
+
+### 3.9. Размер
+
+- Т-shirt: **L** (большая).
+- Ожидаемая последовательность: Steps 1–2 параллельны, 3 — отдельно, 4–6 последовательно, 7 — параллельно 4–6, 8–10 — в самом конце.
+
+### 3.10. Phase 0 completion summary
+
+Phase 0 закрыта на коммите Step 11. Зафиксированные артефакты:
+- baseline: `tests/seo/phase0/baselines/812_pre_phase0/`
+- Step 8 activation: `tests/seo/phase0/activation_reports/812_step8/`
+- Step 9 wiring: `tests/seo/phase0/activation_reports/812_step9/`
+- Step 10 acceptance gate: `tests/seo/phase0/activation_reports/812_step10/`
+- retro: `docs/seo-module/phase0/PHASE_0_RETRO.md`
+
+Итоговые числа Step 10:
+- active profile 812: `v1.812.skeleton.243953b2`, `self_check.status=passed`
+- baseline accuracy: `0.1678`
+- current accuracy: `0.2349`
+- drift: `+0.0671`
+- minimum acceptable accuracy: `0.1378`
+- verdict: `pass`
+- `del category_profile`: `0`
+- active matcher literals: `0`
+
+Важно: eval verdict остаётся `preview_only` по product thresholds (`accuracy_min=0.85`). Step 10 подтверждает отсутствие регрессии относительно baseline, а не production-quality.
+
+---
+
+## 4. Phase 1 — Validation on 2nd category
+
+### 4.1. Цель
+
+Убедиться, что Phase 0 не «812 переименовали». Загружаем ещё одну категорию (одну, на выбор оператора), прогоняем автоматический pipeline, смотрим на результат.
+
+### 4.2. Входы / Выходы
+
+**Входы:**
+- Enriched-CSV от оператора для категории B (рекомендуется взять семантически далёкую от 812 — не посуду, не кружки-производные).
+- Рабочий completed Phase 0 state: derive/profile admin tooling доступен, `matcher_v2` требует активный профиль, активные guards/matcher literal-free.
+
+**Выходы:**
+- `SeoCategoryMeaningAxes` для B.
+- Активный `SeoCategoryProfile` для B, собранный `derive_category_profile(B)`.
+- `matcher_v2` прогнан для ≥3 SKU из B (выбирает оператор). Результат просматривается через существующий compare-UI.
+- Краткий отчёт `phase1/CATEGORY_B_REPORT.md` (одна страница): profile diff vs 812, качественная оценка бакетов, найденные проблемы.
+
+### 4.3. Exit criteria
+
+- [ ] `derive_category_profile(B)` проходит без manual-intervention → `self_check.status = passed`.
+- [ ] Для ≥3 SKU из B оператор подтверждает «бакеты выглядят осмысленно» (субъективная проверка — этого достаточно для Phase 1, строгий eval невозможен без меток).
+- [ ] Если self-check не проходит → **багов нет в бизнес-логике**, а только в derive-эвристиках → фикс в текущей фазе, не расширение Phase 0.
+- [ ] Если качество бакетов плохое → найти минимальный набор полей профиля, которые нужно подправить; если это systematic — возврат в Phase 0 с новым step'ом.
+
+### 4.4. Что НЕ делаем
+
+- ❌ Не размечаем ground-truth-метки для B. (Оптимизация/калибровка — Phase 2+.)
+- ❌ Не расширяем `category_profile_v1` схему (это breaking). Только расширяем эвристики derive.
+- ❌ Не пишем новый UI — используем существующий compare/matcher-run viewer.
+
+### 4.5. Risks
+
+| Риск | Митигация |
+|---|---|
+| Derive не вытаскивает сильный `subject.primary` потому что в корпусе B несколько подкатегорий равной частоты | Ручная помощь: оператор указывает `primary_subject_hint` в derive-CLI; эвристика использует hint как tie-breaker |
+| Self-check `subject_coverage` <70% | Это диагностический сигнал: либо корпус B грязный (фильтровать на ингесте), либо категория слишком широкая → обсуждение |
+
+### 4.6. Размер
+
+- Т-shirt: **S** (маленькая), при условии что Phase 0 закрыта корректно.
+
+---
+
+## 5. Phase 2 — Onboard 5–7 categories
+
+### 5.1. Цель
+
+Поставить в production «поточный» пайплайн онбординга: оператор заливает CSV → система сама собирает все артефакты → оператор проверяет шортлисты.
+
+### 5.2. Входы / Выходы
+
+**Входы:**
+- 5–7 enriched-CSV от оператора (по одной на категорию).
+- Рабочий Phase 0 + подтверждение Phase 1.
+
+**Выходы:**
+- 5–7 активных профилей.
+- Для каждого: category_bootstrap прогнан, axes собраны, профиль сгенерирован, smoke-eval пройден, профиль активен.
+- Мониторинг: таблица `seo_category_profile_derive_runs` показывает все прогоны с их метриками.
+- Короткий отчёт `phase2/ONBOARDING_REPORT.md` (1–2 страницы): какие категории, какие отклонения от эвристики пришлось закрыть, какие общие паттерны найдены.
+
+### 5.3. Exit criteria
+
+- [ ] Все 5–7 категорий имеют активный профиль с `self_check.status = passed`.
+- [ ] Для каждой категории минимум 2–3 SKU имеют `SeoMatcherRun` с результатом в compare-UI.
+- [ ] Ни одна категория не потребовала правки Python-кода (только эвристик derive или данных профиля через re-derive).
+- [ ] Если потребовала — это баг Phase 0 или отсутствующее поле SPEC → фикс документируется и расширяет схему (новая `v1.1`-minor).
+
+### 5.4. Что НЕ делаем
+
+- ❌ Не размечаем ground-truth для каждой категории (это было бы Phase 2.5; сейчас полагаемся на оператора-ревьюера).
+- ❌ Не оптимизируем scoring.weights под категорию (это калибровка, Phase 3+).
+
+### 5.5. Размер
+
+- Т-shirt: **M**. Бо́льшая часть времени — не код, а ингест CSV и визуальная проверка результатов.
+
+---
+
+## 6. Phase 3 — Production UI reorganization
+
+**Может идти параллельно с Phase 2.**
+
+### 6.1. Цель
+
+Убрать из UI mix отладочных + iter1/iter2 экранов. Сделать чистый operator-пайплайн, соответствующий `OPERATOR_WORKFLOW.md`.
+
+### 6.2. Опорные документы
+
+- `OPERATOR_WORKFLOW.md` — целевой operator-поток (это «source of truth» для UI).
+- Текущие экраны в `frontend/app/app/project/[projectId]/seo/**` — inventory того, что есть.
+
+### 6.3. Входы / Выходы
+
+**Входы:**
+- Полный список текущих экранов и их назначения (авто-инвентаризация через `Glob` + short annotations).
+- Таргет-workflow из `OPERATOR_WORKFLOW.md`.
+
+**Выходы:**
+- Основной operator-flow реализован: landing → ingest CSV → category readiness → pick SKU → approve candidate queries → preview generation → export brief.
+- Отладочные экраны (eval, matcher-runs viewer, compare) — перемещены в `/debug/*` или скрыты под feature flag `seo.debug_views` (видно только оператору с правом).
+- Навигация «где я сейчас» — breadcrumbs, явный step-indicator.
+- Все iter2-бейджи (QualityBadge, ApprovalStateBadge, CategoryTierBadge) интегрированы в нормальный flow, а не висят на отладочной странице.
+
+### 6.4. Exit criteria
+
+- [ ] Новый оператор может пройти happy-path без инструкции (после 1 раза по `OPERATOR_WORKFLOW.md`).
+- [ ] Никакая страница основного flow не показывает «Research Preview Banner» как единственный контент — только там, где это семантически правда.
+- [ ] Отладочные экраны доступны только через явную опцию, не через главное меню.
+- [ ] Типечекер `frontend/npx tsc --noEmit` зелёный.
+- [ ] Smoke-тест: оператор проходит от CSV до approved-брифа в Playwright или вручную.
+
+### 6.5. Что НЕ делаем
+
+- ❌ Не меняем бэкенд-контракты (только консюмим существующие API).
+- ❌ Не добавляем новые фичи продукта (только переупорядочиваем существующие).
+
+### 6.6. Размер
+
+- Т-shirt: **M**. Много мелких UI-итераций, каждый экран — диалог «нужен ли он вообще в main-flow».
+
+---
+
+## 7. Phase 4 — Brief export / draft
+
+### 7.1. Цель
+
+Сделать выход `SeoSkuQuerySet.approved` пригодным для следующего шага в воронке оператора — передачи копирайтеру или автоматической генерации текста.
+
+### 7.2. Входы / Выходы
+
+**Входы:**
+- Approved `SeoSkuQuerySet` для ≥1 SKU из Phase 2 категорий.
+- Draft-генератор `seo_generation` (уже есть в коде, выдаёт preview).
+
+**Выходы:**
+- Кнопка «Export brief» на странице SKU → генерирует Markdown-документ:
+  - примарный SKU + карточка-снимок;
+  - top-N approved queries с весами/бакетами;
+  - предложенный черновик title/description/features (из уже существующего `seo_generation` preview);
+  - «что покрыть в тексте»: список обязательных атомов + excluded-атомов;
+  - ссылка на matcher-run и eval-результаты для аудита.
+- Download как `.md` и copy-to-clipboard.
+- Опционально: экспорт в `.docx` или `.json` — по просьбе оператора, не в базовом scope.
+
+### 7.3. Exit criteria
+
+- [ ] Минимум 1 SKU в каждой из 5–7 категорий проходит путь «approved → exported brief».
+- [ ] Оператор подтверждает, что содержимое брифа достаточно для копирайтерской задачи.
+
+### 7.4. Что НЕ делаем
+
+- ❌ Не реализуем полную авто-генерацию финального текста (это не часть цели MVP — оператор/копирайтер остаётся в петле).
+- ❌ Не пушим бриф обратно на WB автоматически — только экспорт, ручной upload.
+
+### 7.5. Размер
+
+- Т-shirt: **S–M**.
+
+---
+
+## 8. Phase 5 — DEFERRED
+
+Сознательно отложенные направления. Они реальны, но не сейчас.
+
+### 8.1. Категорийные экономические колонки CSV / homogenization trap
+
+**Суть (продуктовый вывод, не «отложенная фича»):** колонки вроде `Заказали товаров`, `Конверсия в заказ` в `sample_source_payload` (см. `CONTEXT_PRIMER.md §3.1.1`) — это **агрегат по категории/выгрузке**, а не per-SKU конверсия под конкретную карточку. Для матчера и для генерации ground-truth labels они **не несут полезного сигнала**: максимум справка для оператора «что крутится на рынке», но как вход в scoring или в обучение лейблов ведут к homogenization-trap (см. транскрипт 2026-04-24) — все SKU «тянутся» к одним и тем же высокочастотным/«денежным» запросам и теряют смысловую/вайбовую релевантность.
+
+**Что делаем вместо этого:** матчер и профиль опираются на смысловой корпус (`meaning_axes`, `product_type_axes`, атомы, профиль категории), операторский approval и при необходимости **per-SKU** метрики (см. §8.2), а не на категорийные orders/conversion из CSV.
+
+**Почему секция в DEFERRED:** не планируем «вернуться и подмешать» эти колонки в scoring/labels. Секция фиксирует **осознанный отказ**; единственное будущее исключение — если появится отдельное решение продукта с жёсткими гардрейлами (не Phase 0–4).
+
+### 8.2. WB feedback loop
+
+**Суть:** собирать per-SKU, per-query impression/click/order метрики из `wb_search_report_keywords_cache` и кормить их обратно в матчер как мягкий корректор.
+
+**Почему отложено:** нужна исправная регулярная выгрузка из WB-кабинета, наполнение кэша, retention, обработка sparsity. Отдельная инфраструктурная тема.
+
+**Когда вернуться:** когда ≥1 категория прошла Phase 4 и у оператора есть ≥30 SKU с публикованными карточками и ≥4 недели данных.
+
+### 8.3. AI Vision
+
+**Суть:** анализ карточек (фотографий SKU) для дополнения smantic-атомов визуальными сигналами.
+
+**Почему отложено:** требует отдельного исследования и дорогой по токенам. Не нужен для MVP.
+
+### 8.4. Активное обучение / human-in-the-loop labeling
+
+**Суть:** оператор размечает сомнительные пары (query, SKU) → эти метки дообучают scoring.weights / LLM-prompts.
+
+**Почему отложено:** надо сначала завершить Phase 2. Без 5–7 работающих категорий любой «тюнинг на метках» — это калибровка под 812.
+
+---
+
+## 9. Параллелизм
+
+```
+Phase 0 ──▶ Phase 1 ──▶ Phase 2 ──▶ Phase 4
+                             ╲       ╱
+                              ▶ Phase 3 ◀
+                            (параллельно 2)
+```
+
+- **Phase 0 блокирует всё.** Нельзя начинать 1, пока не закрыт 0 (иначе онбординг 2-й категории проверяет не то).
+- **Phase 3 может идти параллельно Phase 2** при условии: backend-API меняется минимально, фронт читает стабильный контракт. Если Phase 2 внесёт backend-изменения в схему профиля — Phase 3 должна их учесть, но это мелкая координация.
+- **Phase 4 после 2+3**, чтобы бриф генерился для UX-корректных approved-query-сетов.
+
+---
+
+## 10. Риски верхнего уровня
+
+### 10.1. Риск «Phase 0 растянется»
+
+Признак: Step 4–6 (рефакторинг guards.py и matcher.py) занимают >2× планового времени.
+
+Митигация: atomic-шаги (см. `PHASE_0_EXECUTION_PLAN.md`) позволяют закрыть отдельный Step и смёрджить даже если следующий буксует. Ни один step не ломает рантайм (каждый — pass-through или behind feature flag).
+
+### 10.2. Риск «derive даёт плохой профиль»
+
+Признак: Phase 1 self-check не проходит для B; ручное вмешательство требуется каждый раз.
+
+Митигация:
+- Эвристика имеет hint-параметры (`primary_subject_hint`, `expected_volume_unit`), которые оператор может задать в CLI/UI для сложных категорий.
+- Self-check — diagnostic, а не bottleneck: если `subject_coverage` = 65% — это warning, а не fatal; derive пишет профиль в `is_active=false`, оператор принимает решение через admin-UI.
+- После Phase 2 собираем паттерны «что derive не ловит» → улучшаем эвристику.
+
+### 10.3. Риск «UI-реорганизация сломает операторские привычки»
+
+Признак: оператор жалуется «не могу найти кнопку X».
+
+Митигация:
+- Phase 3 идёт инкрементно — старый путь не удаляется до подтверждения нового.
+- `OPERATOR_WORKFLOW.md` — это соглашение, которое оператор сам согласует до начала Phase 3.
+- Debug-экраны сохраняются, просто выносятся на отдельный маршрут.
+
+### 10.4. Риск «Homogenization trap несмотря на Phase 5 being deferred»
+
+Признак: в Phase 2 кто-то предлагает «просто отсортировать бакет по `orders desc` — будет лучше».
+
+Митигация:
+- В `AGENTS.md` и `CATEGORY_PROFILE_SPEC.md` явно запрещено использовать категорийные агрегаты `orders`/`conversion` в scoring.
+- В `TEST_PLAN.md` есть явный negative-test «profile.scoring не ссылается на поля с `orders`/`conversion`».
+
+### 10.5. Риск «новая фаза ломает старую»
+
+Признак: Phase 3 ломает бэкенд-контракты, Phase 2 перестаёт принимать новые категории.
+
+Митигация: backend и frontend обновляют контракты только в Phase 0 и Phase 2 (если найдётся необходимость). Phase 3 — consumer-only.
+
+---
+
+## 11. Что НЕ делаем на всём горизонте этого roadmap
+
+Скоуп-заборы (если предложение выходит за них — обсуждаем и, возможно, создаём отдельный roadmap `v2`):
+
+- ❌ Multi-tenant изоляция (много проектов в одной инсталляции, ACL между operator'ами).
+- ❌ Автоматическое мерчендайзинг-решение (цена, промо, карточки) — только SEO.
+- ❌ Интеграция с другими маркетплейсами (Ozon, Я.Маркет). Всё специфично WB.
+- ❌ Реализация собственного LLM (используем API).
+- ❌ Real-time синхронизация с WB — все импорты и выгрузки batch.
+
+---
+
+## 12. Operator touchpoints
+
+Где оператор реально участвует в каждой фазе:
+
+| Фаза | Что делает оператор |
+|---|---|
+| 0 | Ничего (разработка). Может ревьюить diff профиля 812 в git. |
+| 1 | Заливает 1 CSV, смотрит результат на 3 SKU. |
+| 2 | Заливает 5–7 CSV. Для каждого — просматривает candidate query sets на 2–3 SKU. |
+| 3 | Согласовывает UX в `OPERATOR_WORKFLOW.md`, пробует новый flow на уже загруженных категориях. |
+| 4 | Нажимает «Export brief», передаёт копирайтеру. |
+
+Оператор **не** ожидается вручную редактировать:
+- JSON профиля,
+- код правил матчинга,
+- SQL таблиц.
+
+Всё через UI или CLI-команды с понятными флагами.
+
+---
+
+## 13. Измеримые метрики здоровья
+
+Метрики, которые должны быть на дашборде (минимум в виде read-only SQL-запросов в `scripts/health/`):
+
+1. **Coverage**: сколько категорий имеют `is_active=true` профиль.
+2. **Derive-health**: для каждого derive-run `self_check.status`, top-3 failed check'а.
+3. **Matcher-health**: `SeoMatcherRun` latest per category, coverage (сколько SKU обработано) / retention (сколько старых ранов хранится).
+4. **Eval-health**: accuracy на 812-labels при каждом изменении профиля или кода матчера.
+5. **UI-health** (качественно): жалобы оператора, частота возврата на предыдущий шаг.
+
+Phase 0 Step 7 создаёт первые 3 метрики. Остальное — Phase 3.
+
+---
+
+## 14. Как обновлять этот roadmap
+
+- Любое изменение — в отдельном PR с обновлением §0 TL;DR и §2 таблицы.
+- Если добавляется фаза — получает номер, не вставляется между существующими (Phase 1.5 — плохо; Phase 6 — ок).
+- Если фаза отменяется — не удаляем, помечаем `CANCELLED:` с датой и причиной.
+- При старте новой фазы — закрываем предыдущую секцией «Retro» в том же `phase<N>/` каталоге (что получилось, что сложнее ожидаемого, что перенесено).
+
+---
+
+## 15. Changelog
+
+- **2026-04-24 v1** — initial. Зафиксирован roadmap после аудита бэкенда категории 812 и обсуждения «homogenization trap».

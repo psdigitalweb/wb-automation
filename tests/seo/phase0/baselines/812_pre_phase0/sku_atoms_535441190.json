@@ -1,0 +1,305 @@
+{
+  "annotation_id": 22,
+  "atoms": {
+    "category_id": 812,
+    "confidence": {},
+    "evidence_refs": [
+      "baseline_capture"
+    ],
+    "facts": [
+      {
+        "confidence": 0.95,
+        "field": "product_type",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "product_type",
+        "value": "кружка"
+      },
+      {
+        "confidence": 0.95,
+        "field": "compatibility",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "compatibility",
+        "value": "microwave"
+      },
+      {
+        "confidence": 0.95,
+        "field": "compatibility",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "compatibility",
+        "value": "dishwasher"
+      }
+    ],
+    "negative_fit_atoms": [
+      {
+        "confidence": 0.8,
+        "field": "negative",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "attribute",
+        "value": "не подходит для металлических кружек"
+      },
+      {
+        "confidence": 0.8,
+        "field": "negative",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "attribute",
+        "value": "не подходит для больших объемов напитков"
+      },
+      {
+        "confidence": 0.8,
+        "field": "negative",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "attribute",
+        "value": "не подходит для использования вне дома или офиса"
+      }
+    ],
+    "nm_id": 535441190,
+    "positive_atoms": [
+      {
+        "confidence": 0.85,
+        "field": "expressive",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "expressive",
+        "value": "милый"
+      },
+      {
+        "confidence": 0.85,
+        "field": "expressive",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "expressive",
+        "value": "яркий"
+      },
+      {
+        "confidence": 0.85,
+        "field": "expressive",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "expressive",
+        "value": "уютный"
+      },
+      {
+        "confidence": 0.85,
+        "field": "expressive",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "expressive",
+        "value": "позитивный"
+      },
+      {
+        "confidence": 0.85,
+        "field": "occasion",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "occasion",
+        "value": "подарок любимой"
+      },
+      {
+        "confidence": 0.85,
+        "field": "occasion",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "occasion",
+        "value": "подарок подруге"
+      },
+      {
+        "confidence": 0.85,
+        "field": "occasion",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "occasion",
+        "value": "домашние подарки"
+      },
+      {
+        "confidence": 0.85,
+        "field": "occasion",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "occasion",
+        "value": "полезные подарки"
+      },
+      {
+        "confidence": 0.85,
+        "field": "occasion",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "occasion",
+        "value": "новый год"
+      },
+      {
+        "confidence": 0.85,
+        "field": "occasion",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "occasion",
+        "value": "день рождения"
+      },
+      {
+        "confidence": 0.85,
+        "field": "occasion",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "occasion",
+        "value": "просто так"
+      },
+      {
+        "confidence": 0.85,
+        "field": "recipient",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "recipient",
+        "value": "любимая"
+      },
+      {
+        "confidence": 0.85,
+        "field": "recipient",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "recipient",
+        "value": "любимый"
+      },
+      {
+        "confidence": 0.85,
+        "field": "recipient",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "recipient",
+        "value": "подруга"
+      },
+      {
+        "confidence": 0.85,
+        "field": "recipient",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "recipient",
+        "value": "друзья"
+      },
+      {
+        "confidence": 0.85,
+        "field": "recipient",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "recipient",
+        "value": "домашние пользователи"
+      },
+      {
+        "confidence": 0.85,
+        "field": "recipient",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "recipient",
+        "value": "офисные работники"
+      }
+    ],
+    "product_identity": "",
+    "product_type": "кружка",
+    "project_id": 1,
+    "schema_version": "meaning_atoms_v0"
+  },
+  "meaning_payload": {
+    "audience": [
+      "любимая",
+      "любимый",
+      "подруга",
+      "друзья",
+      "домашние пользователи",
+      "офисные работники"
+    ],
+    "confidence": {
+      "audience": 0.8,
+      "expressive": 0.7,
+      "functional": 0.9
+    },
+    "evidence_refs": [
+      "product.characteristics",
+      "product.description",
+      "category_prior"
+    ],
+    "expressive": {
+      "emotions": [
+        "радость",
+        "уют",
+        "позитив"
+      ],
+      "gift_contexts": [
+        "подарок любимой",
+        "подарок подруге",
+        "домашние подарки",
+        "полезные подарки",
+        "новый год",
+        "день рождения",
+        "просто так"
+      ],
+      "styles": [],
+      "vibes": [
+        "милый",
+        "яркий",
+        "уютный",
+        "позитивный"
+      ]
+    },
+    "functional": {
+      "attributes": [
+        "керамическая",
+        "объем 375 мл",
+        "цвет светло-розовый",
+        "принт с капибарами",
+        "хрупкое",
+        "подарочная картонная коробка",
+        "удобная форма"
+      ],
+      "product_type": "кружка",
+      "use_cases": [
+        "для кофе",
+        "для чая",
+        "для какао",
+        "для дома",
+        "для офиса",
+        "использование в СВЧ",
+        "использование в посудомоечной машине"
+      ]
+    },
+    "negative_constraints": [
+      "не подходит для металлических кружек",
+      "не подходит для больших объемов напитков",
+      "не подходит для использования вне дома или офиса"
+    ],
+    "review_status": "draft",
+    "schema_version": "sku_meaning_v0"
+  },
+  "nm_id": 535441190,
+  "schema_version": "sku_meaning_v0",
+  "source_metadata": {
+    "source": "product_seo_analysis"
+  },
+  "status": "draft"
+}

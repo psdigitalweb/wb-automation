@@ -19,15 +19,20 @@ in SQL so that filtering and sorting are correct at the database layer.
 from __future__ import annotations
 
 import logging
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
-from fastapi import APIRouter, Depends, Path, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
+from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from app.db import engine
-from app.deps import get_current_active_user, get_project_membership
+from app.deps import allow_client_portal_read, get_current_active_user, get_project_membership, require_project_admin
+from app.services.wb_storefront_brands import get_project_frontend_brand_id_strings
+from app.utils.get_project_marketplace_token import get_wb_token_for_project
+from app.wb.client import WBClient
 
 logger = logging.getLogger(__name__)
 
@@ -48,10 +53,28 @@ SortKey = Literal[
     "nm_id_asc",
 ]
 
+PriceApplyMode = Literal["base", "size"]
+
+
+class WbPriceApplySizeInput(BaseModel):
+    size_id: int = Field(..., gt=0)
+    price: int = Field(..., gt=0)
+
+
+class WbPriceApplyRequest(BaseModel):
+    pricing_mode: PriceApplyMode
+    price: Optional[int] = Field(None, gt=0)
+    discount: Optional[int] = Field(None, ge=0, le=99)
+    sizes: List[WbPriceApplySizeInput] = Field(default_factory=list)
+
+
+class WbBulkPriceApplyRequest(BaseModel):
+    nm_ids: List[int] = Field(..., min_length=1, max_length=1000)
+
 
 def _parse_sort(sort: Optional[str]) -> SortKey:
     """Parse sort string into an internal sort key with sane default."""
-    default: SortKey = "diff_rub_desc"
+    default: SortKey = "diff_percent_desc"
     if not sort:
         return default
     sort_normalized = sort.strip().lower()
@@ -93,7 +116,7 @@ def _sort_to_order_clause(sort: SortKey) -> str:
     if sort == "nm_id_asc":
         return "nm_id ASC"
     # Fallback – should not be hit if mapping is exhaustive
-    return "diff_rub DESC NULLS LAST, nm_id"
+    return "diff_percent DESC NULLS LAST, nm_id"
 
 
 @dataclass
@@ -103,9 +126,11 @@ class DiscrepancyFilters:
     only_below_rrp: bool
     has_wb_stock: Literal["any", "true", "false"]
     has_enterprise_stock: Literal["any", "true", "false"]
+    front_snapshot_at: Optional[datetime]
     sort: SortKey
     page: int
     page_size: int
+    nm_ids: Optional[List[int]] = None
 
 
 def _parse_category_ids(raw: Optional[str]) -> List[int]:
@@ -144,6 +169,9 @@ def _build_discrepancies_sql(
         "offset": (filters.page - 1) * filters.page_size,
         "qpat": None,
         "category_ids": filters.category_ids or None,
+        "front_snapshot_at": filters.front_snapshot_at,
+        "brand_ids": get_project_frontend_brand_id_strings(project_id),
+        "nm_ids": filters.nm_ids or None,
     }
 
     # Search by article / nm_id / title
@@ -175,6 +203,9 @@ def _build_discrepancies_sql(
     if filters.category_ids:
         where_clauses.append("p.subject_id = ANY(:category_ids)")
 
+    if filters.nm_ids:
+        where_clauses.append("p.nm_id = ANY(:nm_ids)")
+
     # Stock filters
     if filters.has_wb_stock == "true":
         where_clauses.append("COALESCE(stock_latest.wb_stock_qty, 0) > 0")
@@ -195,14 +226,6 @@ def _build_discrepancies_sql(
 
     sql = f"""
     WITH
-    brand AS (
-        SELECT pm.settings_json->>'brand_id' AS brand_id
-        FROM project_marketplaces pm
-        JOIN marketplaces m ON m.id = pm.marketplace_id
-        WHERE pm.project_id = :project_id
-          AND m.code = 'wildberries'
-        LIMIT 1
-    ),
     rrp_run AS (
         SELECT MAX(snapshot_at) AS run_at
         FROM rrp_snapshots
@@ -214,11 +237,10 @@ def _build_discrepancies_sql(
         WHERE project_id = :project_id
     ),
     front_run AS (
-        SELECT MAX(f.snapshot_at) AS run_at
+        SELECT COALESCE(CAST(:front_snapshot_at AS timestamptz), MAX(f.snapshot_at)) AS run_at
         FROM frontend_catalog_price_snapshots f
-        JOIN brand b ON b.brand_id IS NOT NULL
         WHERE f.query_type = 'brand'
-          AND f.query_value = b.brand_id
+          AND f.query_value = ANY(:brand_ids)
     ),
     -- Latest RRP per vendor_code_norm
     rrp_latest AS (
@@ -236,7 +258,8 @@ def _build_discrepancies_sql(
             ps.nm_id::bigint AS nm_id,
             ps.wb_price        AS wb_admin_price,
             ps.wb_discount     AS wb_discount_percent,
-            ps.created_at      AS wb_price_updated_at
+            ps.created_at      AS wb_price_updated_at,
+            ps.raw->>'source'  AS wb_price_source
         FROM price_snapshots ps
         WHERE ps.project_id = :project_id
         ORDER BY ps.nm_id, ps.created_at DESC
@@ -249,10 +272,9 @@ def _build_discrepancies_sql(
             f.discount_calc_percent AS spp_percent,
             f.snapshot_at          AS showcase_updated_at
         FROM frontend_catalog_price_snapshots f
-        JOIN brand b ON b.brand_id IS NOT NULL
         JOIN front_run r ON f.snapshot_at = r.run_at
         WHERE f.query_type = 'brand'
-          AND f.query_value = b.brand_id
+          AND f.query_value = ANY(:brand_ids)
         ORDER BY f.nm_id, f.snapshot_at DESC
     ),
     -- Latest WB stock per nm_id for this project
@@ -279,13 +301,15 @@ def _build_discrepancies_sql(
             wb_price_latest.wb_discount_percent,
             front_latest.showcase_price,
             front_latest.spp_percent,
+            front_latest.showcase_updated_at,
             stock_latest.wb_stock_qty,
             rrp_run.run_at     AS rrp_updated_at,
             stock_run.run_at   AS stock_updated_at,
             front_run.run_at   AS showcase_run_at,
-            wb_price_latest.wb_price_updated_at
+            wb_price_latest.wb_price_updated_at,
+            wb_price_latest.wb_price_source
         FROM products p
-        LEFT JOIN rrp_latest ON rrp_latest.vendor_code_norm = p.vendor_code_norm
+        LEFT JOIN rrp_latest ON btrim(rrp_latest.vendor_code_norm) = btrim(p.vendor_code_norm)
         LEFT JOIN wb_price_latest ON wb_price_latest.nm_id = p.nm_id
         LEFT JOIN front_latest ON front_latest.nm_id = p.nm_id
         LEFT JOIN stock_latest ON stock_latest.nm_id = p.nm_id
@@ -387,7 +411,9 @@ def _build_discrepancies_sql(
         rrp_updated_at,
         stock_updated_at,
         showcase_run_at,
+        showcase_updated_at,
         wb_price_updated_at,
+        wb_price_source,
         total_count
     FROM counted
     ORDER BY {order_clause}
@@ -454,6 +480,24 @@ def _row_to_item(row: Dict[str, Any]) -> Dict[str, Any]:
         if row.get("expected_showcase_price") is not None
         else None,
     }
+    wb_price_updated_at = row.get("wb_price_updated_at")
+    showcase_updated_at = row.get("showcase_updated_at")
+    if isinstance(wb_price_updated_at, datetime) and wb_price_updated_at.tzinfo is None:
+        wb_price_updated_at = wb_price_updated_at.replace(tzinfo=timezone.utc)
+    if isinstance(showcase_updated_at, datetime) and showcase_updated_at.tzinfo is None:
+        showcase_updated_at = showcase_updated_at.replace(tzinfo=timezone.utc)
+    showcase_price_stale = (
+        row.get("wb_price_source") == "price_discrepancy_manual_apply"
+        and isinstance(wb_price_updated_at, datetime)
+        and isinstance(showcase_updated_at, datetime)
+        and wb_price_updated_at > showcase_updated_at
+    )
+    staleness = {
+        "showcase_price_stale": showcase_price_stale,
+        "reason": "awaiting_showcase_refresh" if showcase_price_stale else None,
+        "wb_price_updated_at": wb_price_updated_at.isoformat() if isinstance(wb_price_updated_at, datetime) else None,
+        "showcase_updated_at": showcase_updated_at.isoformat() if isinstance(showcase_updated_at, datetime) else None,
+    }
 
     category = None
     if row.get("category_id") is not None or row.get("category_name") is not None:
@@ -472,16 +516,267 @@ def _row_to_item(row: Dict[str, Any]) -> Dict[str, Any]:
         "discounts": discounts,
         "stocks": stocks,
         "computed": computed,
+        "staleness": staleness,
     }
 
 
-def _get_updated_at(project_id: int) -> str:
+def _get_price_discrepancy_item(project_id: int, nm_id: int) -> Optional[Dict[str, Any]]:
+    return _get_price_discrepancy_items(project_id, [nm_id]).get(nm_id)
+
+
+def _get_price_discrepancy_items(project_id: int, nm_ids: List[int]) -> Dict[int, Dict[str, Any]]:
+    normalized_nm_ids: set[int] = set()
+    for nm_id in nm_ids:
+        try:
+            normalized_nm_id = int(nm_id)
+        except (TypeError, ValueError):
+            continue
+        if normalized_nm_id > 0:
+            normalized_nm_ids.add(normalized_nm_id)
+    unique_nm_ids = sorted(normalized_nm_ids)
+    if not unique_nm_ids:
+        return {}
+
+    filters = DiscrepancyFilters(
+        q=None,
+        category_ids=[],
+        only_below_rrp=False,
+        has_wb_stock="any",
+        has_enterprise_stock="any",
+        front_snapshot_at=None,
+        sort="nm_id_asc",
+        page=1,
+        page_size=len(unique_nm_ids),
+        nm_ids=unique_nm_ids,
+    )
+    sql, params = _build_discrepancies_sql(project_id, filters)
+    with engine.connect() as conn:
+        rows = conn.execute(text(sql), params).mappings().all()
+
+    items_by_nm_id: Dict[int, Dict[str, Any]] = {}
+    for row in rows:
+        row_dict = dict(row)
+        row_nm_id = int(row_dict.get("nm_id") or 0)
+        if row_nm_id:
+            items_by_nm_id[row_nm_id] = _row_to_item(row_dict)
+    return items_by_nm_id
+
+
+def _parse_price_raw(raw: Any) -> Dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _get_latest_price_raw(project_id: int, nm_id: int) -> Dict[str, Any]:
+    return _get_latest_price_raws(project_id, [nm_id]).get(nm_id, {})
+
+
+def _get_latest_price_raws(project_id: int, nm_ids: List[int]) -> Dict[int, Dict[str, Any]]:
+    normalized_nm_ids: set[int] = set()
+    for nm_id in nm_ids:
+        try:
+            normalized_nm_id = int(nm_id)
+        except (TypeError, ValueError):
+            continue
+        if normalized_nm_id > 0:
+            normalized_nm_ids.add(normalized_nm_id)
+    unique_nm_ids = sorted(normalized_nm_ids)
+    if not unique_nm_ids:
+        return {}
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                """
+                SELECT DISTINCT ON (nm_id)
+                    nm_id::bigint AS nm_id,
+                    raw
+                FROM price_snapshots
+                WHERE project_id = :project_id
+                  AND nm_id = ANY(:nm_ids)
+                ORDER BY nm_id, created_at DESC
+                """
+            ),
+            {"project_id": project_id, "nm_ids": unique_nm_ids},
+        ).mappings().all()
+    return {int(row["nm_id"]): _parse_price_raw(row.get("raw")) for row in rows}
+
+
+def _coerce_int_price(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        rounded = int(round(float(value)))
+    except (TypeError, ValueError):
+        return None
+    return rounded if rounded > 0 else None
+
+
+def _build_price_apply_preview(project_id: int, nm_id: int) -> Dict[str, Any]:
+    item = _get_price_discrepancy_item(project_id, nm_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Товар не найден в отчете расхождений цен")
+
+    recommended_price = _coerce_int_price(item["computed"].get("recommended_wb_admin_price"))
+    if recommended_price is None:
+        raise HTTPException(status_code=400, detail="Для товара нет рассчитанной рекомендованной цены")
+
+    raw_price = _get_latest_price_raw(project_id, nm_id)
+    editable_size_price = bool(raw_price.get("editableSizePrice"))
+    raw_sizes = raw_price.get("sizes") if isinstance(raw_price.get("sizes"), list) else []
+    mode: PriceApplyMode = "size" if editable_size_price else "base"
+
+    sizes: List[Dict[str, Any]] = []
+    for raw_size in raw_sizes:
+        if not isinstance(raw_size, dict):
+            continue
+        size_id = raw_size.get("sizeID")
+        try:
+            size_id_int = int(size_id)
+        except (TypeError, ValueError):
+            continue
+        sizes.append(
+            {
+                "size_id": size_id_int,
+                "tech_size_name": raw_size.get("techSizeName"),
+                "current_price": _coerce_int_price(raw_size.get("price")),
+                "discounted_price": raw_size.get("discountedPrice"),
+                "target_price": recommended_price,
+            }
+        )
+
+    return {
+        "item": item,
+        "pricing_mode": mode,
+        "editable_size_price": editable_size_price,
+        "recommended_price": recommended_price,
+        "default_discount": _coerce_int_price(item["discounts"].get("wb_discount_percent")) or 0,
+        "sizes": sizes,
+    }
+
+
+def _extract_upload_id(payload: Dict[str, Any]) -> Optional[int]:
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict):
+        return None
+    upload_id = data.get("id") or data.get("uploadID")
+    try:
+        return int(upload_id)
+    except (TypeError, ValueError):
+        return None
+
+
+def _price_snapshots_has_raw_column() -> bool:
+    with engine.connect() as conn:
+        return (
+            conn.execute(
+                text(
+                    """
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_name = 'price_snapshots'
+                      AND column_name = 'raw'
+                    LIMIT 1
+                    """
+                )
+            ).scalar()
+            is not None
+        )
+
+
+def _insert_manual_price_snapshot(
+    *,
+    project_id: int,
+    nm_id: int,
+    wb_price: int,
+    wb_discount: int,
+    response_payload: Dict[str, Any],
+    pricing_mode: PriceApplyMode,
+) -> None:
+    customer_price = round(float(wb_price) * (1 - float(wb_discount) / 100), 2)
+    created_at = datetime.now(timezone.utc)
+    raw_payload = {
+        "source": "price_discrepancy_manual_apply",
+        "pricing_mode": pricing_mode,
+        "nmID": nm_id,
+        "price": wb_price,
+        "discount": wb_discount,
+        "wb_response": response_payload,
+    }
+    params = {
+        "project_id": project_id,
+        "nm_id": nm_id,
+        "wb_price": wb_price,
+        "wb_discount": wb_discount,
+        "spp": 0,
+        "customer_price": customer_price,
+        "rrc": wb_price,
+        "created_at": created_at,
+        "raw": json.dumps(raw_payload, ensure_ascii=False),
+    }
+    if _price_snapshots_has_raw_column():
+        sql = text(
+            """
+            INSERT INTO price_snapshots
+                (nm_id, wb_price, wb_discount, spp, customer_price, rrc, raw, project_id, created_at)
+            VALUES
+                (:nm_id, :wb_price, :wb_discount, :spp, :customer_price, :rrc, CAST(:raw AS jsonb), :project_id, :created_at)
+            """
+        )
+    else:
+        sql = text(
+            """
+            INSERT INTO price_snapshots
+                (nm_id, wb_price, wb_discount, spp, customer_price, rrc, project_id, created_at)
+            VALUES
+                (:nm_id, :wb_price, :wb_discount, :spp, :customer_price, :rrc, :project_id, :created_at)
+            """
+        )
+    with engine.begin() as conn:
+        conn.execute(sql, params)
+
+
+def _get_latest_front_snapshot_at(project_id: int) -> Optional[datetime]:
+    """Return the latest WB frontend (showcase) snapshot_at for project storefront brands."""
+    brand_ids = get_project_frontend_brand_id_strings(project_id)
+    if not brand_ids:
+        return None
+    with engine.connect() as conn:
+        front_max = conn.execute(
+            text(
+                """
+                SELECT MAX(f.snapshot_at)
+                FROM frontend_catalog_price_snapshots f
+                WHERE f.query_type = 'brand'
+                  AND f.query_value = ANY(:brand_ids)
+                """
+            ),
+            {"brand_ids": brand_ids},
+        ).scalar()
+    if isinstance(front_max, datetime):
+        if front_max.tzinfo is None:
+            return front_max.replace(tzinfo=timezone.utc)
+        return front_max
+    return None
+
+
+def _get_updated_at(project_id: int, front_snapshot_at: Optional[datetime] = None) -> str:
     """Return ISO8601 updated_at for meta based on latest snapshot timestamps.
 
     If no data is available at all, fallback to `datetime.now(timezone.utc)`.
     """
     # We intentionally keep this as a separate lightweight query instead of
     # complicating the main aggregation SQL.
+    if front_snapshot_at is not None and isinstance(front_snapshot_at, datetime):
+        if front_snapshot_at.tzinfo is None:
+            front_snapshot_at = front_snapshot_at.replace(tzinfo=timezone.utc)
     with engine.connect() as conn:
         rrp_max = conn.execute(
             text("SELECT MAX(snapshot_at) FROM rrp_snapshots WHERE project_id = :project_id"),
@@ -495,20 +790,21 @@ def _get_updated_at(project_id: int) -> str:
             text("SELECT MAX(created_at) FROM price_snapshots WHERE project_id = :project_id"),
             {"project_id": project_id},
         ).scalar()
-        front_max = conn.execute(
-            text(
-                """
-                SELECT MAX(f.snapshot_at)
-                FROM frontend_catalog_price_snapshots f
-                JOIN project_marketplaces pm ON pm.project_id = :project_id
-                JOIN marketplaces m ON m.id = pm.marketplace_id
-                WHERE m.code = 'wildberries'
-                  AND f.query_type = 'brand'
-                  AND f.query_value = pm.settings_json->>'brand_id'
-                """
-            ),
-            {"project_id": project_id},
-        ).scalar()
+        if front_snapshot_at is None:
+            brand_ids = get_project_frontend_brand_id_strings(project_id)
+            front_max = conn.execute(
+                text(
+                    """
+                    SELECT MAX(f.snapshot_at)
+                    FROM frontend_catalog_price_snapshots f
+                    WHERE f.query_type = 'brand'
+                      AND f.query_value = ANY(:brand_ids)
+                    """
+                ),
+                {"brand_ids": brand_ids},
+            ).scalar()
+        else:
+            front_max = front_snapshot_at
 
     candidates = [
         ts
@@ -526,6 +822,306 @@ def _get_updated_at(project_id: int) -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+@router.post("/{project_id}/wildberries/price-discrepancies/price-apply/bulk")
+async def apply_wb_recommended_prices_bulk(
+    body: WbBulkPriceApplyRequest,
+    project_id: int = Path(..., description="Project ID"),
+    _current_user: dict = Depends(get_current_active_user),
+    _membership: dict = Depends(require_project_admin),
+):
+    """Create one WB price upload task for selected report rows."""
+    seen: set[int] = set()
+    nm_ids: List[int] = []
+    for raw_nm_id in body.nm_ids:
+        try:
+            nm_id = int(raw_nm_id)
+        except (TypeError, ValueError):
+            continue
+        if nm_id <= 0 or nm_id in seen:
+            continue
+        seen.add(nm_id)
+        nm_ids.append(nm_id)
+
+    if not nm_ids:
+        raise HTTPException(status_code=400, detail="Не выбраны товары для установки цен")
+
+    ready: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+    items_by_nm_id = _get_price_discrepancy_items(project_id, nm_ids)
+    raw_prices_by_nm_id = _get_latest_price_raws(project_id, nm_ids)
+
+    for nm_id in nm_ids:
+        item = items_by_nm_id.get(nm_id)
+        if not item:
+            skipped.append({"nm_id": nm_id, "reason": "not_found", "message": "Товар не найден в отчете"})
+            continue
+
+        recommended_price = _coerce_int_price(item["computed"].get("recommended_wb_admin_price"))
+        if recommended_price is None:
+            skipped.append(
+                {
+                    "nm_id": nm_id,
+                    "article": item.get("article"),
+                    "reason": "no_recommended_price",
+                    "message": "Нет рекомендованной цены",
+                }
+            )
+            continue
+
+        if (item.get("staleness") or {}).get("showcase_price_stale"):
+            skipped.append(
+                {
+                    "nm_id": nm_id,
+                    "article": item.get("article"),
+                    "reason": "awaiting_showcase_refresh",
+                    "message": "Ждем обновления витрины",
+                }
+            )
+            continue
+
+        raw_price = raw_prices_by_nm_id.get(nm_id, {})
+        if bool(raw_price.get("editableSizePrice")):
+            skipped.append(
+                {
+                    "nm_id": nm_id,
+                    "article": item.get("article"),
+                    "reason": "size_price",
+                    "message": "Размерная цена, нужен отдельный режим",
+                }
+            )
+            continue
+
+        discount = _coerce_int_price(item["discounts"].get("wb_discount_percent")) or 0
+        ready.append(
+            {
+                "nm_id": nm_id,
+                "article": item.get("article"),
+                "title": item.get("title"),
+                "current_price": item["prices"].get("wb_admin_price"),
+                "recommended_price": recommended_price,
+                "discount": discount,
+            }
+        )
+
+    if not ready:
+        return {
+            "status": "skipped",
+            "upload_id": None,
+            "already_exists": False,
+            "accepted_count": 0,
+            "skipped_count": len(skipped),
+            "ready": [],
+            "skipped": skipped,
+            "wb_response": None,
+        }
+
+    token = get_wb_token_for_project(project_id)
+    if not token:
+        raise HTTPException(status_code=400, detail="Для проекта не настроен токен Wildberries")
+
+    wb_payload = [
+        {"nmID": item["nm_id"], "price": item["recommended_price"], "discount": item["discount"]}
+        for item in ready
+    ]
+    client = WBClient(token)
+    response_payload = await client.upload_price_task(wb_payload)
+    upload_id = _extract_upload_id(response_payload)
+
+    if response_payload.get("error"):
+        status_code = int(response_payload.get("statusCode") or 502)
+        retry_after = (response_payload.get("rateLimit") or {}).get("retry_after")
+        if status_code == 429:
+            retry_text = f" Повторите через {retry_after} сек." if retry_after else ""
+            raise HTTPException(
+                status_code=429,
+                detail=f"Wildberries ограничил частоту запросов к API цен.{retry_text}",
+            )
+        raise HTTPException(
+            status_code=502,
+            detail=response_payload.get("errorText") or "Wildberries не принял задачу массового обновления цен",
+        )
+
+    for item in ready:
+        _insert_manual_price_snapshot(
+            project_id=project_id,
+            nm_id=int(item["nm_id"]),
+            wb_price=int(item["recommended_price"]),
+            wb_discount=int(item["discount"]),
+            response_payload=response_payload,
+            pricing_mode="base",
+        )
+
+    return {
+        "status": "accepted",
+        "upload_id": upload_id,
+        "already_exists": bool((response_payload.get("data") or {}).get("alreadyExists"))
+        if isinstance(response_payload.get("data"), dict)
+        else False,
+        "accepted_count": len(ready),
+        "skipped_count": len(skipped),
+        "ready": ready,
+        "skipped": skipped,
+        "wb_status_code": client.last_response_status,
+        "wb_response": response_payload,
+    }
+
+
+@router.get("/{project_id}/wildberries/price-discrepancies/{nm_id}/price-apply-preview")
+async def get_wb_price_apply_preview(
+    project_id: int = Path(..., description="Project ID"),
+    nm_id: int = Path(..., description="WB nmID"),
+    _current_user: dict = Depends(get_current_active_user),
+    _membership: dict = Depends(require_project_admin),
+):
+    """Return editable price-apply defaults for a report row."""
+    return _build_price_apply_preview(project_id, nm_id)
+
+
+@router.post("/{project_id}/wildberries/price-discrepancies/{nm_id}/price-apply")
+async def apply_wb_recommended_price(
+    body: WbPriceApplyRequest,
+    project_id: int = Path(..., description="Project ID"),
+    nm_id: int = Path(..., description="WB nmID"),
+    _current_user: dict = Depends(get_current_active_user),
+    _membership: dict = Depends(require_project_admin),
+):
+    """Create a WB price upload task from the report recommendation modal."""
+    preview = _build_price_apply_preview(project_id, nm_id)
+    expected_mode = preview["pricing_mode"]
+    if body.pricing_mode != expected_mode:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Для товара доступен режим {expected_mode}, а не {body.pricing_mode}",
+        )
+
+    token = get_wb_token_for_project(project_id)
+    if not token:
+        raise HTTPException(status_code=400, detail="Для проекта не настроен токен Wildberries")
+
+    client = WBClient(token)
+    applied_price: int
+    applied_discount: int
+    if body.pricing_mode == "base":
+        if body.price is None:
+            raise HTTPException(status_code=400, detail="Укажите цену для установки")
+        discount = body.discount
+        if discount is None:
+            discount = int(preview.get("default_discount") or 0)
+        applied_price = int(body.price)
+        applied_discount = int(discount)
+        wb_payload = [{"nmID": nm_id, "price": applied_price, "discount": applied_discount}]
+        response_payload = await client.upload_price_task(wb_payload)
+    else:
+        known_sizes = {int(size["size_id"]) for size in preview.get("sizes", [])}
+        if not body.sizes:
+            raise HTTPException(status_code=400, detail="Укажите цены для размеров")
+        unknown_sizes = [item.size_id for item in body.sizes if item.size_id not in known_sizes]
+        if unknown_sizes:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Размеры не найдены у товара: {', '.join(str(size_id) for size_id in unknown_sizes)}",
+            )
+        wb_payload = [
+            {"nmID": nm_id, "sizeID": int(item.size_id), "price": int(item.price)}
+            for item in body.sizes
+        ]
+        applied_price = min(int(item.price) for item in body.sizes)
+        applied_discount = int(preview.get("default_discount") or 0)
+        response_payload = await client.upload_size_price_task(wb_payload)
+
+    upload_id = _extract_upload_id(response_payload)
+    if response_payload.get("error"):
+        status_code = int(response_payload.get("statusCode") or 502)
+        retry_after = (response_payload.get("rateLimit") or {}).get("retry_after")
+        if status_code == 429:
+            retry_text = f" Повторите через {retry_after} сек." if retry_after else ""
+            raise HTTPException(
+                status_code=429,
+                detail=f"Wildberries ограничил частоту запросов к API цен.{retry_text}",
+            )
+        raise HTTPException(
+            status_code=502,
+            detail=response_payload.get("errorText") or "Wildberries не принял задачу обновления цены",
+        )
+
+    _insert_manual_price_snapshot(
+        project_id=project_id,
+        nm_id=nm_id,
+        wb_price=applied_price,
+        wb_discount=applied_discount,
+        response_payload=response_payload,
+        pricing_mode=body.pricing_mode,
+    )
+
+    return {
+        "status": "accepted",
+        "pricing_mode": body.pricing_mode,
+        "upload_id": upload_id,
+        "already_exists": bool((response_payload.get("data") or {}).get("alreadyExists"))
+        if isinstance(response_payload.get("data"), dict)
+        else False,
+        "wb_status_code": client.last_response_status,
+        "wb_response": response_payload,
+    }
+
+
+@router.get("/{project_id}/wildberries/price-discrepancies/price-apply-status")
+async def get_wb_price_apply_status(
+    project_id: int = Path(..., description="Project ID"),
+    upload_id: int = Query(..., gt=0, description="WB price upload ID"),
+    _current_user: dict = Depends(get_current_active_user),
+    _membership: dict = Depends(require_project_admin),
+):
+    """Return a compact status for a WB price upload task."""
+    token = get_wb_token_for_project(project_id)
+    if not token:
+        raise HTTPException(status_code=400, detail="Для проекта не настроен токен Wildberries")
+
+    client = WBClient(token)
+    buffer_state = await client.get_price_upload_state(upload_id, processed=False)
+    if not buffer_state.get("error") and buffer_state.get("data"):
+        buffer_goods = await client.get_price_upload_goods(upload_id, processed=False, limit=1000)
+        return {
+            "status": "waiting",
+            "upload_id": upload_id,
+            "state": buffer_state.get("data"),
+            "goods": (buffer_goods.get("data") or {}).get("bufferGoods")
+            if isinstance(buffer_goods.get("data"), dict)
+            else [],
+            "wb_response": buffer_state,
+        }
+
+    history_state = await client.get_price_upload_state(upload_id, processed=True)
+    if history_state.get("error"):
+        raise HTTPException(
+            status_code=502,
+            detail=history_state.get("errorText") or "Не удалось получить статус задачи Wildberries",
+        )
+
+    history_goods = await client.get_price_upload_goods(upload_id, processed=True, limit=1000)
+    goods = []
+    if isinstance(history_goods.get("data"), dict):
+        goods = history_goods["data"].get("historyGoods") or []
+    errored_goods = [
+        item for item in goods if isinstance(item, dict) and item.get("errorText")
+    ]
+    state = history_state.get("data") if isinstance(history_state.get("data"), dict) else {}
+    overall = int(state.get("overAllGoodsNumber") or len(goods) or 0)
+    success = int(state.get("successGoodsNumber") or 0)
+    compact_status = "error" if errored_goods else "applied"
+    if compact_status == "applied" and overall and success < overall:
+        compact_status = "waiting"
+
+    return {
+        "status": compact_status,
+        "upload_id": upload_id,
+        "state": state,
+        "goods": goods,
+        "errors": errored_goods,
+        "wb_response": history_state,
+    }
+
+
 @router.get("/{project_id}/wildberries/price-discrepancies")
 async def get_wb_price_discrepancies(
     project_id: int = Path(..., description="Project ID"),
@@ -534,6 +1130,13 @@ async def get_wb_price_discrepancies(
         None,
         description='Comma-separated WB category/subject IDs, e.g. "1,2,3"',
         example="12,34,56",
+    ),
+    front_snapshot_at: Optional[datetime] = Query(
+        None,
+        description=(
+            "Use a specific WB frontend showcase snapshot_at (UTC recommended). "
+            "If omitted, the latest available snapshot is used."
+        ),
     ),
     only_below_rrp: bool = Query(
         True,
@@ -546,13 +1149,12 @@ async def get_wb_price_discrepancies(
         "any", description="Filter by enterprise (1C/XML) stock quantity"
     ),
     sort: Optional[str] = Query(
-        "diff_rub_desc",
-        description="Sort key, e.g. diff_rub_desc, diff_percent_desc, nm_id_asc",
+        "diff_percent_desc",
+        description="Sort key, e.g. diff_percent_desc, diff_rub_desc, nm_id_asc",
     ),
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=200),
-    current_user: dict = Depends(get_current_active_user),
-    membership: dict = Depends(get_project_membership),
+    _auth: dict = Depends(allow_client_portal_read),
 ):
     """Return price discrepancies between RRP and WB showcase price for a project.
 
@@ -561,15 +1163,21 @@ async def get_wb_price_discrepancies(
     start_time = datetime.now(timezone.utc)
     logger.info(
         f"get_wb_price_discrepancies: starting for project_id={project_id} "
-        f"page={page} page_size={page_size} only_below_rrp={only_below_rrp}"
+        f"page={page} page_size={page_size} only_below_rrp={only_below_rrp} "
+        f"front_snapshot_at={front_snapshot_at.isoformat() if front_snapshot_at else None}"
     )
     
+    if front_snapshot_at is not None and isinstance(front_snapshot_at, datetime) and front_snapshot_at.tzinfo is None:
+        # Treat naive datetimes as UTC to avoid environment-dependent casts in Postgres.
+        front_snapshot_at = front_snapshot_at.replace(tzinfo=timezone.utc)
+
     filters = DiscrepancyFilters(
         q=q,
         category_ids=_parse_category_ids(category_ids),
         only_below_rrp=only_below_rrp,
         has_wb_stock=has_wb_stock,
         has_enterprise_stock=has_enterprise_stock,
+        front_snapshot_at=front_snapshot_at,
         sort=_parse_sort(sort),
         page=page,
         page_size=page_size,
@@ -622,26 +1230,14 @@ async def get_wb_price_discrepancies(
                 {"project_id": project_id},
             ).scalar() or 0
             
-            # Check frontend prices count
-            brand_check = conn.execute(
-                text("""
-                    SELECT pm.settings_json->>'brand_id' AS brand_id
-                    FROM project_marketplaces pm
-                    JOIN marketplaces m ON m.id = pm.marketplace_id
-                    WHERE pm.project_id = :project_id AND m.code = 'wildberries'
-                    LIMIT 1
-                """),
-                {"project_id": project_id},
-            ).mappings().first()
-            
             frontend_count = 0
-            if brand_check and brand_check.get("brand_id"):
+            if params.get("brand_ids"):
                 frontend_count = conn.execute(
                     text("""
                         SELECT COUNT(*) FROM frontend_catalog_price_snapshots
-                        WHERE query_type = 'brand' AND query_value = :brand_id
+                        WHERE query_type = 'brand' AND query_value = ANY(:brand_ids)
                     """),
-                    {"brand_id": str(brand_check.get("brand_id"))},
+                    {"brand_ids": params["brand_ids"]},
                 ).scalar() or 0
             
             # Check Internal Data availability
@@ -754,21 +1350,13 @@ async def get_wb_price_discrepancies(
                 base_test = conn.execute(
                     text("""
                         WITH
-                        brand AS (
-                            SELECT pm.settings_json->>'brand_id' AS brand_id
-                            FROM project_marketplaces pm
-                            JOIN marketplaces m ON m.id = pm.marketplace_id
-                            WHERE pm.project_id = :project_id AND m.code = 'wildberries'
-                            LIMIT 1
-                        ),
                         rrp_run AS (
                             SELECT MAX(snapshot_at) AS run_at FROM rrp_snapshots WHERE project_id = :project_id
                         ),
                         front_run AS (
                             SELECT MAX(f.snapshot_at) AS run_at
                             FROM frontend_catalog_price_snapshots f
-                            JOIN brand b ON b.brand_id IS NOT NULL
-                            WHERE f.query_type = 'brand' AND f.query_value = b.brand_id
+                            WHERE f.query_type = 'brand' AND f.query_value = ANY(:brand_ids)
                         ),
                         rrp_latest AS (
                             SELECT s.vendor_code_norm, MAX(s.rrp_price) AS rrp_price
@@ -780,9 +1368,8 @@ async def get_wb_price_discrepancies(
                         front_latest AS (
                             SELECT DISTINCT ON (f.nm_id) f.nm_id::bigint AS nm_id, f.price_product AS showcase_price
                             FROM frontend_catalog_price_snapshots f
-                            JOIN brand b ON b.brand_id IS NOT NULL
                             JOIN front_run r ON f.snapshot_at = r.run_at
-                            WHERE f.query_type = 'brand' AND f.query_value = b.brand_id
+                            WHERE f.query_type = 'brand' AND f.query_value = ANY(:brand_ids)
                             ORDER BY f.nm_id, f.snapshot_at DESC
                         )
                         SELECT 
@@ -791,11 +1378,11 @@ async def get_wb_price_discrepancies(
                             COUNT(front_latest.nm_id) AS products_with_frontend,
                             COUNT(CASE WHEN rrp_latest.vendor_code_norm IS NOT NULL AND front_latest.nm_id IS NOT NULL THEN 1 END) AS products_with_both
                         FROM products p
-                        LEFT JOIN rrp_latest ON rrp_latest.vendor_code_norm = p.vendor_code_norm
+                        LEFT JOIN rrp_latest ON btrim(rrp_latest.vendor_code_norm) = btrim(p.vendor_code_norm)
                         LEFT JOIN front_latest ON front_latest.nm_id = p.nm_id
                         WHERE p.project_id = :project_id AND p.vendor_code_norm IS NOT NULL
                     """),
-                    {"project_id": project_id},
+                    {"project_id": project_id, "brand_ids": params["brand_ids"]},
                 ).mappings().first()
                 
                 with open(r'd:\Work\EcomCore\.cursor\debug.log', 'a', encoding='utf-8') as f:
@@ -852,10 +1439,10 @@ async def get_wb_price_discrepancies(
         # Collect diagnostic information about missing data
         try:
             with engine.connect() as conn:
-                # Check brand_id
-                brand_check = conn.execute(
+                # Check WB marketplace row and storefront brand scope.
+                marketplace_check = conn.execute(
                     text("""
-                        SELECT pm.settings_json->>'brand_id' AS brand_id, pm.is_enabled
+                        SELECT pm.is_enabled
                         FROM project_marketplaces pm
                         JOIN marketplaces m ON m.id = pm.marketplace_id
                         WHERE pm.project_id = :project_id AND m.code = 'wildberries'
@@ -863,6 +1450,7 @@ async def get_wb_price_discrepancies(
                     """),
                     {"project_id": project_id},
                 ).mappings().first()
+                brand_ids = params.get("brand_ids") or []
                 
                 # Check table counts
                 rrp_count = conn.execute(
@@ -886,13 +1474,13 @@ async def get_wb_price_discrepancies(
                 ).scalar() or 0
                 
                 frontend_count = 0
-                if brand_check and brand_check.get("brand_id"):
+                if brand_ids:
                     frontend_count = conn.execute(
                         text("""
                             SELECT COUNT(*) FROM frontend_catalog_price_snapshots
-                            WHERE query_type = 'brand' AND query_value = :brand_id
+                            WHERE query_type = 'brand' AND query_value = ANY(:brand_ids)
                         """),
-                        {"brand_id": str(brand_check.get("brand_id"))},
+                        {"brand_ids": brand_ids},
                     ).scalar() or 0
                 
                 stock_count = conn.execute(
@@ -1042,21 +1630,13 @@ async def get_wb_price_discrepancies(
                 products_with_both = conn.execute(
                     text("""
                         WITH
-                        brand AS (
-                            SELECT pm.settings_json->>'brand_id' AS brand_id
-                            FROM project_marketplaces pm
-                            JOIN marketplaces m ON m.id = pm.marketplace_id
-                            WHERE pm.project_id = :project_id AND m.code = 'wildberries'
-                            LIMIT 1
-                        ),
                         rrp_run AS (
                             SELECT MAX(snapshot_at) AS run_at FROM rrp_snapshots WHERE project_id = :project_id
                         ),
                         front_run AS (
                             SELECT MAX(f.snapshot_at) AS run_at
                             FROM frontend_catalog_price_snapshots f
-                            JOIN brand b ON b.brand_id IS NOT NULL
-                            WHERE f.query_type = 'brand' AND f.query_value = b.brand_id
+                            WHERE f.query_type = 'brand' AND f.query_value = ANY(:brand_ids)
                         ),
                         rrp_latest AS (
                             SELECT s.vendor_code_norm, MAX(s.rrp_price) AS rrp_price
@@ -1068,35 +1648,26 @@ async def get_wb_price_discrepancies(
                         front_latest AS (
                             SELECT DISTINCT ON (f.nm_id) f.nm_id::bigint AS nm_id, f.price_product AS showcase_price
                             FROM frontend_catalog_price_snapshots f
-                            JOIN brand b ON b.brand_id IS NOT NULL
                             JOIN front_run r ON f.snapshot_at = r.run_at
-                            WHERE f.query_type = 'brand' AND f.query_value = b.brand_id
+                            WHERE f.query_type = 'brand' AND f.query_value = ANY(:brand_ids)
                             ORDER BY f.nm_id, f.snapshot_at DESC
                         )
                         SELECT COUNT(*) AS count
                         FROM products p
-                        LEFT JOIN rrp_latest ON rrp_latest.vendor_code_norm = p.vendor_code_norm
+                        LEFT JOIN rrp_latest ON btrim(rrp_latest.vendor_code_norm) = btrim(p.vendor_code_norm)
                         LEFT JOIN front_latest ON front_latest.nm_id = p.nm_id
                         WHERE p.project_id = :project_id
                           AND p.vendor_code_norm IS NOT NULL
                           AND rrp_latest.rrp_price IS NOT NULL
                           AND front_latest.showcase_price IS NOT NULL
                     """),
-                    {"project_id": project_id},
-                ).scalar() or 0
-                
-                # Safely extract brand_id
-                brand_id_value = None
-                if brand_check and brand_check.get("brand_id"):
-                    try:
-                        brand_id_value = int(brand_check.get("brand_id"))
-                    except (ValueError, TypeError):
-                        brand_id_value = None
+                        {"project_id": project_id, "brand_ids": brand_ids},
+                    ).scalar() or 0
                 
                 diagnostic_info = {
                     "data_availability": {
-                        "brand_id_configured": brand_id_value is not None,
-                        "brand_id": brand_id_value,
+                        "storefront_configured": bool(brand_ids),
+                        "storefront_brand_ids": [int(brand_id) for brand_id in brand_ids],
                         "rrp_snapshots_count": rrp_count,
                         "rrp_snapshots_latest_snapshot_at": rrp_latest_snapshot_at.isoformat() if rrp_latest_snapshot_at else None,
                         "price_snapshots_count": price_count,
@@ -1123,9 +1694,12 @@ async def get_wb_price_discrepancies(
                 }
                 
                 # Identify issues
-                if not brand_check or not brand_check.get("brand_id"):
-                    diagnostic_info["issues"].append("brand_id not configured in project_marketplaces.settings_json")
-                    diagnostic_info["recommendations"].append("Configure brand_id in project marketplace settings")
+                if not marketplace_check:
+                    diagnostic_info["issues"].append("Wildberries marketplace is not configured for this project")
+                    diagnostic_info["recommendations"].append("Connect Wildberries with an API token in project marketplaces")
+                elif not brand_ids:
+                    diagnostic_info["issues"].append("WB storefront brands are not configured")
+                    diagnostic_info["recommendations"].append("Add a WB storefront brand in Wildberries marketplace settings")
                 
                 if rrp_count == 0:
                     diagnostic_info["issues"].append("No RRP snapshots found")
@@ -1140,9 +1714,39 @@ async def get_wb_price_discrepancies(
                             "and then build snapshots: domain='build_rrp_snapshots'"
                         )
                 
-                if frontend_count == 0 and brand_check and brand_check.get("brand_id"):
+                if frontend_count == 0 and brand_ids:
                     diagnostic_info["issues"].append("No frontend catalog price snapshots found")
                     diagnostic_info["recommendations"].append("Run frontend prices ingestion: POST /api/v1/projects/{project_id}/ingest/run with domain='frontend_prices'")
+
+                # If a specific vitrine snapshot was requested, validate it exists for this storefront brand scope.
+                if front_snapshot_at is not None and brand_ids:
+                    selected_front_count = (
+                        conn.execute(
+                            text(
+                                """
+                                SELECT COUNT(DISTINCT f.nm_id)::bigint
+                                FROM frontend_catalog_price_snapshots f
+                                WHERE f.query_type = 'brand'
+                                  AND f.query_value = ANY(:brand_ids)
+                                  AND f.snapshot_at = :front_snapshot_at
+                                """
+                            ),
+                            {
+                                "brand_ids": brand_ids,
+                                "front_snapshot_at": front_snapshot_at,
+                            },
+                        ).scalar()
+                        or 0
+                    )
+                    diagnostic_info["data_availability"]["front_snapshot_at_requested"] = (
+                        front_snapshot_at.isoformat() if isinstance(front_snapshot_at, datetime) else None
+                    )
+                    diagnostic_info["data_availability"]["front_snapshot_distinct_nm_id_count"] = int(selected_front_count)
+                    if int(selected_front_count) == 0:
+                        diagnostic_info["issues"].append("Requested frontend showcase snapshot not found for configured storefront brands")
+                        diagnostic_info["recommendations"].append(
+                            "Pick another snapshot: GET /api/v1/projects/{project_id}/wildberries/price-discrepancies/front-snapshots"
+                        )
                 
                 if products_count == 0:
                     diagnostic_info["issues"].append("No products found")
@@ -1159,7 +1763,8 @@ async def get_wb_price_discrepancies(
             # Don't fail the request if diagnostic collection fails
             diagnostic_info = None
 
-    updated_at_iso = _get_updated_at(project_id)
+    front_snapshot_at_used = front_snapshot_at or _get_latest_front_snapshot_at(project_id)
+    updated_at_iso = _get_updated_at(project_id, front_snapshot_at=front_snapshot_at_used)
 
     response = {
         "meta": {
@@ -1167,6 +1772,7 @@ async def get_wb_price_discrepancies(
             "page": page,
             "page_size": page_size,
             "updated_at": updated_at_iso,
+            "front_snapshot_at": front_snapshot_at_used.isoformat() if isinstance(front_snapshot_at_used, datetime) else None,
         },
         "items": items,
     }
@@ -1187,6 +1793,13 @@ async def export_wb_price_discrepancies_csv(
         description='Comma-separated WB category/subject IDs, e.g. "1,2,3"',
         example="12,34,56",
     ),
+    front_snapshot_at: Optional[datetime] = Query(
+        None,
+        description=(
+            "Use a specific WB frontend showcase snapshot_at (UTC recommended). "
+            "If omitted, the latest available snapshot is used."
+        ),
+    ),
     only_below_rrp: bool = Query(
         True,
         description="Filter: only items where showcase_price < rrp_price",
@@ -1198,13 +1811,16 @@ async def export_wb_price_discrepancies_csv(
         "any", description="Filter by enterprise (1C/XML) stock quantity"
     ),
     sort: Optional[str] = Query(
-        "diff_rub_desc",
-        description="Sort key, e.g. diff_rub_desc, diff_percent_desc, nm_id_asc",
+        "diff_percent_desc",
+        description="Sort key, e.g. diff_percent_desc, diff_rub_desc, nm_id_asc",
     ),
-    current_user: dict = Depends(get_current_active_user),
-    membership: dict = Depends(get_project_membership),
+    _auth: dict = Depends(allow_client_portal_read),
 ):
     """Export price discrepancies as CSV with current filters and sort applied."""
+    if front_snapshot_at is not None and isinstance(front_snapshot_at, datetime) and front_snapshot_at.tzinfo is None:
+        # Treat naive datetimes as UTC to avoid environment-dependent casts in Postgres.
+        front_snapshot_at = front_snapshot_at.replace(tzinfo=timezone.utc)
+
     # Reuse the same SQL builder, but remove pagination limits for export.
     filters = DiscrepancyFilters(
         q=q,
@@ -1212,6 +1828,7 @@ async def export_wb_price_discrepancies_csv(
         only_below_rrp=only_below_rrp,
         has_wb_stock=has_wb_stock,
         has_enterprise_stock=has_enterprise_stock,
+        front_snapshot_at=front_snapshot_at,
         sort=_parse_sort(sort),
         page=1,
         page_size=1000000,  # large upper bound; DB will still stream
@@ -1308,7 +1925,7 @@ async def diagnose_price_discrepancies(
     """Trigger diagnostic task for price discrepancies data availability.
     
     This endpoint enqueues a Celery task to check:
-    - brand_id configuration
+    - WB storefront brand configuration
     - RRP snapshots availability
     - Price snapshots availability
     - Frontend catalog price snapshots availability
@@ -1334,8 +1951,7 @@ async def diagnose_price_discrepancies(
 @router.get("/{project_id}/wildberries/categories")
 async def get_wb_categories(
     project_id: int = Path(..., description="Project ID"),
-    current_user: dict = Depends(get_current_active_user),
-    membership: dict = Depends(get_project_membership),
+    _auth: dict = Depends(allow_client_portal_read),
 ):
     """Return list of WB categories for a project.
 
@@ -1368,3 +1984,49 @@ async def get_wb_categories(
     return {"items": items}
 
 
+@router.get("/{project_id}/wildberries/price-discrepancies/front-snapshots")
+async def get_wb_front_price_discrepancies_snapshots(
+    project_id: int = Path(..., description="Project ID"),
+    limit: int = Query(25, ge=1, le=200, description="Max number of snapshots to return"),
+    _auth: dict = Depends(allow_client_portal_read),
+):
+    """Return available WB frontend showcase snapshot versions for project storefront brands.
+
+    Each item contains snapshot_at + count of distinct nm_id for that snapshot.
+    """
+    sql = text(
+        """
+        SELECT
+            f.snapshot_at AS snapshot_at,
+            COUNT(DISTINCT f.nm_id)::bigint AS items_count
+        FROM frontend_catalog_price_snapshots f
+        WHERE f.query_type = 'brand'
+          AND f.query_value = ANY(:brand_ids)
+        GROUP BY f.snapshot_at
+        ORDER BY f.snapshot_at DESC
+        LIMIT :limit
+        """
+    )
+    with engine.connect() as conn:
+        rows = conn.execute(
+            sql,
+            {"brand_ids": get_project_frontend_brand_id_strings(project_id), "limit": limit},
+        ).mappings().all()
+
+    items = []
+    for row in rows:
+        snapshot_at = row.get("snapshot_at")
+        if isinstance(snapshot_at, datetime):
+            if snapshot_at.tzinfo is None:
+                snapshot_at = snapshot_at.replace(tzinfo=timezone.utc)
+            snapshot_at_str = snapshot_at.isoformat()
+        else:
+            snapshot_at_str = None
+        items.append(
+            {
+                "snapshot_at": snapshot_at_str,
+                "items_count": int(row.get("items_count") or 0),
+            }
+        )
+
+    return {"items": items}

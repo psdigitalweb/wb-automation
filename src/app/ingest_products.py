@@ -69,9 +69,10 @@ def _to_row(item: Dict[str, Any]) -> Dict[str, Any]:
     # Photos array from API response
     pics = item.get("photos") or item.get("pics") or item.get("images")
     
-    # Sizes and colors: not in basic cards response
-    sizes = None
-    colors = None
+    # Preserve variant metadata, but barcode/SKU values are excluded later from
+    # the versioned content contract.
+    sizes = item.get("sizes")
+    colors = item.get("colors")
     
     # Dimensions, characteristics, metadata from API
     dimensions = item.get("dimensions")
@@ -137,7 +138,7 @@ async def fetch_page(
         elif cursor == "mock_page_2":
             mock_cursor = "mock_page_3"
         else:  # mock_page_3 or beyond
-            return [], None
+            return [], None, None
 
         items: List[Dict[str, Any]] = []
         start_id = 100000 if cursor is None else 100000 + (page_size * 2 if cursor == "mock_page_2" else page_size)
@@ -161,7 +162,7 @@ async def fetch_page(
                     ],
                 }
             )
-        return items, mock_cursor
+        return items, mock_cursor, len(items)
 
     # Real request using POST /content/v2/get/cards/list (cursor pagination)
     # Structure exactly as in working AppScript
@@ -186,11 +187,10 @@ async def fetch_page(
 
     try:
         print(f"WB request: POST {endpoint} body={v2_body}")
-        print(f"WB headers: {dict(client.headers)}")
         r = await client.post(endpoint, json=v2_body)
         if r.status_code != 200:
             print(f"fetch_page: non-200 status={r.status_code}, stop pagination")
-            return [], None
+            return [], None, None
 
         p2 = r.json()
         print(f"WB response: HTTP {r.status_code}, cards count: {len(p2.get('cards', []))}")
@@ -248,7 +248,11 @@ def _get_existing_nm_ids(project_id: int, nm_ids: List[int]) -> Set[int]:
     return {int(r[0]) for r in rows}
 
 
-async def ingest(project_id: int, loop_delay_s: float = 6.0) -> None:
+async def ingest(
+    project_id: int,
+    loop_delay_s: float = 6.0,
+    run_id: Optional[int] = None,
+) -> Dict[str, Any]:
     """Main ingestion loop: ensure schema, then page through API and upsert.
     
     Args:
@@ -269,7 +273,13 @@ async def ingest(project_id: int, loop_delay_s: float = 6.0) -> None:
     except ValueError as e:
         # Enabled but not connected - log error and skip (error already checked at endpoint level)
         print(f"ingest: {str(e)}, skipping")
-        return
+        return {
+            "ok": False,
+            "project_id": project_id,
+            "domain": "products",
+            "reason": "wb_credentials_unavailable",
+            "error": str(e),
+        }
     endpoint = os.getenv("WB_ENDPOINT", WB_DEFAULT_ENDPOINT)
     page_size = int(os.getenv("WB_PAGE_SIZE", "100"))
     max_pages_env = os.getenv("WB_MAX_PAGES")
@@ -294,6 +304,13 @@ async def ingest(project_id: int, loop_delay_s: float = 6.0) -> None:
         dup_nm_ids_total = 0
         wb_cursor_total_first: Optional[int] = None
         wb_cursor_total_last: Optional[int] = None
+        changed_total = 0
+        unchanged_total = 0
+        versions_created_total = 0
+        main_photos_stored_total = 0
+        main_photos_reused_total = 0
+        main_photos_skipped_inactive_total = 0
+        main_photo_archive_failed_total = 0
         
         while True:
             items, next_cursor, cursor_total = await fetch_page(client, endpoint, cursor, page_size)
@@ -333,7 +350,33 @@ async def ingest(project_id: int, loop_delay_s: float = 6.0) -> None:
                 updated_total += would_update
                 stored_total += len(nm_ids_page)
 
-                res = upsert_products(rows, project_id)
+                photo_attempts: Dict[int, Dict[str, Any]] = {}
+                from app.services.wb_product_content.history import history_enabled_for_project
+
+                if history_enabled_for_project(project_id):
+                    from app.services.wb_product_content.main_photo import prepare_main_photo_attempts
+
+                    photo_attempts = await prepare_main_photo_attempts(
+                        project_id=project_id,
+                        rows=rows,
+                    )
+                res = upsert_products(
+                    rows,
+                    project_id,
+                    ingest_run_id=run_id,
+                    photo_attempts=photo_attempts,
+                )
+                changed_total += int(res.get("changed", 0))
+                unchanged_total += int(res.get("unchanged", 0))
+                versions_created_total += int(res.get("versions_created", 0))
+                main_photos_stored_total += int(res.get("main_photos_stored", 0))
+                main_photos_reused_total += int(res.get("main_photos_reused", 0))
+                main_photos_skipped_inactive_total += int(
+                    res.get("main_photos_skipped_inactive", 0)
+                )
+                main_photo_archive_failed_total += int(
+                    res.get("main_photo_archive_failed", 0)
+                )
                 print(
                     "ingest: page={page} fetched={fetched} stored={stored} "
                     "would_insert={would_insert} would_update={would_update} dup_in_run={dup_in_run} "
@@ -380,6 +423,28 @@ async def ingest(project_id: int, loop_delay_s: float = 6.0) -> None:
                 wb_total_last=wb_cursor_total_last,
             )
         )
+        return {
+            "ok": True,
+            "scope": "project",
+            "project_id": project_id,
+            "domain": "products",
+            "pages_count": pages_count,
+            "cards_seen": fetched_total,
+            "cards_stored": stored_total,
+            "distinct_nm_id": len(uniq_nm_ids),
+            "cards_initial_estimate": inserted_total,
+            "cards_existing_estimate": updated_total,
+            "cards_changed": changed_total,
+            "cards_unchanged": unchanged_total,
+            "versions_created": versions_created_total,
+            "main_photos_stored": main_photos_stored_total,
+            "main_photos_reused": main_photos_reused_total,
+            "main_photos_skipped_inactive": main_photos_skipped_inactive_total,
+            "main_photo_archive_failed": main_photo_archive_failed_total,
+            "duplicate_nm_ids_in_run": dup_nm_ids_total,
+            "wb_cursor_total_first": wb_cursor_total_first,
+            "wb_cursor_total_last": wb_cursor_total_last,
+        }
 
 
 def _sync_entry() -> None:
@@ -439,5 +504,4 @@ async def get_ingest_info():
 
 if __name__ == "__main__":
     _sync_entry()
-
 

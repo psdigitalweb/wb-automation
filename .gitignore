@@ -1,4 +1,4 @@
-﻿# Environment files
+# Environment files
 .env
 .env.*
 !.env.example
@@ -15,6 +15,12 @@ ENV/
 .pytest_cache/
 .coverage
 htmlcov/
+pytest_tmp/
+tests/pytest_tmp/
+tests/_pytest_tmp/
+tests/_tmp/
+tests/_runtime_tmp/
+workspace_tmp/
 
 # Node
 node_modules/
@@ -26,10 +32,22 @@ build/
 # Logs
 *.log
 logs/
+tmp/
 
 # Database
 pgdata/
 redisdata/
+*.sql
+*.sql.gz
+*.dump
+*.dump.gz
+
+# Generated SEO experiment artifacts
+tests/seo/phase1/category_*/
+tests/seo/phase1q/category_*/
+tests/seo/phase1q/multi_category_query_selection/
+tests/seo/phase1q/vision_prompt_contract/run_*/
+frontend/seo-*-ui*.png
 
 # IDE
 .DS_Store
@@ -43,3 +61,20 @@ redisdata/
 
 # Nginx secrets
 nginx/.htpasswd
+nginx/letsencrypt-ecomcore/
+nginx/letsencrypt-reports-zakka/
+
+.project_proxy_secret_key
+.project_secrets_key
+.docker_tmp/
+artifacts/
+outputs/
+audit/
+celerybeat-schedule*
+infra/docker/*.dump
+backup_*.dump
+docs/verification/
+*.bak_*
+
+# Accidental shell redirection artifact
+=

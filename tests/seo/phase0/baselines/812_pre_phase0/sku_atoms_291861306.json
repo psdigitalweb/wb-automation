@@ -1,0 +1,94 @@
+{
+  "annotation_id": 5,
+  "atoms": {
+    "category_id": 812,
+    "confidence": {},
+    "evidence_refs": [
+      "baseline_capture"
+    ],
+    "facts": [
+      {
+        "confidence": 0.95,
+        "field": "product_type",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "product_type",
+        "value": "Кружки"
+      },
+      {
+        "confidence": 0.95,
+        "field": "compatibility",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "compatibility",
+        "value": "dishwasher"
+      },
+      {
+        "confidence": 0.95,
+        "field": "compatibility",
+        "importance": "soft",
+        "operator": "equals",
+        "source": "sku_meaning",
+        "type": "compatibility",
+        "value": "microwave"
+      }
+    ],
+    "negative_fit_atoms": [],
+    "nm_id": 291861306,
+    "positive_atoms": [],
+    "product_identity": "",
+    "product_type": "Кружки",
+    "project_id": 1,
+    "schema_version": "meaning_atoms_v0"
+  },
+  "meaning_payload": {
+    "audience": [],
+    "confidence": {
+      "fallback": 0.4
+    },
+    "evidence_refs": [
+      "product.title",
+      "product.characteristics"
+    ],
+    "expressive": {},
+    "functional": {
+      "attributes": [
+        "{'id': 23796, 'name': 'Назначение', 'value': ['символ года', 'для дома', 'офис']}",
+        "{'id': 15001132, 'name': 'Тип кружки', 'value': ['керамическая']}",
+        "{'id': 14177449, 'name': 'Цвет', 'value': ['светло-фиолетовый']}",
+        "{'id': 90630, 'name': 'Высота предмета', 'value': 9}",
+        "{'id': 15001137, 'name': 'Дата регистрации сертификата/декларации', 'value': ['16.05.2023']}",
+        "{'id': 50, 'name': 'Декоративные элементы', 'value': ['принт']}",
+        "{'id': 179792, 'name': 'Количество предметов в упаковке', 'value': ['1 шт.']}",
+        "{'id': 378533, 'name': 'Комплектация', 'value': ['кружка - 1 шт.']}",
+        "{'id': 16685, 'name': 'Материал посуды', 'value': ['керамика']}",
+        "{'id': 15001135, 'name': 'Номер декларации соответствия', 'value': ['РОСС RU Д-CN.РА01.В.14014/23']}",
+        "{'id': 15001138, 'name': 'Дата окончания действия сертификата/декларации', 'value': ['14.05.2026']}",
+        "{'id': 59611, 'name': 'Назначение подарка', 'value': ['любимой', 'любимому', 'подруге']}",
+        "{'id': 58813, 'name': 'Назначение посуды', 'value': ['для дома']}",
+        "{'id': 63669, 'name': 'Объем (мл)', 'value': 375}",
+        "{'id': 17076, 'name': 'Особенности кружки', 'value': ['использование в СВЧ', 'использование в посудомоечной машине']}",
+        "{'id': 59615, 'name': 'Повод', 'value': ['новый год', 'просто так', 'день рождения']}",
+        "{'id': 12, 'name': 'Рисунок', 'value': ['капибара-феечка']}",
+        "{'id': 85571, 'name': 'Упаковка', 'value': ['картонная коробка']}",
+        "{'id': 15001405, 'name': 'Ставка НДС', 'value': ['5']}",
+        "{'id': 14177451, 'name': 'Страна производства', 'value': ['Китай']}",
+        "{'id': 59623, 'name': 'Тип подарка', 'value': ['домашние подарки', 'полезные подарки']}",
+        "{'id': 72443, 'name': 'Хрупкость', 'value': ['хрупкое']}",
+        "{'id': 90673, 'name': 'Ширина предмета', 'value': 9.5}"
+      ],
+      "product_type": "Кружки"
+    },
+    "negative_constraints": [],
+    "review_status": "needs_more_data",
+    "schema_version": "sku_meaning_v0"
+  },
+  "nm_id": 291861306,
+  "schema_version": "sku_meaning_v0",
+  "source_metadata": {
+    "source": "product_seo_analysis"
+  },
+  "status": "needs_more_data"
+}

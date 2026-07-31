@@ -66,10 +66,27 @@ export default function Breadcrumbs() {
 
       // For deeper project pages (except dashboard itself), show the current page as the last crumb.
       if (rest && rest !== 'dashboard') {
-        const firstSeg = rest.split('/')[0]
-        const label = extraLabelByPath[firstSeg]
-        if (label) {
-          base.push({ href: `/app/project/${projectId}/${firstSeg}`, label })
+        // WB finances: reports and unit-pnl
+        if (rest.startsWith('wildberries/finances/')) {
+          base.push({
+            href: `/app/project/${projectId}/wildberries/finances/reports`,
+            label: 'Финансовые отчёты',
+          })
+          if (rest.includes('unit-pnl')) {
+            base.push({ href: '', label: 'Юнит-экономика' })
+          }
+        } else if (rest.startsWith('wildberries/content-analytics')) {
+          base.push({ href: '', label: 'Аналитика карточек' })
+        } else if (rest.startsWith('wildberries/reviews')) {
+          base.push({ href: '', label: 'Отзывы WB' })
+        } else if (rest.startsWith('wildberries/funnel-signals')) {
+          base.push({ href: '', label: 'Воронка: сигналы' })
+        } else {
+          const firstSeg = rest.split('/')[0]
+          const label = extraLabelByPath[firstSeg]
+          if (label) {
+            base.push({ href: `/app/project/${projectId}/${firstSeg}`, label })
+          }
         }
       }
 

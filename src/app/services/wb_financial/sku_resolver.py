@@ -7,7 +7,7 @@ Uses:
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Dict, List, Optional
 
 from sqlalchemy import text
 
@@ -69,3 +69,18 @@ def resolve_internal_sku(project_id: int, nm_id: Optional[int]) -> Optional[str]
             {"project_id": project_id, "nm_id": nm_id},
         ).mappings().first()
     return row["internal_sku"] if row and row.get("internal_sku") else None
+
+
+def resolve_internal_skus_bulk(
+    project_id: int,
+    nm_ids: List[Optional[int]],
+) -> Dict[int, Optional[str]]:
+    """Resolve multiple nm_ids to internal_sku. Returns dict nm_id -> internal_sku."""
+    result: Dict[int, Optional[str]] = {}
+    seen: set = set()
+    for nm_id in nm_ids:
+        if nm_id is None or nm_id in seen:
+            continue
+        seen.add(nm_id)
+        result[nm_id] = resolve_internal_sku(project_id, nm_id)
+    return result

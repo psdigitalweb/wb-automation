@@ -1,0 +1,21 @@
+{
+  "baseline_accuracy_step1": 0.1678,
+  "step8_informative_accuracy": 0.2349,
+  "step9_current_accuracy": 0.2349,
+  "minimum_acceptable_accuracy": 0.1378,
+  "max_allowed_negative_drift": 0.03,
+  "drift_vs_step1": 0.0671,
+  "drift_vs_step8": 0.0,
+  "passes_minimum_accuracy": true,
+  "negative_regression_vs_step1": false,
+  "negative_regression_vs_step8": false,
+  "bucket_distribution": {
+    "primary": 77,
+    "secondary": 32,
+    "broad": 32,
+    "rejected": 8
+  },
+  "verdict": "pass",
+  "interpretation": "Step 9 wiring did not regress accuracy below the Step 1 baseline and matched the Step 8 informative snapshot while recording the active CategoryProfile on matcher_v2 runs."
+}
+

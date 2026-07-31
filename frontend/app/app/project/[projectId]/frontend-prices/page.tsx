@@ -87,27 +87,11 @@ export default function FrontendPricesPage() {
         `/api/v1/projects/${projectId}/frontend-prices?limit=${PAGE_SIZE}&offset=${offset}` +
         (runIdParam ? `&run_id=${encodeURIComponent(runIdParam)}` : '')
       const res = await apiGet<ProjectFrontendPricesResponse>(url)
-
-      // #region agent log
-      try {
-        // eslint-disable-next-line no-console
-        console.log('[frontend-prices] GET', res.debug.status, res.data?.meta)
-        fetch('http://127.0.0.1:7242/ingest/66ddcc6b-d2d0-4156-a371-04fea067f11b',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'frontend-prices/page.tsx:loadPrices','message':'apiGet frontend-prices ok','data':{url,resStatus:res.debug?.status,meta:{brand_id:res.data?.meta?.brand_id,last_run_id:res.data?.meta?.last_run_id,runs_len:res.data?.meta?.runs?.length,count_last_run:res.data?.meta?.count_last_run,total:res.data?.total}},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H1'})}).catch(()=>{})
-      } catch {}
-      // #endregion
-
       setPrices(res.data.data)
       setMeta(res.data.meta)
       setTotal(res.data.total)
       setLoading(false)
     } catch (error) {
-      // #region agent log
-      try {
-        // eslint-disable-next-line no-console
-        console.log('[frontend-prices] error', error)
-        fetch('http://127.0.0.1:7242/ingest/66ddcc6b-d2d0-4156-a371-04fea067f11b',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'frontend-prices/page.tsx:loadPrices','message':'apiGet frontend-prices error','data':{url:`/api/v1/projects/${projectId}/frontend-prices`,errDetail:(error as any)?.detail,errStatus:(error as any)?.status,debug:(error as any)?.debug?.status},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H1'})}).catch(()=>{})
-      } catch {}
-      // #endregion
       console.error('Failed to load frontend prices:', error)
       setLoading(false)
     }

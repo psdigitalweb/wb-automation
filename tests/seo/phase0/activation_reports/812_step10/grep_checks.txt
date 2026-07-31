@@ -1,0 +1,9 @@
+## del category_profile
+
+## active matcher literals
+
+## matcher_v2 legacy helper imports
+src/app/services/seo/matcher_v2/api.py:79:from app.services.seo.query_meaning_matcher.matcher import (
+src/app/services/seo/matcher_v2/stages/demand_ordering.py:14:    _select_bucket_with_coverage,
+src/app/services/seo/matcher_v2/stages/demand_ordering.py:49:        "primary": _select_bucket_with_coverage(
+src/app/services/seo/matcher_v2/stages/demand_ordering.py:53:        "secondary": _select_bucket_with_coverage(

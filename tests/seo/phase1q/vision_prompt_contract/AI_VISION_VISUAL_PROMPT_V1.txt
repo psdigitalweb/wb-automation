@@ -1,0 +1,135 @@
+Товар из категории:
+{category_name}
+
+Название товара:
+{title}
+
+Краткое описание товара:
+{description}
+
+Посмотри на первое фото товара и опиши только то, что можно увидеть или уверенно понять визуально.
+
+Верни JSON строго в таком формате:
+
+{
+  "visible_product_type": {
+    "value": "...",
+    "confidence": 0.0
+  },
+  "visual_summary": "краткое описание того, что видно на фото",
+  "colors": [
+    {
+      "value": "...",
+      "confidence": 0.0
+    }
+  ],
+  "visible_design": [
+    {
+      "value": "...",
+      "confidence": 0.0
+    }
+  ],
+  "visible_text": [
+    {
+      "value": "...",
+      "confidence": 0.0
+    }
+  ],
+  "visual_style": [
+    {
+      "value": "...",
+      "confidence": 0.0
+    }
+  ],
+  "visual_audience": [
+    {
+      "group": "...",
+      "why": "...",
+      "confidence": 0.0
+    }
+  ],
+  "audience_fit": [
+    {
+      "audience": "девочка",
+      "fit": "high|medium|low|not_supported",
+      "evidence_type": "visual|visible_text|weak_inference",
+      "confidence": 0.0,
+      "why": "..."
+    },
+    {
+      "audience": "девушка",
+      "fit": "high|medium|low|not_supported",
+      "evidence_type": "visual|visible_text|weak_inference",
+      "confidence": 0.0,
+      "why": "..."
+    },
+    {
+      "audience": "женщина",
+      "fit": "high|medium|low|not_supported",
+      "evidence_type": "visual|visible_text|weak_inference",
+      "confidence": 0.0,
+      "why": "..."
+    },
+    {
+      "audience": "мужчина",
+      "fit": "high|medium|low|not_supported",
+      "evidence_type": "visual|visible_text|weak_inference",
+      "confidence": 0.0,
+      "why": "..."
+    },
+    {
+      "audience": "дочь",
+      "fit": "high|medium|low|not_supported",
+      "evidence_type": "visual|visible_text|weak_inference",
+      "confidence": 0.0,
+      "why": "..."
+    },
+    {
+      "audience": "сын",
+      "fit": "high|medium|low|not_supported",
+      "evidence_type": "visual|visible_text|weak_inference",
+      "confidence": 0.0,
+      "why": "..."
+    },
+    {
+      "audience": "подруга",
+      "fit": "high|medium|low|not_supported",
+      "evidence_type": "visual|visible_text|weak_inference",
+      "confidence": 0.0,
+      "why": "..."
+    },
+    {
+      "audience": "коллега",
+      "fit": "high|medium|low|not_supported",
+      "evidence_type": "visual|visible_text|weak_inference",
+      "confidence": 0.0,
+      "why": "..."
+    }
+  ],
+  "uncertain": [
+    {
+      "value": "...",
+      "reason": "..."
+    }
+  ]
+}
+
+Пояснение к полям:
+- visible_product_type: какой тип товара виден на фото, с учетом указанной категории.
+- visual_summary: что видно на фото человеческим языком.
+- colors: цвета, которые реально видны.
+- visible_design: рисунки, принты, форма, декор, визуальные элементы.
+- visible_text: надписи, символы, читаемый текст.
+- visual_style: стиль/настроение, которое считывается визуально.
+- visual_audience: какие группы покупателей или получателей визуально могут заинтересоваться товаром. Для каждой группы укажи:
+  - group: кто это; если пол, возраст или роль можно понять визуально - укажи их, если нельзя - напиши более общую группу;
+  - why: какой визуальный признак на фото поддерживает этот вывод;
+  - confidence: насколько вывод уверенный.
+- audience_fit: оцени, насколько товар визуально подходит каждой аудитории из списка. Верни все аудитории из списка: девочка, девушка, женщина, мужчина, дочь, сын, подруга, коллега.
+  - fit: high, medium, low или not_supported;
+  - evidence_type: visual, если вывод держится на визуальном виде товара; visible_text, если вывод держится на прочитанном тексте на изображении; weak_inference, если это слабое предположение без прямого визуального признака;
+  - confidence: насколько вывод уверенный;
+  - why: какой визуальный признак на фото поддерживает или ослабляет этот вывод.
+- uncertain: признаки, в которых модель не уверена.
+
+Если поле пустое - верни пустой массив.

@@ -1,0 +1,327 @@
+.projectsPage {
+  --projects-surface: var(--color-surface, #fff);
+  --projects-surface-2: var(--color-surface-2, #f8f9fa);
+  --projects-surface-3: var(--color-surface-3, #eef1f4);
+  --projects-border: var(--color-border, rgba(31, 41, 55, 0.15));
+  --projects-border-strong: var(--color-border-strong, rgba(31, 41, 55, 0.24));
+  --projects-text: var(--color-text, #222);
+  --projects-text-2: var(--color-text-2, #555);
+  --projects-text-3: var(--color-text-3, #777);
+  --projects-accent: var(--color-accent, #0f6f46);
+  --projects-accent-hover: var(--color-accent-hover, #0b5837);
+  --projects-accent-soft: var(--color-accent-soft, #e8f6ee);
+  --projects-accent-text: var(--color-accent-text, #0f6f46);
+  --projects-shadow: var(--shadow-sm, 0 1px 2px rgba(15, 23, 42, 0.08));
+  width: min(900px, calc(100vw - 40px));
+  margin: 0 auto;
+  color: var(--projects-text);
+}
+
+:global(.ec-ui-v2) .projectsPage {
+  padding: 4px 0 24px;
+}
+
+.pageHead {
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.pageHead h1 {
+  margin: 0;
+  color: var(--projects-text);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1.1;
+}
+
+.createCard,
+.projectCard,
+.emptyState {
+  border: 0.5px solid var(--projects-border);
+  border-radius: 10px;
+  background: var(--projects-surface);
+  box-shadow: var(--projects-shadow);
+}
+
+.createCard {
+  margin-bottom: 12px;
+  padding: 16px;
+}
+
+.cardHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.cardHeader h2 {
+  margin: 0;
+  color: var(--projects-text);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.cardHeader p {
+  margin: 3px 0 0;
+  color: var(--projects-text-2);
+  font-size: 12px;
+}
+
+.formGrid {
+  display: grid;
+  gap: 12px;
+}
+
+.field {
+  display: grid;
+  gap: 6px;
+}
+
+.field span {
+  color: var(--projects-text-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.field input,
+.field textarea {
+  width: 100%;
+  border: 0.5px solid var(--projects-border);
+  border-radius: 6px;
+  background: var(--projects-surface);
+  color: var(--projects-text);
+  font: 13px/1.4 var(--font-sans, inherit);
+  outline: none;
+}
+
+.field input {
+  height: 32px;
+  padding: 0 10px;
+}
+
+.field textarea {
+  min-height: 76px;
+  padding: 9px 10px;
+  resize: vertical;
+}
+
+.field input:focus,
+.field textarea:focus {
+  box-shadow: var(--shadow-focus, 0 0 0 3px rgba(15, 111, 70, 0.16));
+}
+
+.formActions {
+  margin-top: 14px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.primaryButton,
+.secondaryButton {
+  margin: 0;
+  white-space: nowrap;
+}
+
+.primaryButton {
+  background: var(--projects-accent);
+  color: #fff;
+}
+
+.primaryButton:hover:not(:disabled) {
+  background: var(--projects-accent-hover);
+}
+
+.secondaryButton {
+  border: 0.5px solid var(--projects-border);
+  background: var(--projects-surface);
+  color: var(--projects-text);
+  box-shadow: var(--shadow-xs, none);
+}
+
+.secondaryButton:hover:not(:disabled) {
+  background: var(--projects-surface-2);
+}
+
+.projects,
+.skeletonList {
+  display: grid;
+  gap: 12px;
+}
+
+.skeletonList div {
+  height: 126px;
+  border-radius: 10px;
+  background: linear-gradient(90deg, var(--projects-surface-2), var(--projects-surface-3), var(--projects-surface-2));
+}
+
+.emptyState {
+  min-height: 180px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-align: center;
+}
+
+.emptyState h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.emptyState p {
+  max-width: 360px;
+  margin: 0 0 4px;
+  color: var(--projects-text-2);
+  font-size: 12px;
+}
+
+.projectCard {
+  width: 100%;
+  padding: 18px 20px;
+  display: block;
+  cursor: pointer;
+  text-align: left;
+  transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+}
+
+.projectCard:hover,
+.projectCard:focus-visible {
+  border-color: var(--projects-border-strong);
+  background: color-mix(in oklab, var(--projects-surface), var(--projects-accent-soft) 20%);
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.06), var(--projects-shadow);
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.projectTop {
+  margin-bottom: 16px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.projectTop h2 {
+  margin: 0;
+  color: var(--projects-text);
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1.25;
+}
+
+.projectTop p {
+  max-width: 640px;
+  margin: 6px 0 0;
+  color: var(--projects-text-2);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.roleChip {
+  min-height: 20px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--projects-accent-soft);
+  color: var(--projects-accent-text);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 20px;
+  white-space: nowrap;
+}
+
+.projectMeta {
+  margin: 0 0 16px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.projectMeta div {
+  min-width: 0;
+}
+
+.projectMeta dt {
+  margin-bottom: 4px;
+  color: var(--projects-text-3);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.3;
+}
+
+.projectMeta dd {
+  margin: 0;
+  overflow: hidden;
+  color: var(--projects-text);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.projectFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.updated {
+  color: var(--projects-text-3);
+  font-size: 12px;
+}
+
+.updated span {
+  color: var(--projects-text-2);
+}
+
+.projectActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+@media (max-width: 720px) {
+  .projectsPage {
+    width: calc(100vw - 24px);
+  }
+
+  :global(.ec-ui-v2) .projectsPage {
+    padding-top: 0;
+  }
+
+  .pageHead,
+  .projectTop,
+  .projectFooter {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .projectCard {
+    padding: 16px;
+  }
+
+  .projectMeta {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .projectActions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+}

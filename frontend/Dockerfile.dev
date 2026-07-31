@@ -1,23 +1,26 @@
 # Dockerfile для локальной разработки frontend
 # Запускает Next.js в dev режиме без production сборки
+# syntax=docker/dockerfile:1 - enable BuildKit cache mounts
 
-FROM node:20-alpine
+# Debian slim (glibc) — SWC бинарники Next.js работают надёжнее, чем на Alpine
+FROM node:20-slim
 
 WORKDIR /app
 
 # Копируем package файлы
 COPY package.json package-lock.json* ./
 
-# Устанавливаем зависимости с оптимизацией для Windows/Docker
-# Используем npm ci для более быстрой установки (если есть lock file)
-# Или npm install с флагами для ускорения
-RUN npm config set registry https://registry.npmjs.org/ && \
+# Устанавливаем зависимости: cache mount ускоряет повторные сборки после prune
+RUN --mount=type=cache,target=/root/.npm \
+    npm config set registry https://registry.npmjs.org/ && \
     npm config set fetch-timeout 300000 && \
     npm config set fetch-retries 5 && \
     (npm ci --no-audit --legacy-peer-deps 2>/dev/null || npm install --no-audit --legacy-peer-deps)
 
 # Копируем исходный код
 COPY . .
+# Копируем public в /opt/public для заполнения named volume при старте (избегаем EIO на Windows bind mount)
+COPY public /opt/public
 
 # Открываем порт для dev server
 EXPOSE 3000
