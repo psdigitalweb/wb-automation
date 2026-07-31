@@ -132,7 +132,39 @@ def upgrade() -> None:
         )
         SELECT * FROM canonical_source
         UNION ALL
-        SELECT p.*, NULL::bigint AS marketplace_product_id
+        SELECT
+            p.id,
+            p.nm_id,
+            p.vendor_code,
+            p.category,
+            p.title,
+            p.brand,
+            p.subject_name,
+            p.price_u,
+            p.sale_price_u,
+            p.rating,
+            p.feedbacks,
+            p.sizes,
+            p.colors,
+            p.pics,
+            p.raw,
+            p.updated_at,
+            p.first_seen_at,
+            p.subject_id,
+            p.description,
+            p.dimensions,
+            p.characteristics,
+            p.created_at_api,
+            p.need_kiz,
+            p.project_id,
+            p.vendor_code_norm,
+            p.content_hash,
+            p.content_version,
+            p.content_changed_at,
+            p.content_last_seen_at,
+            p.wb_content_updated_at,
+            p.main_photo_asset_hash,
+            NULL::bigint AS marketplace_product_id
         FROM products p
         WHERE NOT EXISTS (
             SELECT 1 FROM canonical_source c
