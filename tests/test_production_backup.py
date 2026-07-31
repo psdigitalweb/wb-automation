@@ -34,9 +34,9 @@ def test_compose_prefix_uses_explicit_env_file() -> None:
         "--project-name",
         "ecomcore",
         "--env-file",
-        "/srv/ecomcore/.env",
+        str(Path("/srv/ecomcore/.env")),
         "--file",
-        "/srv/ecomcore/docker-compose.prod.yml",
+        str(Path("/srv/ecomcore/docker-compose.prod.yml")),
     ]
 
 
