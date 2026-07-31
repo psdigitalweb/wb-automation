@@ -52,6 +52,12 @@ interface HeaderTotals {
   rrp_coverage_pct?: number | null
   rrp_net_units_covered?: number | null
   net_units_total?: number | null
+  packaging_cost_total?: number | null
+  packaging_missing_count?: number | null
+  additional_costs_total?: number | null
+  warehouse_labor_costs_total?: number | null
+  full_profit_total?: number | null
+  full_margin_pct_of_revenue?: number | null
 }
 
 interface HeaderSummaryProps {
@@ -135,6 +141,24 @@ export function HeaderSummary({ headerTotals, items }: HeaderSummaryProps) {
           <SummaryPair label="Доставки, шт" value={formatQty(deliveriesTotal)} />
           <SummaryPair label="Возвраты, шт" value={formatQty(returnsTotal)} />
           <SummaryPair label="Выкуп, %" value={`${formatPct(buyoutRateTotal)}%`} />
+        </div>
+      </div>
+
+      <div className={styles.summaryBlock}>
+        <div className={styles.summaryTitle}>Полная экономика</div>
+        <div className={styles.summaryList}>
+          <SummaryPair label="Упаковка" value={fmtRub(headerTotals.packaging_cost_total)} />
+          <SummaryPair label="Доп. расходы" value={fmtRub(headerTotals.additional_costs_total)} />
+          <SummaryPair label="Смены склада" value={fmtRub(headerTotals.warehouse_labor_costs_total)} />
+          <SummaryPair label="Полная прибыль" value={fmtRub(headerTotals.full_profit_total)} accent />
+          <SummaryPair
+            label="Полная маржа"
+            value={
+              headerTotals.full_margin_pct_of_revenue != null
+                ? `${formatPct(headerTotals.full_margin_pct_of_revenue)}%`
+                : '—'
+            }
+          />
         </div>
       </div>
     </div>
