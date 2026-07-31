@@ -222,10 +222,11 @@ def compute_project_data_availability(project_id: int, *, days: int = 90) -> Dat
                 """
                 SELECT DISTINCT (s.last_change_date::date) AS d
                 FROM supplier_stock_snapshots s
-                JOIN products p
+                JOIN v_wb_product_source p
                   ON p.project_id = :project_id
                  AND p.nm_id = s.nm_id
-                WHERE s.last_change_date >= :start_ts
+                WHERE s.project_id = :project_id
+                  AND s.last_change_date >= :start_ts
                   AND s.last_change_date < :end_ts
                 """
             )

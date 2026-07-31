@@ -28,6 +28,7 @@ from app.services.wb_financial.event_mapping import (
     resolve_amount_for_event,
 )
 from app.services.wb_financial.sku_resolver import resolve_internal_sku
+from app.services.product_identity import resolve_marketplace_product_id
 
 # Keywords for unmapped money candidate detection
 MONEY_KEYWORDS = re.compile(
@@ -182,6 +183,15 @@ def build_wb_financial_events(
                 nm_id_val = None
         vendor_code_val = payload.get("vendor_code") or payload.get("vendorCode")
         internal_sku_val = resolve_internal_sku(project_id_val, nm_id_val) if nm_id_val else None
+        marketplace_product_id = (
+            resolve_marketplace_product_id(
+                project_id=project_id_val,
+                marketplace_code="wildberries",
+                marketplace_item_id=nm_id_val,
+            )
+            if nm_id_val
+            else None
+        )
 
         # currency
         currency_val = (
@@ -222,6 +232,7 @@ def build_wb_financial_events(
                 currency=str(currency_val),
                 source_field=source_field,
                 payload_hash=payload_hash_val,
+                marketplace_product_id=marketplace_product_id,
             )
             stats["inserted"] += 1
 

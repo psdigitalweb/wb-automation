@@ -311,7 +311,7 @@ async def get_funnel_signals_endpoint(
         fbo_map: Dict[int, tuple] = {}
         for chunk in _chunk_list(nm_ids_all, 5000):
             try:
-                fbo_map.update(get_latest_fbo_stock_totals_by_nm_id(chunk))
+                fbo_map.update(get_latest_fbo_stock_totals_by_nm_id(project_id, chunk))
             except Exception:
                 pass
 
@@ -449,7 +449,7 @@ async def get_funnel_signals_categories_stats_endpoint(
         fbo_map: Dict[int, tuple] = {}
         for chunk in _chunk_list(nm_ids_all, 5000):
             try:
-                fbo_map.update(get_latest_fbo_stock_totals_by_nm_id(chunk))
+                fbo_map.update(get_latest_fbo_stock_totals_by_nm_id(project_id, chunk))
             except Exception:
                 pass
 
@@ -608,7 +608,7 @@ async def list_wb_search_report_products_endpoint(
             funnel_map = {}
 
         try:
-            fbo_map = get_latest_fbo_stock_totals_by_nm_id(nm_ids)
+            fbo_map = get_latest_fbo_stock_totals_by_nm_id(project_id, nm_ids)
         except Exception:
             fbo_map = {}
 

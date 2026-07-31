@@ -136,11 +136,15 @@ def test_catalog_query_serializes_metrics_and_applies_project_filters(monkeypatc
     count_sql, count_params = fake_engine.connection.calls[0]
     items_sql, items_params = fake_engine.connection.calls[1]
     assert "p.project_id = :project_id" in count_sql
+    assert "FROM marketplace_products mp" in count_sql
+    assert "legacy_product_fallback AS" in count_sql
+    assert "FROM product_source p" in count_sql
     assert "sp.is_active IS TRUE" in count_sql
     assert "ILIKE :q_pattern" in count_sql
     assert count_params["project_id"] == 1
     assert count_params["q_pattern"] == "%SKU-123%"
     assert "REPORTED_CTR_MISMATCH" in items_sql
+    assert "p.marketplace_product_id" in items_sql
     assert "seller_discount.seller_discount_percent" in items_sql
     assert items_params["period_from"] == date(2026, 7, 1)
 

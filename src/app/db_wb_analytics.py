@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import text
 
 from app.db import engine
+from app.services.product_identity import WB_PRODUCT_SOURCE_CTES, resolve_marketplace_product_ids
 
 # Batch size for UPSERT to avoid huge statements
 BATCH_UPSERT_SIZE = 200
@@ -28,16 +29,16 @@ def get_wb_nm_ids_for_project(project_id: int, limit: Optional[int] = None) -> L
     if limit is not None and limit <= 0:
         return []
 
-    sql = text("""
-        SELECT nm_id FROM products
-        WHERE project_id = :project_id AND nm_id IS NOT NULL
+    sql = text(f"""
+        WITH {WB_PRODUCT_SOURCE_CTES}
+        SELECT nm_id FROM product_source
         ORDER BY nm_id ASC
     """)
     params: Dict[str, Any] = {"project_id": project_id}
     if limit is not None:
-        sql = text("""
-            SELECT nm_id FROM products
-            WHERE project_id = :project_id AND nm_id IS NOT NULL
+        sql = text(f"""
+            WITH {WB_PRODUCT_SOURCE_CTES}
+            SELECT nm_id FROM product_source
             ORDER BY nm_id ASC
             LIMIT :lim
         """)
@@ -63,21 +64,28 @@ def upsert_card_stats_daily(
     """Batch UPSERT в wb_card_stats_daily. Одна транзакция на batch."""
     if not rows:
         return 0
+    identities = resolve_marketplace_product_ids(
+        project_id=project_id,
+        marketplace_code="wildberries",
+        marketplace_item_ids=(row.get("nm_id") for row in rows),
+        connection=conn,
+    )
     sql = text("""
         INSERT INTO wb_card_stats_daily (
-            project_id, nm_id, stat_date, currency,
+            project_id, nm_id, marketplace_product_id, stat_date, currency,
             open_count, cart_count, order_count, order_sum,
             buyout_count, buyout_sum, buyout_percent,
             add_to_cart_conversion, cart_to_order_conversion, add_to_wishlist_count,
             extra, ingest_run_id
         ) VALUES (
-            :project_id, :nm_id, :stat_date, :currency,
+            :project_id, :nm_id, :marketplace_product_id, :stat_date, :currency,
             :open_count, :cart_count, :order_count, :order_sum,
             :buyout_count, :buyout_sum, :buyout_percent,
             :add_to_cart_conversion, :cart_to_order_conversion, :add_to_wishlist_count,
             CAST(:extra AS jsonb), :ingest_run_id
         )
         ON CONFLICT (project_id, nm_id, stat_date) DO UPDATE SET
+            marketplace_product_id = EXCLUDED.marketplace_product_id,
             currency = EXCLUDED.currency,
             open_count = EXCLUDED.open_count,
             cart_count = EXCLUDED.cart_count,
@@ -101,6 +109,7 @@ def upsert_card_stats_daily(
                 {
                     "project_id": project_id,
                     "nm_id": r["nm_id"],
+                    "marketplace_product_id": identities.get(str(r["nm_id"])),
                     "stat_date": r["stat_date"],
                     "currency": r.get("currency"),
                     "open_count": r.get("open_count", 0),
@@ -130,14 +139,21 @@ def upsert_search_query_terms(
     """Batch UPSERT в wb_search_query_terms."""
     if not rows:
         return 0
+    identities = resolve_marketplace_product_ids(
+        project_id=project_id,
+        marketplace_code="wildberries",
+        marketplace_item_ids=(row.get("nm_id") for row in rows),
+        connection=conn,
+    )
     sql = text("""
         INSERT INTO wb_search_query_terms (
-            project_id, nm_id, search_text, frequency, is_ad, extra, ingest_run_id
+            project_id, nm_id, marketplace_product_id, search_text, frequency, is_ad, extra, ingest_run_id
         ) VALUES (
-            :project_id, :nm_id, :search_text, :frequency, :is_ad,
+            :project_id, :nm_id, :marketplace_product_id, :search_text, :frequency, :is_ad,
             CAST(:extra AS jsonb), :ingest_run_id
         )
         ON CONFLICT (project_id, nm_id, search_text) DO UPDATE SET
+            marketplace_product_id = EXCLUDED.marketplace_product_id,
             frequency = EXCLUDED.frequency,
             is_ad = EXCLUDED.is_ad,
             extra = EXCLUDED.extra,
@@ -152,6 +168,7 @@ def upsert_search_query_terms(
                 {
                     "project_id": project_id,
                     "nm_id": r["nm_id"],
+                    "marketplace_product_id": identities.get(str(r["nm_id"])),
                     "search_text": r["search_text"],
                     "frequency": r.get("frequency"),
                     "is_ad": r.get("is_ad"),
@@ -172,14 +189,21 @@ def upsert_search_query_daily(
     """Batch UPSERT в wb_search_query_daily."""
     if not rows:
         return 0
+    identities = resolve_marketplace_product_ids(
+        project_id=project_id,
+        marketplace_code="wildberries",
+        marketplace_item_ids=(row.get("nm_id") for row in rows),
+        connection=conn,
+    )
     sql = text("""
         INSERT INTO wb_search_query_daily (
-            project_id, nm_id, search_text, stat_date, orders, avg_position, extra, ingest_run_id
+            project_id, nm_id, marketplace_product_id, search_text, stat_date, orders, avg_position, extra, ingest_run_id
         ) VALUES (
-            :project_id, :nm_id, :search_text, :stat_date, :orders, :avg_position,
+            :project_id, :nm_id, :marketplace_product_id, :search_text, :stat_date, :orders, :avg_position,
             CAST(:extra AS jsonb), :ingest_run_id
         )
         ON CONFLICT (project_id, nm_id, search_text, stat_date) DO UPDATE SET
+            marketplace_product_id = EXCLUDED.marketplace_product_id,
             orders = EXCLUDED.orders,
             avg_position = EXCLUDED.avg_position,
             extra = EXCLUDED.extra,
@@ -194,6 +218,7 @@ def upsert_search_query_daily(
                 {
                     "project_id": project_id,
                     "nm_id": r["nm_id"],
+                    "marketplace_product_id": identities.get(str(r["nm_id"])),
                     "search_text": r["search_text"],
                     "stat_date": r["stat_date"],
                     "orders": r.get("orders", 0),
@@ -348,7 +373,8 @@ def get_funnel_signals_raw(
 
     eligible = "TRUE" if ctr_mode == "raw" else "NOT (quality_flags && ARRAY['ZERO_IMPRESSIONS_WITH_CLICKS','CLICKS_EXCEED_IMPRESSIONS','CTR_EXCEEDS_100','REPORTED_CTR_MISMATCH','DELETED_PRODUCT']::text[])"
     sql = text(f"""
-        WITH agg AS (
+        WITH {WB_PRODUCT_SOURCE_CTES},
+        agg AS (
             SELECT
                 nm_id,
                 COALESCE(SUM(open_count), 0)::bigint AS opens,
@@ -386,7 +412,7 @@ def get_funnel_signals_raw(
             COALESCE(ctr.active_days, 0), COALESCE(ctr.excluded_rows, 0)
         FROM agg
         LEFT JOIN ctr ON ctr.nm_id = agg.nm_id
-        LEFT JOIN products p ON p.project_id = :project_id AND p.nm_id = agg.nm_id{join_filter}
+        LEFT JOIN product_source p ON p.nm_id = agg.nm_id{join_filter}
         WHERE 1=1{where_category}
         ORDER BY agg.nm_id
     """)
@@ -471,10 +497,11 @@ def _first_image_url_from_pics(pics: Any) -> Optional[str]:
 
 def get_funnel_categories(project_id: int) -> List[str]:
     """Distinct WB categories (subject_name) from products for funnel-signals filter."""
-    sql = text("""
+    sql = text(f"""
+        WITH {WB_PRODUCT_SOURCE_CTES}
         SELECT DISTINCT subject_name
-        FROM products
-        WHERE project_id = :project_id AND subject_name IS NOT NULL AND subject_name != ''
+        FROM product_source
+        WHERE subject_name IS NOT NULL AND subject_name != ''
         ORDER BY subject_name
     """)
     with engine.connect() as conn:

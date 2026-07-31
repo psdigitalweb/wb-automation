@@ -85,7 +85,7 @@ def fetch_category_review_scope(
     name_sql = text(
         """
         SELECT MAX(p.subject_name) AS category_name
-        FROM products p
+        FROM v_wb_product_source p
         WHERE p.project_id = :project_id
           AND p.subject_id = :category_id
         """
@@ -104,7 +104,7 @@ def fetch_category_review_scope(
             fs.created_date AS created_date,
             fs.raw AS raw
         FROM wb_feedback_snapshots fs
-        JOIN products p
+        JOIN v_wb_product_source p
           ON p.project_id = fs.project_id
          AND p.nm_id = fs.nm_id
         WHERE fs.project_id = :project_id

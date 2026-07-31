@@ -216,6 +216,17 @@ def test_dual_write_is_disabled_by_default_flag(monkeypatch):
     assert result == {"status": "disabled", "rows_requested": 0, "rows_upserted": 0}
 
 
+def test_wb_product_identity_does_not_depend_on_supplier_directory_id():
+    """Different supplier aliases must not split one WB nmId into two products."""
+
+    assert dual_write._unique_nm_ids(
+        [
+            {"nm_id": 101, "supplier_id": 17},
+            {"nm_id": 101, "supplier_id": 999_017},
+        ]
+    ) == [101]
+
+
 def test_dual_write_failure_does_not_escape_to_legacy_ingest(monkeypatch):
     monkeypatch.setattr(dual_write.settings, "MARKETPLACE_PRODUCTS_DUAL_WRITE_ENABLED", True)
 
@@ -247,7 +258,9 @@ class _DualWriteConnection:
                     "connection_id": self.connection_id,
                 }
             )
-        return SimpleNamespace(rowcount=len(params["nm_ids"]))
+        if "nm_ids" in params:
+            return SimpleNamespace(rowcount=len(params["nm_ids"]))
+        return SimpleNamespace(rowcount=0)
 
     def __enter__(self):
         return self
@@ -271,13 +284,16 @@ def test_dual_write_upserts_unique_nm_ids_for_single_wb_connection(monkeypatch):
         "rows_upserted": 2,
         "connection_count": 1,
     }
-    assert len(connection.calls) == 2
+    assert len(connection.calls) == 3
     assert connection.calls[1][1] == {
         "project_id": 4,
         "connection_id": 15,
         "nm_ids": [101, 102],
     }
     assert "ON CONFLICT (project_marketplace_id, marketplace_item_id)" in connection.calls[1][0]
+    assert "UPDATE wb_feedback_snapshots" in connection.calls[2][0]
+    assert "UPDATE wb_product_content_versions" in connection.calls[2][0]
+    assert connection.calls[2][1]["marketplace_item_ids"] == ["101", "102"]
 
 
 def test_dual_write_skips_project_without_wb_connection(monkeypatch):

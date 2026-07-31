@@ -526,7 +526,7 @@ def get_wb_unit_pnl_table(
             ht.penalty_pos_sum,
             ht.penalty_neg_sum
         FROM sku_computed sc
-        LEFT JOIN products p ON p.project_id = :project_id AND p.nm_id = sc.nm_id
+        LEFT JOIN v_wb_product_source p ON p.project_id = :project_id AND p.nm_id = sc.nm_id
         CROSS JOIN header_totals ht
         WHERE sc.nm_id <> 0
         {search_sql}
@@ -544,7 +544,7 @@ def get_wb_unit_pnl_table(
             with_filter AS (
                 SELECT sa.nm_id
                 FROM sku_agg sa
-                INNER JOIN products p ON p.project_id = :project_id AND p.nm_id = sa.nm_id AND p.subject_id = :subject_id
+                INNER JOIN v_wb_product_source p ON p.project_id = :project_id AND p.nm_id = sa.nm_id AND p.subject_id = :subject_id
                 WHERE (p.title ILIKE :q_pattern
                    OR p.vendor_code ILIKE :q_pattern
                    OR p.vendor_code_norm ILIKE :q_pattern
@@ -559,7 +559,7 @@ def get_wb_unit_pnl_table(
             with_filter AS (
                 SELECT sa.nm_id
                 FROM sku_agg sa
-                INNER JOIN products p ON p.project_id = :project_id AND p.nm_id = sa.nm_id AND p.subject_id = :subject_id
+                INNER JOIN v_wb_product_source p ON p.project_id = :project_id AND p.nm_id = sa.nm_id AND p.subject_id = :subject_id
             )
             SELECT COUNT(*) AS cnt FROM with_filter"""
     elif q and q.strip():
@@ -570,7 +570,7 @@ def get_wb_unit_pnl_table(
             with_filter AS (
                 SELECT sa.nm_id
                 FROM sku_agg sa
-                LEFT JOIN products p ON p.project_id = :project_id AND p.nm_id = sa.nm_id
+                LEFT JOIN v_wb_product_source p ON p.project_id = :project_id AND p.nm_id = sa.nm_id
                 WHERE p.title ILIKE :q_pattern
                    OR p.vendor_code ILIKE :q_pattern
                    OR p.vendor_code_norm ILIKE :q_pattern
@@ -695,7 +695,7 @@ def get_wb_unit_pnl_table(
         filtered_nm_ids_h AS (
             SELECT sa.nm_id
             FROM sku_agg_h sa
-            LEFT JOIN products p ON p.project_id = :project_id AND p.nm_id = sa.nm_id
+            LEFT JOIN v_wb_product_source p ON p.project_id = :project_id AND p.nm_id = sa.nm_id
             WHERE 1=1
             {category_sql}
             {header_search_sql}
@@ -1005,17 +1005,17 @@ def _compute_rrp_model_header(
     filtered_sku_where = ""
     if subject_id is not None and q and q.strip():
         filtered_sku_from = """FROM sku_computed sc
-            INNER JOIN products p ON p.project_id = :project_id AND p.nm_id = sc.nm_id AND p.subject_id = :subject_id"""
+            INNER JOIN v_wb_product_source p ON p.project_id = :project_id AND p.nm_id = sc.nm_id AND p.subject_id = :subject_id"""
         filtered_sku_where = "WHERE (p.title ILIKE :q_pattern OR p.vendor_code ILIKE :q_pattern OR p.vendor_code_norm ILIKE :q_pattern OR sc.nm_id::text = :q_exact)"
     elif subject_id is not None:
         filtered_sku_from = """FROM sku_computed sc
-            INNER JOIN products p ON p.project_id = :project_id AND p.nm_id = sc.nm_id AND p.subject_id = :subject_id"""
+            INNER JOIN v_wb_product_source p ON p.project_id = :project_id AND p.nm_id = sc.nm_id AND p.subject_id = :subject_id"""
     elif q and q.strip():
         filtered_sku_from = """FROM sku_computed sc
-            LEFT JOIN products p ON p.project_id = :project_id AND p.nm_id = sc.nm_id"""
+            LEFT JOIN v_wb_product_source p ON p.project_id = :project_id AND p.nm_id = sc.nm_id"""
         filtered_sku_where = "WHERE (p.title ILIKE :q_pattern OR p.vendor_code ILIKE :q_pattern OR p.vendor_code_norm ILIKE :q_pattern OR sc.nm_id::text = :q_exact)"
     else:
-        filtered_sku_from = "FROM sku_computed sc LEFT JOIN products p ON p.project_id = :project_id AND p.nm_id = sc.nm_id"
+        filtered_sku_from = "FROM sku_computed sc LEFT JOIN v_wb_product_source p ON p.project_id = :project_id AND p.nm_id = sc.nm_id"
 
     base_lines_select = f"""
         SELECT
@@ -1685,17 +1685,17 @@ def _load_extended_header_basis(
     filtered_where = ""
     if subject_id is not None and q and q.strip():
         filtered_from = """FROM sku_computed sc
-            INNER JOIN products p ON p.project_id = :project_id AND p.nm_id = sc.nm_id AND p.subject_id = :subject_id"""
+            INNER JOIN v_wb_product_source p ON p.project_id = :project_id AND p.nm_id = sc.nm_id AND p.subject_id = :subject_id"""
         filtered_where = "WHERE (p.title ILIKE :q_pattern OR p.vendor_code ILIKE :q_pattern OR p.vendor_code_norm ILIKE :q_pattern OR sc.nm_id::text = :q_exact)"
     elif subject_id is not None:
         filtered_from = """FROM sku_computed sc
-            INNER JOIN products p ON p.project_id = :project_id AND p.nm_id = sc.nm_id AND p.subject_id = :subject_id"""
+            INNER JOIN v_wb_product_source p ON p.project_id = :project_id AND p.nm_id = sc.nm_id AND p.subject_id = :subject_id"""
     elif q and q.strip():
         filtered_from = """FROM sku_computed sc
-            LEFT JOIN products p ON p.project_id = :project_id AND p.nm_id = sc.nm_id"""
+            LEFT JOIN v_wb_product_source p ON p.project_id = :project_id AND p.nm_id = sc.nm_id"""
         filtered_where = "WHERE (p.title ILIKE :q_pattern OR p.vendor_code ILIKE :q_pattern OR p.vendor_code_norm ILIKE :q_pattern OR sc.nm_id::text = :q_exact)"
     else:
-        filtered_from = "FROM sku_computed sc LEFT JOIN products p ON p.project_id = :project_id AND p.nm_id = sc.nm_id"
+        filtered_from = "FROM sku_computed sc LEFT JOIN v_wb_product_source p ON p.project_id = :project_id AND p.nm_id = sc.nm_id"
 
     rows = conn.execute(
         text(
@@ -2160,7 +2160,7 @@ def get_wb_unit_pnl_details(
         )
         SELECT a.*, p.title, p.pics, p.vendor_code, p.vendor_code_norm
         FROM agg a
-        LEFT JOIN products p ON p.project_id = :project_id AND p.nm_id = :nm_id
+        LEFT JOIN v_wb_product_source p ON p.project_id = :project_id AND p.nm_id = :nm_id
     """)
 
     row = conn.execute(sql, params).mappings().first()

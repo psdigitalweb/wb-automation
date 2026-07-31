@@ -149,7 +149,7 @@ def sync_internal_data_to_rrp_snapshots(project_id: int) -> Dict[str, Any]:
                             )
                             SELECT COUNT(*)::bigint
                             FROM src
-                            JOIN products p
+                            JOIN v_wb_product_source p
                               ON p.project_id = :project_id
                              AND p.vendor_code_norm = src.sku_norm
                             WHERE src.sku_norm IS NOT NULL
@@ -275,7 +275,7 @@ def sync_internal_data_to_rrp_snapshots(project_id: int) -> Dict[str, Any]:
                         )
                         SELECT COUNT(*)::bigint
                         FROM src
-                        JOIN products p
+                        JOIN v_wb_product_source p
                           ON p.project_id = :project_id
                          AND p.vendor_code_norm = src.sku_norm
                         WHERE src.sku_norm IS NOT NULL
@@ -300,7 +300,7 @@ def sync_internal_data_to_rrp_snapshots(project_id: int) -> Dict[str, Any]:
                         )
                         SELECT src.sku_norm
                         FROM src
-                        LEFT JOIN products p
+                        LEFT JOIN v_wb_product_source p
                           ON p.project_id = :project_id
                          AND p.vendor_code_norm = src.sku_norm
                         WHERE src.sku_norm IS NOT NULL

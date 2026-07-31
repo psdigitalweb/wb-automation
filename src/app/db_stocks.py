@@ -47,6 +47,7 @@ def get_active_wb_nm_ids(project_id: int) -> List[int]:
 
 
 def get_latest_fbo_stock_totals_by_nm_id(
+    project_id: int,
     nm_ids: List[int],
 ) -> Dict[int, Tuple[int, Optional[datetime]]]:
     """Return latest FBO (WB warehouses) stock totals by nm_id from supplier_stock_snapshots.
@@ -66,7 +67,8 @@ def get_latest_fbo_stock_totals_by_nm_id(
                 COALESCE(s.quantity, 0)::bigint AS quantity,
                 COALESCE(s.last_change_date, s.snapshot_at) AS updated_at
             FROM supplier_stock_snapshots s
-            WHERE s.nm_id = ANY(:nm_ids)
+            WHERE s.project_id = :project_id
+              AND s.nm_id = ANY(:nm_ids)
             ORDER BY s.nm_id, s.warehouse_name, COALESCE(s.last_change_date, s.snapshot_at) DESC
         ),
         totals AS (
@@ -83,7 +85,10 @@ def get_latest_fbo_stock_totals_by_nm_id(
     )
 
     with engine.connect() as conn:
-        rows = conn.execute(sql, {"nm_ids": nm_ids}).fetchall()
+        rows = conn.execute(
+            sql,
+            {"project_id": int(project_id), "nm_ids": nm_ids},
+        ).fetchall()
 
     out: Dict[int, Tuple[int, Optional[datetime]]] = {}
     for nm_id, qty, updated_at in rows:

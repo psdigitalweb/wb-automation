@@ -13,6 +13,8 @@ from typing import Any, Dict, List, Optional, Set
 
 from sqlalchemy import text
 
+from app.services.product_identity import resolve_marketplace_product_ids
+
 from app.db import engine
 from app.db_stocks import get_active_fbs_nm_ids
 from app.db_wb_analytics import get_wb_nm_ids_for_project
@@ -205,17 +207,26 @@ def _bulk_upsert_feedbacks(
         return 0
     # last_seen_at for idempotency and debugging
     last_seen_at = snapshot_at
+    product_ids = resolve_marketplace_product_ids(
+        project_id=project_id,
+        marketplace_code="wildberries",
+        marketplace_item_ids=(row.get("nm_id") for row in rows),
+        connection=conn,
+    )
     sql = text("""
         INSERT INTO wb_feedback_snapshots (
-            project_id, external_id, nm_id, snapshot_at, ingest_run_id,
+            project_id, marketplace_product_id, external_id, nm_id,
+            snapshot_at, ingest_run_id,
             product_valuation, created_date, is_answered, has_media, raw,
             is_archived, source_endpoint, last_seen_at
         ) VALUES (
-            :project_id, :external_id, :nm_id, :snapshot_at, :ingest_run_id,
+            :project_id, :marketplace_product_id, :external_id, :nm_id,
+            :snapshot_at, :ingest_run_id,
             :product_valuation, :created_date, :is_answered, :has_media, CAST(:raw AS jsonb),
             :is_archived, :source_endpoint, :last_seen_at
         )
         ON CONFLICT (project_id, external_id) DO UPDATE SET
+            marketplace_product_id = EXCLUDED.marketplace_product_id,
             nm_id = EXCLUDED.nm_id,
             snapshot_at = EXCLUDED.snapshot_at,
             ingest_run_id = EXCLUDED.ingest_run_id,
@@ -236,6 +247,7 @@ def _bulk_upsert_feedbacks(
                 sql,
                 {
                     "project_id": project_id,
+                    "marketplace_product_id": product_ids.get(str(r.get("nm_id"))),
                     "external_id": r["external_id"],
                     "nm_id": r.get("nm_id"),
                     "snapshot_at": snapshot_at,

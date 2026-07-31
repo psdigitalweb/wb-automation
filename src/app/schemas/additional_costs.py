@@ -24,7 +24,8 @@ class AdditionalCostEntryBase(BaseModel):
     vendor: Optional[str] = Field(None, description="Vendor name")
     description: Optional[str] = Field(None, description="Description of the cost")
     nm_id: Optional[int] = Field(None, description="Product nm_id (for product-level costs, WB-only, optional)")
-    internal_sku: Optional[str] = Field(None, description="Internal SKU (for product-level costs, required when scope='product')")
+    marketplace_item_id: Optional[str] = Field(None, description="Product ID in the selected marketplace")
+    internal_sku: Optional[str] = Field(None, description="Optional internal or seller SKU for product-level costs")
     source: str = Field("manual", description="Source of the entry (e.g. 'manual', 'import', 'api')")
     external_uid: Optional[str] = Field(None, description="External unique identifier (for deduplication)")
     payload: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata as JSON")
@@ -50,6 +51,7 @@ class AdditionalCostEntryUpdate(BaseModel):
     vendor: Optional[str] = None
     description: Optional[str] = None
     nm_id: Optional[int] = None
+    marketplace_item_id: Optional[str] = None
     internal_sku: Optional[str] = None
     source: Optional[str] = None
     external_uid: Optional[str] = None
@@ -61,6 +63,7 @@ class AdditionalCostEntryResponse(AdditionalCostEntryBase):
     
     id: int = Field(..., description="Entry ID")
     project_id: int = Field(..., description="Project ID")
+    marketplace_product_id: Optional[int] = Field(None, description="Canonical project product ID")
     payload_hash: Optional[str] = Field(None, description="Hash of payload for deduplication")
     created_at: datetime = Field(..., description="Creation timestamp")
     updated_at: datetime = Field(..., description="Last update timestamp")
@@ -87,6 +90,8 @@ class AdditionalCostSummaryBreakdownItem(BaseModel):
     marketplace_code: Optional[str] = Field(None, description="Marketplace code (for marketplace level)")
     internal_sku: Optional[str] = Field(None, description="Internal SKU (for product level, primary identifier)")
     nm_id: Optional[int] = Field(None, description="Product nm_id (for product level, optional reference)")
+    marketplace_item_id: Optional[str] = Field(None, description="Product ID in the marketplace")
+    marketplace_product_id: Optional[int] = Field(None, description="Canonical project product ID")
     prorated_amount: Decimal = Field(..., description="Prorated amount for this group")
     
     @field_serializer('prorated_amount')

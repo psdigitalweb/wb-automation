@@ -9,19 +9,37 @@ from sqlalchemy import text
 
 from app import settings
 from app.db import engine
+from app.services.product_identity import (
+    resolve_marketplace_product_id,
+    resolve_marketplace_product_ids,
+)
 
 
 def is_showcase_active(project_id: int, nm_id: int) -> bool:
     with engine.connect() as conn:
+        marketplace_product_id = resolve_marketplace_product_id(
+            project_id=project_id,
+            marketplace_code="wildberries",
+            marketplace_item_id=nm_id,
+            connection=conn,
+        )
         value = conn.execute(
             text(
                 """
                 SELECT is_active
                 FROM wb_showcase_product_presence
-                WHERE project_id = :project_id AND nm_id = :nm_id
+                WHERE project_id = :project_id
+                  AND (
+                      marketplace_product_id = :marketplace_product_id
+                      OR (marketplace_product_id IS NULL AND nm_id = :nm_id)
+                  )
                 """
             ),
-            {"project_id": int(project_id), "nm_id": int(nm_id)},
+            {
+                "project_id": int(project_id),
+                "marketplace_product_id": marketplace_product_id,
+                "nm_id": int(nm_id),
+            },
         ).scalar_one_or_none()
     return value is True
 
@@ -31,17 +49,30 @@ def active_nm_ids(project_id: int, nm_ids: Iterable[int]) -> set[int]:
     if not values:
         return set()
     with engine.connect() as conn:
+        product_ids = resolve_marketplace_product_ids(
+            project_id=project_id,
+            marketplace_code="wildberries",
+            marketplace_item_ids=values,
+            connection=conn,
+        )
         rows = conn.execute(
             text(
                 """
                 SELECT nm_id
                 FROM wb_showcase_product_presence
                 WHERE project_id = :project_id
-                  AND nm_id = ANY(:nm_ids)
+                  AND (
+                      marketplace_product_id = ANY(:marketplace_product_ids)
+                      OR (marketplace_product_id IS NULL AND nm_id = ANY(:nm_ids))
+                  )
                   AND is_active = TRUE
                 """
             ),
-            {"project_id": int(project_id), "nm_ids": values},
+            {
+                "project_id": int(project_id),
+                "marketplace_product_ids": list(product_ids.values()),
+                "nm_ids": values,
+            },
         ).fetchall()
     return {int(row[0]) for row in rows}
 
@@ -63,6 +94,12 @@ def apply_complete_showcase_run(
 
     with engine.begin() as conn:
         if seen:
+            product_ids = resolve_marketplace_product_ids(
+                project_id=project_id,
+                marketplace_code="wildberries",
+                marketplace_item_ids=seen,
+                connection=conn,
+            )
             previous = conn.execute(
                 text(
                     """
@@ -82,15 +119,21 @@ def apply_complete_showcase_run(
                 text(
                     """
                     INSERT INTO wb_showcase_product_presence (
-                        project_id, nm_id, showcase_brand_id, is_active,
+                        project_id, marketplace_product_id, nm_id,
+                        showcase_brand_id, is_active,
                         last_seen_at, last_seen_run_id, last_checked_at,
                         consecutive_missing_runs, updated_at
                     )
-                    SELECT
-                        :project_id, source_nm_id, :brand_id, TRUE,
-                        :observed_at, :ingest_run_id, :observed_at, 0, :observed_at
-                    FROM unnest(CAST(:nm_ids AS bigint[])) AS source_nm_id
+                    VALUES (
+                        :project_id, :marketplace_product_id, :nm_id,
+                        :brand_id, TRUE, :observed_at, :ingest_run_id,
+                        :observed_at, 0, :observed_at
+                    )
                     ON CONFLICT (project_id, nm_id) DO UPDATE SET
+                        marketplace_product_id = COALESCE(
+                            EXCLUDED.marketplace_product_id,
+                            wb_showcase_product_presence.marketplace_product_id
+                        ),
                         showcase_brand_id = EXCLUDED.showcase_brand_id,
                         is_active = TRUE,
                         last_seen_at = EXCLUDED.last_seen_at,
@@ -100,13 +143,17 @@ def apply_complete_showcase_run(
                         updated_at = EXCLUDED.updated_at
                     """
                 ),
-                {
-                    "project_id": int(project_id),
-                    "brand_id": int(brand_id),
-                    "nm_ids": seen,
-                    "observed_at": now,
-                    "ingest_run_id": int(ingest_run_id) if ingest_run_id is not None else None,
-                },
+                [
+                    {
+                        "project_id": int(project_id),
+                        "marketplace_product_id": product_ids.get(str(nm_id)),
+                        "nm_id": nm_id,
+                        "brand_id": int(brand_id),
+                        "observed_at": now,
+                        "ingest_run_id": int(ingest_run_id) if ingest_run_id is not None else None,
+                    }
+                    for nm_id in seen
+                ],
             )
 
         missing_result = conn.execute(

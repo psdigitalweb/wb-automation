@@ -286,7 +286,7 @@ def _fetch_sku_row(session: Session, *, project_id: int, nm_id: int) -> dict[str
                 sizes,
                 colors,
                 dimensions
-            FROM products
+            FROM v_wb_product_source
             WHERE project_id = :project_id
               AND nm_id = :nm_id
             ORDER BY updated_at DESC NULLS LAST, id DESC

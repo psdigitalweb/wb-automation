@@ -13,9 +13,18 @@ from app.db_product_content_history import (
 )
 from app.deps import get_project_membership
 from app.services.wb_product_content.file_storage import LocalMainPhotoStorage
+from app.services.product_identity import resolve_marketplace_product_id
 
 
 router = APIRouter(prefix="/api/v1", tags=["wildberries-product-content-history"])
+
+
+def _product_identity(project_id: int, nm_id: int) -> int | None:
+    return resolve_marketplace_product_id(
+        project_id=project_id,
+        marketplace_code="wildberries",
+        marketplace_item_id=nm_id,
+    )
 
 
 @router.get("/projects/{project_id}/products/{nm_id}/content-history")
@@ -30,6 +39,7 @@ async def content_history(
         "items": list_content_versions(
             project_id=project_id,
             nm_id=nm_id,
+            marketplace_product_id=_product_identity(project_id, nm_id),
             limit=limit,
             offset=offset,
         )
@@ -47,6 +57,7 @@ async def content_history_version(
         project_id=project_id,
         nm_id=nm_id,
         version_id=version_id,
+        marketplace_product_id=_product_identity(project_id, nm_id),
     )
     if item is None:
         raise HTTPException(status_code=404, detail="Content version not found")
@@ -59,7 +70,13 @@ async def main_photo_history(
     nm_id: int = Path(..., ge=1),
     _membership=Depends(get_project_membership),
 ):
-    return {"items": list_main_photo_periods(project_id=project_id, nm_id=nm_id)}
+    return {
+        "items": list_main_photo_periods(
+            project_id=project_id,
+            nm_id=nm_id,
+            marketplace_product_id=_product_identity(project_id, nm_id),
+        )
+    }
 
 
 @router.get("/projects/{project_id}/products/{nm_id}/main-photo-assets/{asset_id}")
@@ -73,6 +90,7 @@ async def main_photo_asset_file(
         project_id=project_id,
         nm_id=nm_id,
         asset_id=asset_id,
+        marketplace_product_id=_product_identity(project_id, nm_id),
     )
     if asset is None:
         raise HTTPException(status_code=404, detail="Main photo asset not found")

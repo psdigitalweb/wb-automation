@@ -214,7 +214,7 @@ def diagnose_data_availability(project_id: int) -> Dict[str, Any]:
                     COUNT(*) AS total_count,
                     COUNT(DISTINCT nm_id) AS distinct_nm_ids,
                     COUNT(DISTINCT vendor_code_norm) AS distinct_vendor_codes
-                FROM products
+                FROM v_wb_product_source
                 WHERE project_id = :project_id
             """),
             {"project_id": project_id},
@@ -240,7 +240,7 @@ def diagnose_data_availability(project_id: int) -> Dict[str, Any]:
                     SELECT 
                         COUNT(DISTINCT p.vendor_code_norm) AS products_with_rrp,
                         COUNT(DISTINCT p.nm_id) AS products_with_rrp_and_nm_id
-                    FROM products p
+                    FROM v_wb_product_source p
                     INNER JOIN rrp_snapshots r ON r.vendor_code_norm = p.vendor_code_norm
                     WHERE p.project_id = :project_id
                       AND r.project_id = :project_id
@@ -300,7 +300,7 @@ def diagnose_data_availability(project_id: int) -> Dict[str, Any]:
                     ORDER BY f.nm_id, f.snapshot_at DESC
                 )
                 SELECT COUNT(*) AS sample_count
-                FROM products p
+                FROM v_wb_product_source p
                 LEFT JOIN rrp_latest ON rrp_latest.vendor_code_norm = p.vendor_code_norm
                 LEFT JOIN front_latest ON front_latest.nm_id = p.nm_id
                 WHERE p.project_id = :project_id

@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy import text
 
 from app.db import engine
+from app.services.product_identity import WB_PRODUCT_SOURCE_CTES
 
 
 _SORT_EXPRESSIONS = {
@@ -127,29 +128,38 @@ def list_wb_catalog(
 
     count_sql = text(
         f"""
+        WITH {WB_PRODUCT_SOURCE_CTES}
         SELECT COUNT(*)::bigint
-        FROM products p
+        FROM product_source p
         LEFT JOIN wb_showcase_product_presence sp
           ON sp.project_id = p.project_id
-         AND sp.nm_id = p.nm_id
+         AND (
+             sp.marketplace_product_id = p.marketplace_product_id
+             OR (sp.marketplace_product_id IS NULL AND sp.nm_id = p.nm_id)
+         )
         WHERE {where_sql}
         """
     )
 
     items_sql = text(
         f"""
-        WITH product_base AS (
+        WITH {WB_PRODUCT_SOURCE_CTES},
+        product_base AS (
             SELECT
+                p.marketplace_product_id,
                 p.nm_id,
                 p.vendor_code,
                 p.vendor_code_norm,
                 p.title,
                 p.pics,
                 COALESCE(sp.is_active, FALSE) AS is_active
-            FROM products p
+            FROM product_source p
             LEFT JOIN wb_showcase_product_presence sp
               ON sp.project_id = p.project_id
-             AND sp.nm_id = p.nm_id
+             AND (
+                 sp.marketplace_product_id = p.marketplace_product_id
+                 OR (sp.marketplace_product_id IS NULL AND sp.nm_id = p.nm_id)
+             )
             WHERE {where_sql}
         ),
         stats AS MATERIALIZED (
@@ -194,7 +204,10 @@ def list_wb_catalog(
                 ps.wb_discount AS seller_discount_percent
             FROM price_snapshots ps
             JOIN product_base pb
-              ON pb.nm_id = ps.nm_id
+              ON (
+                  ps.marketplace_product_id = pb.marketplace_product_id
+                  OR (ps.marketplace_product_id IS NULL AND pb.nm_id = ps.nm_id)
+              )
             WHERE ps.project_id = :project_id
             ORDER BY ps.nm_id, ps.created_at DESC
         ),
@@ -272,7 +285,10 @@ def list_wb_catalog(
         LEFT JOIN seller_discount ON seller_discount.nm_id = pb.nm_id
         LEFT JOIN wb_current_metrics cm
           ON cm.project_id = :project_id
-         AND cm.nm_id = pb.nm_id
+         AND (
+             cm.marketplace_product_id = pb.marketplace_product_id
+             OR (cm.marketplace_product_id IS NULL AND cm.nm_id = pb.nm_id)
+         )
         LEFT JOIN rrp
           ON rrp.vendor_code_norm = pb.vendor_code_norm
         ORDER BY {sort_sql}
@@ -281,9 +297,10 @@ def list_wb_catalog(
     )
 
     freshness_sql = text(
-        """
+        f"""
+        WITH {WB_PRODUCT_SOURCE_CTES}
         SELECT
-            (SELECT MAX(updated_at) FROM products WHERE project_id = :project_id) AS products_at,
+            (SELECT MAX(product_updated_at) FROM product_source) AS products_at,
             (SELECT MAX(last_checked_at) FROM wb_showcase_product_presence WHERE project_id = :project_id) AS showcase_at,
             (SELECT MAX(updated_at) FROM wb_current_metrics WHERE project_id = :project_id) AS prices_at,
             (SELECT MAX(snapshot_at) FROM rrp_snapshots WHERE project_id = :project_id) AS rrp_at,

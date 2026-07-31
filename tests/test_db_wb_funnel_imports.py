@@ -51,7 +51,10 @@ def test_duplicate_content_short_circuits_without_writes():
     def begin():
         yield conn
 
-    with patch("app.db_wb_funnel_imports.engine.begin", begin):
+    with patch("app.db_wb_funnel_imports.engine.begin", begin), patch(
+        "app.db_wb_funnel_imports.resolve_marketplace_product_ids",
+        return_value={"123": 987},
+    ):
         result = import_funnel_report(
             project_id=1,
             original_filename="same.zip",
@@ -75,7 +78,10 @@ def test_import_upsert_replaces_only_ctr_enrichment_on_overlap():
     def begin():
         yield conn
 
-    with patch("app.db_wb_funnel_imports.engine.begin", begin):
+    with patch("app.db_wb_funnel_imports.engine.begin", begin), patch(
+        "app.db_wb_funnel_imports.resolve_marketplace_product_ids",
+        return_value={"123": 987},
+    ):
         result = import_funnel_report(
             project_id=1,
             original_filename="new.xlsx",
@@ -86,5 +92,7 @@ def test_import_upsert_replaces_only_ctr_enrichment_on_overlap():
     canonical_sql = str(conn.execute.call_args_list[3].args[0])
     assert "INSERT INTO wb_funnel_ctr_daily" in canonical_sql
     assert "ON CONFLICT (project_id, nm_id, stat_date) DO UPDATE" in canonical_sql
+    assert "marketplace_product_id" in canonical_sql
+    assert conn.execute.call_args_list[3].args[1][0]["marketplace_product_id"] == 987
     assert "wb_card_stats_daily" not in canonical_sql
     assert result["id"] == 11

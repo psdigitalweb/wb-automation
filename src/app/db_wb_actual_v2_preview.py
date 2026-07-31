@@ -76,7 +76,7 @@ def get_wb_actual_v2_preview(
         nm_filter_sql = """
         AND (COALESCE(r.payload->>'nm_id', r.payload->>'nmId') ~ '^[0-9]+$')
         AND (COALESCE(r.payload->>'nm_id', r.payload->>'nmId')::bigint) IN (
-            SELECT nm_id FROM products
+            SELECT nm_id FROM v_wb_product_source
             WHERE project_id = :project_id
               AND nm_id IS NOT NULL
               AND (

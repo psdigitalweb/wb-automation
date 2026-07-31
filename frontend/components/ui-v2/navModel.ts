@@ -41,6 +41,7 @@ export type SubNavItemConfig = {
   match: (restPath: string) => boolean
   badge?: string
   disabled?: boolean
+  marketplaceCode?: 'wildberries' | 'ozon'
   children?: Array<Omit<SubNavItemConfig, 'icon' | 'children'>>
 }
 
@@ -252,10 +253,11 @@ export const subNavGroupsByRail: Record<string, SubNavGroup[]> = {
       items: [
         {
           id: 'seo',
-          label: 'SEO',
+          label: 'SEO WB',
           icon: 'spark',
           href: (projectId) => `/app/project/${projectId}/seo`,
           match: (rest) => rest.startsWith('seo'),
+          marketplaceCode: 'wildberries',
           children: [
             {
               id: 'seo-dashboard',
@@ -439,6 +441,22 @@ export function filterRailItemsByMarketplaces(
     if (connectedMarketplaces === null) return false
     return connectedMarketplaces.has(item.marketplaceCode)
   })
+}
+
+export function filterSubNavGroupsByMarketplaces(
+  groups: SubNavGroup[],
+  connectedMarketplaces: Set<string> | null,
+): SubNavGroup[] {
+  return groups
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((item) => {
+        if (!item.marketplaceCode) return true
+        if (connectedMarketplaces === null) return false
+        return connectedMarketplaces.has(item.marketplaceCode)
+      }),
+    }))
+    .filter((group) => group.items.length > 0)
 }
 
 export function getProjectRoute(pathname: string): { projectId: string | null; restPath: string } {

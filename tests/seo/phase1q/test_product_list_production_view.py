@@ -65,6 +65,7 @@ def _session_factory() -> sessionmaker:
     metadata.create_all(engine)
     with SessionLocal.begin() as session:
         session.execute(Base.metadata.tables["projects"].insert().values(id=1))
+        session.execute(text("CREATE VIEW v_wb_product_source AS SELECT *, NULL AS marketplace_product_id FROM products"))
     return SessionLocal
 
 

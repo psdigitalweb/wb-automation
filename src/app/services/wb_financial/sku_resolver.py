@@ -1,9 +1,11 @@
 """Resolve nm_id -> internal_sku using existing project logic.
 
 Uses:
-  1) internal_product_identifiers (marketplace_code='wildberries', marketplace_item_id=nm_id)
+  1) confirmed marketplace_product_mappings
+  2) internal_product_identifiers (marketplace_code='wildberries', marketplace_item_id=nm_id)
      + latest internal_data_snapshot success|partial -> internal_products.internal_sku
-  2) fallback: products(project_id, nm_id).vendor_code_norm
+  3) marketplace_products.marketplace_sku (does not require the manual catalog)
+  4) legacy fallback: products(project_id, nm_id).vendor_code_norm
 """
 from __future__ import annotations
 
@@ -25,7 +27,37 @@ def resolve_internal_sku(project_id: int, nm_id: Optional[int]) -> Optional[str]
     if nm_id is None:
         return None
 
-    # 1) Try internal_product_identifiers
+    nm_id_str = str(nm_id)
+    sql_canonical_mapping = text(
+        """
+        SELECT icp.internal_sku
+        FROM marketplace_products mp
+        JOIN project_marketplaces pm
+          ON pm.id = mp.project_marketplace_id
+         AND pm.project_id = mp.project_id
+        JOIN marketplaces m ON m.id = pm.marketplace_id
+        JOIN marketplace_product_mappings mapping
+          ON mapping.marketplace_product_id = mp.id
+         AND mapping.project_id = mp.project_id
+         AND mapping.mapping_status = 'confirmed'
+        JOIN internal_catalog_products icp
+          ON icp.id = mapping.internal_catalog_product_id
+         AND icp.project_id = mapping.project_id
+        WHERE mp.project_id = :project_id
+          AND m.code = 'wildberries'
+          AND mp.marketplace_item_id = :nm_id_str
+        LIMIT 1
+        """
+    )
+    with engine.connect() as conn:
+        row = conn.execute(
+            sql_canonical_mapping,
+            {"project_id": project_id, "nm_id_str": nm_id_str},
+        ).mappings().first()
+    if row and row.get("internal_sku"):
+        return row["internal_sku"]
+
+    # 2) Try legacy internal_product_identifiers
     sql_ident = text(
         """
         SELECT ip.internal_sku
@@ -43,7 +75,6 @@ def resolve_internal_sku(project_id: int, nm_id: Optional[int]) -> Optional[str]
         LIMIT 1
         """
     )
-    nm_id_str = str(nm_id)
     with engine.connect() as conn:
         row = conn.execute(
             sql_ident,
@@ -52,7 +83,33 @@ def resolve_internal_sku(project_id: int, nm_id: Optional[int]) -> Optional[str]
     if row and row.get("internal_sku"):
         return row["internal_sku"]
 
-    # 2) Fallback: products.vendor_code_norm
+    # 3) Canonical marketplace product. This exists after marketplace ingest even
+    # when the optional internal catalog was never uploaded.
+    sql_marketplace_product = text(
+        """
+        SELECT mp.marketplace_sku AS internal_sku
+        FROM marketplace_products mp
+        JOIN project_marketplaces pm
+          ON pm.id = mp.project_marketplace_id
+         AND pm.project_id = mp.project_id
+        JOIN marketplaces m ON m.id = pm.marketplace_id
+        WHERE mp.project_id = :project_id
+          AND m.code = 'wildberries'
+          AND mp.marketplace_item_id = :nm_id_str
+          AND NULLIF(btrim(mp.marketplace_sku), '') IS NOT NULL
+        ORDER BY mp.id
+        LIMIT 1
+        """
+    )
+    with engine.connect() as conn:
+        row = conn.execute(
+            sql_marketplace_product,
+            {"project_id": project_id, "nm_id_str": nm_id_str},
+        ).mappings().first()
+    if row and row.get("internal_sku"):
+        return row["internal_sku"]
+
+    # 4) Legacy fallback during the compatibility period.
     sql_prod = text(
         """
         SELECT vendor_code_norm AS internal_sku

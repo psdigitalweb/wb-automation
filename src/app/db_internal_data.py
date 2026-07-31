@@ -9,6 +9,7 @@ This module encapsulates CRUD for:
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from sqlalchemy import text
@@ -20,6 +21,9 @@ except ImportError:
     UniqueViolation = None
 
 from app.db import engine
+
+
+logger = logging.getLogger(__name__)
 
 
 def _serialize_jsonb(value: Any) -> Optional[str]:
@@ -709,6 +713,24 @@ def create_snapshot_with_rows(
             )
             snapshot["row_count"] = final_row_count
         
+        if status in {"success", "partial"}:
+            try:
+                from app.services.product_mapping_sync import reconcile_project_product_mappings
+
+                with conn.begin_nested():
+                    reconcile_project_product_mappings(
+                        project_id=project_id,
+                        snapshot_id=snapshot_id,
+                        connection=conn,
+                    )
+            except Exception:
+                logger.exception(
+                    "Internal catalog identity sync failed; legacy snapshot remains valid "
+                    "project_id=%s snapshot_id=%s",
+                    project_id,
+                    snapshot_id,
+                )
+
         snapshot["version"] = version
         snapshot["rows_updated"] = rows_updated_count if internal_products_rows else 0
         return snapshot, final_row_count

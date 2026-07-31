@@ -125,7 +125,7 @@ def _items_base_sql(search_clause: str, having_clause: str = "") -> str:
                 p.category,
                 p.subject_name,
                 p.pics AS pics_json
-            FROM products p
+            FROM v_wb_product_source p
             WHERE p.project_id = :project_id
               AND p.nm_id IS NOT NULL
               {search_clause}
@@ -300,7 +300,7 @@ async def get_spp_dynamics_summary(
         f"""
         WITH product_scope AS (
             SELECT DISTINCT nm_id::bigint AS nm_id
-            FROM products
+            FROM v_wb_product_source
             WHERE project_id = :project_id
               AND nm_id IS NOT NULL
               {category_clause}
@@ -567,7 +567,7 @@ async def get_spp_dynamics_item_series(
                 ORDER BY f.snapshot_at DESC
                 LIMIT 1
             ) AS frontend_name
-        FROM products p
+        FROM v_wb_product_source p
         WHERE p.project_id = :project_id
           AND p.nm_id = :nm_id
         LIMIT 1

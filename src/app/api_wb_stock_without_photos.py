@@ -94,7 +94,7 @@ async def get_stock_without_photos(
         WITH
         prod_nm_ids AS (
             SELECT DISTINCT p.nm_id::bigint AS nm_id
-            FROM products p
+            FROM v_wb_product_source p
             WHERE p.project_id = :project_id
         ),
         fbo_wh_latest AS (
@@ -105,7 +105,8 @@ async def get_stock_without_photos(
                 COALESCE(s.last_change_date, s.snapshot_at) AS updated_at
             FROM supplier_stock_snapshots s
             JOIN prod_nm_ids pn ON pn.nm_id = s.nm_id
-            WHERE s.nm_id IS NOT NULL
+            WHERE s.project_id = :project_id
+              AND s.nm_id IS NOT NULL
               AND s.quantity > 0
               {warehouse_filter}
             ORDER BY s.nm_id, s.warehouse_name, COALESCE(s.last_change_date, s.snapshot_at) DESC
@@ -139,7 +140,7 @@ async def get_stock_without_photos(
             ) AS rrc,
             fa.total_qty AS wb_stock_total,
             fa.by_warehouse AS wb_stock_by_warehouse
-        FROM products p
+        FROM v_wb_product_source p
         INNER JOIN fbo_aggregated fa ON fa.nm_id = p.nm_id
         WHERE p.project_id = :project_id
           AND (
@@ -184,7 +185,7 @@ async def get_stock_without_photos(
         WITH
         prod_nm_ids AS (
             SELECT DISTINCT p.nm_id::bigint AS nm_id
-            FROM products p
+            FROM v_wb_product_source p
             WHERE p.project_id = :project_id
         ),
         fbo_wh_latest AS (
@@ -195,7 +196,8 @@ async def get_stock_without_photos(
                 COALESCE(s.last_change_date, s.snapshot_at) AS updated_at
             FROM supplier_stock_snapshots s
             JOIN prod_nm_ids pn ON pn.nm_id = s.nm_id
-            WHERE s.nm_id IS NOT NULL
+            WHERE s.project_id = :project_id
+              AND s.nm_id IS NOT NULL
               AND s.quantity > 0
               {warehouse_filter}
             ORDER BY s.nm_id, s.warehouse_name, COALESCE(s.last_change_date, s.snapshot_at) DESC
@@ -210,14 +212,14 @@ async def get_stock_without_photos(
         ),
         products_with_stock AS (
             SELECT p.nm_id::bigint AS nm_id
-            FROM products p
+            FROM v_wb_product_source p
             INNER JOIN fbo_aggregated fa ON fa.nm_id = p.nm_id
             WHERE p.project_id = :project_id
               {search_clause}
         ),
         products_without_photos AS (
             SELECT p.nm_id::bigint AS nm_id
-            FROM products p
+            FROM v_wb_product_source p
             INNER JOIN fbo_aggregated fa ON fa.nm_id = p.nm_id
             WHERE p.project_id = :project_id
               AND (

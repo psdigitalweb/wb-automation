@@ -13,6 +13,10 @@ from app.db_stocks import (
     get_latest_enterprise_stock_by_vendor_code_norm,
     get_latest_fbo_stock_totals_by_nm_id,
 )
+from app.services.product_identity import (
+    WB_PRODUCT_SOURCE_CTES,
+    resolve_marketplace_product_id,
+)
 
 
 def _clean_optional_text(value: Any) -> Optional[str]:
@@ -109,10 +113,12 @@ def get_reviews_summary(
         "has_period": period_from is not None and period_to is not None,
     }
 
-    sql = text("""
-        WITH feedback_totals AS (
+    sql = text(f"""
+        WITH {WB_PRODUCT_SOURCE_CTES},
+        feedback_totals AS (
             SELECT
                 fs.nm_id,
+                MAX(fs.marketplace_product_id) AS marketplace_product_id,
                 COUNT(*)::int AS reviews_count_total,
                 AVG(fs.product_valuation)::numeric(5,2) AS avg_rating,
                 CASE
@@ -138,9 +144,12 @@ def get_reviews_summary(
             p.vendor_code,
             p.pics
         FROM feedback_totals ft
-        LEFT JOIN products p
+        LEFT JOIN product_source p
           ON p.project_id = :project_id
-         AND p.nm_id = ft.nm_id
+         AND (
+             p.marketplace_product_id = ft.marketplace_product_id
+             OR (ft.marketplace_product_id IS NULL AND p.nm_id = ft.nm_id)
+         )
         WHERE (:nm_id IS NULL OR ft.nm_id = :nm_id)
           AND (:vendor_code_pattern IS NULL OR p.vendor_code ILIKE :vendor_code_pattern)
           AND (:wb_category IS NULL OR p.subject_name = :wb_category)
@@ -174,7 +183,10 @@ def get_reviews_summary(
 
     fbo_map: Dict[int, tuple[int, Any]] = {}
     if only_fbo_gt0:
-        fbo_map = get_latest_fbo_stock_totals_by_nm_id([item["nm_id"] for item in items])
+        fbo_map = get_latest_fbo_stock_totals_by_nm_id(
+            project_id,
+            [item["nm_id"] for item in items],
+        )
 
     enterprise_map: Dict[str, int] = {}
     if only_enterprise_gt0:
@@ -223,7 +235,10 @@ def list_reviews_by_nm_id(
         SELECT COUNT(*)::int
         FROM wb_feedback_snapshots fs
         WHERE fs.project_id = :project_id
-          AND fs.nm_id = :nm_id
+          AND (
+              fs.marketplace_product_id = :marketplace_product_id
+              OR (fs.marketplace_product_id IS NULL AND fs.nm_id = :nm_id)
+          )
           AND (
               NOT :has_period
               OR (
@@ -247,7 +262,10 @@ def list_reviews_by_nm_id(
             fs.raw
         FROM wb_feedback_snapshots fs
         WHERE fs.project_id = :project_id
-          AND fs.nm_id = :nm_id
+          AND (
+              fs.marketplace_product_id = :marketplace_product_id
+              OR (fs.marketplace_product_id IS NULL AND fs.nm_id = :nm_id)
+          )
           AND (
               NOT :has_period
               OR (
@@ -262,6 +280,12 @@ def list_reviews_by_nm_id(
     """)
 
     with engine.connect() as conn:
+        params["marketplace_product_id"] = resolve_marketplace_product_id(
+            project_id=project_id,
+            marketplace_code="wildberries",
+            marketplace_item_id=nm_id,
+            connection=conn,
+        )
         total = int(conn.execute(count_sql, params).scalar() or 0)
         rows = conn.execute(list_sql, params).mappings().all()
 

@@ -6,7 +6,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from app.db_wb_analytics import _chunked, get_wb_nm_ids_for_project, get_funnel_signals_raw
+from app.db_wb_analytics import (
+    _chunked,
+    get_funnel_signals_raw,
+    get_wb_nm_ids_for_project,
+    upsert_card_stats_daily,
+)
 
 
 def test_chunked():
@@ -66,6 +71,25 @@ def test_get_wb_nm_ids_empty():
 
         result = get_wb_nm_ids_for_project(project_id=1)
     assert result == []
+
+
+def test_card_stats_dual_write_marketplace_product_id():
+    conn = MagicMock()
+    with patch(
+        "app.db_wb_analytics.resolve_marketplace_product_ids",
+        return_value={"101": 9001},
+    ):
+        count = upsert_card_stats_daily(
+            conn,
+            project_id=1,
+            ingest_run_id=7,
+            rows=[{"nm_id": 101, "stat_date": date(2026, 7, 31)}],
+        )
+
+    sql, params = conn.execute.call_args.args
+    assert "marketplace_product_id" in str(sql)
+    assert params["marketplace_product_id"] == 9001
+    assert count == 1
 
 
 def test_get_funnel_signals_raw_opens_zero_rates_none():

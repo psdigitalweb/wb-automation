@@ -142,7 +142,7 @@ def _fetch_product_scope(session: Session, *, project_id: int, nm_id: int) -> Ma
         text(
             """
             SELECT project_id, nm_id, subject_id, subject_name, title
-            FROM products
+            FROM v_wb_product_source
             WHERE project_id = :project_id
               AND nm_id = :nm_id
             ORDER BY updated_at DESC NULLS LAST, id DESC
@@ -207,7 +207,7 @@ def list_seo_products(
                 f"""
                 {stock_cte}
                 SELECT COUNT(*)
-                FROM products p
+                FROM v_wb_product_source p
                 LEFT JOIN stock_latest stock ON stock.nm_id = p.nm_id
                 WHERE {where_sql}
                 """
@@ -232,7 +232,7 @@ def list_seo_products(
                 p.pics,
                 COALESCE(reviews.review_count, 0) AS review_count,
                 stock.total_quantity AS stock_quantity
-            FROM products p
+            FROM v_wb_product_source p
             LEFT JOIN stock_latest stock ON stock.nm_id = p.nm_id
             LEFT JOIN review_counts reviews ON reviews.nm_id = p.nm_id
             WHERE {where_sql}

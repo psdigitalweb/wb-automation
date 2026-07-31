@@ -239,7 +239,7 @@ def _fetch_product_evidence(session: Session, *, project_id: int, category_id: i
                     sizes,
                     colors,
                     dimensions
-                FROM products
+                FROM v_wb_product_source
                 WHERE project_id = :project_id
                   AND subject_id = :category_id
                 ORDER BY updated_at DESC NULLS LAST, id DESC
@@ -295,7 +295,7 @@ def _fetch_review_evidence(session: Session, *, project_id: int, category_id: in
                 """
                 SELECT fs.nm_id, fs.product_valuation AS rating, fs.raw AS raw, fs.created_date AS created_date
                 FROM wb_feedback_snapshots fs
-                JOIN products p
+                JOIN v_wb_product_source p
                   ON p.project_id = fs.project_id
                  AND p.nm_id = fs.nm_id
                 WHERE fs.project_id = :project_id

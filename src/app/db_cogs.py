@@ -766,7 +766,7 @@ def get_price_for_source(
             if nm_id is None and ident["marketplace_sku"]:
                 fallback_sql = text(
                     """
-                    SELECT nm_id FROM products
+                    SELECT nm_id FROM v_wb_product_source
                     WHERE project_id = :project_id AND vendor_code = :vc
                     LIMIT 1
                     """

@@ -172,7 +172,7 @@ async def get_project_articles_base(
         ),
         prod_nm_ids AS (
             SELECT DISTINCT p.nm_id::bigint AS nm_id
-            FROM products p
+            FROM v_wb_product_source p
             WHERE p.project_id = :project_id
         ),
         fbo_wh_latest AS (
@@ -183,7 +183,8 @@ async def get_project_articles_base(
                 COALESCE(s.last_change_date, s.snapshot_at) AS updated_at
             FROM supplier_stock_snapshots s
             JOIN prod_nm_ids pn ON pn.nm_id = s.nm_id
-            WHERE s.nm_id IS NOT NULL
+            WHERE s.project_id = :project_id
+              AND s.nm_id IS NOT NULL
             ORDER BY s.nm_id, s.warehouse_name, COALESCE(s.last_change_date, s.snapshot_at) DESC
         ),
         fbo_latest AS (
@@ -216,7 +217,7 @@ async def get_project_articles_base(
                 p.nm_id::bigint AS nm_id,
                 p.vendor_code AS vendor_code_raw,
                 p.vendor_code_norm AS vendor_code_norm
-            FROM products p
+            FROM v_wb_product_source p
             WHERE p.project_id = :project_id
               AND p.vendor_code_norm IS NOT NULL
               AND (
@@ -300,7 +301,8 @@ async def get_project_articles_base(
                 s.last_change_date
             FROM supplier_stock_snapshots s
             JOIN keys k ON k.nm_id = s.nm_id
-            WHERE s.nm_id IS NOT NULL
+            WHERE s.project_id = :project_id
+              AND s.nm_id IS NOT NULL
             ORDER BY s.nm_id, s.last_change_date DESC NULLS LAST
         ),
         front AS (
@@ -436,7 +438,7 @@ async def get_articles_base_summary(
             SELECT
                 COUNT(*)::bigint AS total_products,
                 COUNT(DISTINCT vendor_code_norm)::bigint AS total_vendor_code_norm
-            FROM products
+            FROM v_wb_product_source
             WHERE project_id = :project_id
               AND vendor_code_norm IS NOT NULL
         ),
@@ -458,9 +460,10 @@ async def get_articles_base_summary(
         fbo_stock_at AS (
             SELECT MAX(COALESCE(s.last_change_date, s.snapshot_at)) AS fbo_stock_at
             FROM supplier_stock_snapshots s
-            JOIN products p
+            JOIN v_wb_product_source p
               ON p.project_id = :project_id
              AND p.nm_id = s.nm_id
+            WHERE s.project_id = :project_id
         ),
         frontend_prices_at AS (
             SELECT MAX(f.snapshot_at) AS frontend_prices_at
@@ -497,7 +500,7 @@ async def get_articles_base_summary(
         ),
         prod_nm_ids AS (
             SELECT DISTINCT p.nm_id::bigint AS nm_id
-            FROM products p
+            FROM v_wb_product_source p
             WHERE p.project_id = :project_id
         ),
         fbo_wh_latest AS (
@@ -508,7 +511,8 @@ async def get_articles_base_summary(
                 COALESCE(s.last_change_date, s.snapshot_at) AS updated_at
             FROM supplier_stock_snapshots s
             JOIN prod_nm_ids pn ON pn.nm_id = s.nm_id
-            WHERE s.nm_id IS NOT NULL
+            WHERE s.project_id = :project_id
+              AND s.nm_id IS NOT NULL
             ORDER BY s.nm_id, s.warehouse_name, COALESCE(s.last_change_date, s.snapshot_at) DESC
         ),
         fbo_latest AS (
@@ -545,13 +549,13 @@ async def get_articles_base_summary(
         ),
         prod_codes AS (
             SELECT DISTINCT vendor_code_norm
-            FROM products
+            FROM v_wb_product_source
             WHERE project_id = :project_id
               AND vendor_code_norm IS NOT NULL
         ),
         prod_nm AS (
             SELECT DISTINCT nm_id::bigint AS nm_id
-            FROM products
+            FROM v_wb_product_source
             WHERE project_id = :project_id
         ),
         counts AS (
@@ -710,7 +714,7 @@ async def get_articles_base_coverage(
     ,
     prod_nm_ids AS (
         SELECT DISTINCT p.nm_id::bigint AS nm_id
-        FROM products p
+        FROM v_wb_product_source p
         WHERE p.project_id = :project_id
     ),
     fbo_wh_latest AS (
@@ -721,7 +725,8 @@ async def get_articles_base_coverage(
             COALESCE(s.last_change_date, s.snapshot_at) AS updated_at
         FROM supplier_stock_snapshots s
         JOIN prod_nm_ids pn ON pn.nm_id = s.nm_id
-        WHERE s.nm_id IS NOT NULL
+        WHERE s.project_id = :project_id
+          AND s.nm_id IS NOT NULL
         ORDER BY s.nm_id, s.warehouse_name, COALESCE(s.last_change_date, s.snapshot_at) DESC
     ),
     fbo_latest AS (
@@ -755,7 +760,7 @@ async def get_articles_base_coverage(
                 """
                 SELECT COUNT(*) FROM (
                   SELECT DISTINCT p.vendor_code_norm
-                  FROM products p
+                  FROM v_wb_product_source p
                   WHERE p.project_id = :project_id AND p.vendor_code_norm IS NOT NULL
                   EXCEPT
                   SELECT r.vendor_code_norm FROM rrp_latest r
@@ -768,7 +773,7 @@ async def get_articles_base_coverage(
                   p.vendor_code_norm,
                   MIN(p.vendor_code) AS vendor_code_raw_sample,
                   MIN(p.nm_id)::bigint AS nm_id_sample
-                FROM products p
+                FROM v_wb_product_source p
                 LEFT JOIN rrp_latest r ON r.vendor_code_norm = p.vendor_code_norm
                 WHERE p.project_id = :project_id
                   AND p.vendor_code_norm IS NOT NULL
@@ -787,7 +792,7 @@ async def get_articles_base_coverage(
                   FROM rrp_latest r
                   EXCEPT
                   SELECT DISTINCT p.vendor_code_norm
-                  FROM products p
+                  FROM v_wb_product_source p
                   WHERE p.project_id = :project_id AND p.vendor_code_norm IS NOT NULL
                 ) t
                 """
@@ -798,7 +803,7 @@ async def get_articles_base_coverage(
                 FROM rrp_latest r
                 LEFT JOIN (
                   SELECT DISTINCT vendor_code_norm
-                  FROM products
+                  FROM v_wb_product_source
                   WHERE project_id = :project_id AND vendor_code_norm IS NOT NULL
                 ) p ON p.vendor_code_norm = r.vendor_code_norm
                 WHERE p.vendor_code_norm IS NULL
@@ -812,7 +817,7 @@ async def get_articles_base_coverage(
                 """
                 SELECT COUNT(*) FROM (
                   SELECT DISTINCT p.nm_id::bigint AS nm_id
-                  FROM products p
+                  FROM v_wb_product_source p
                   LEFT JOIN stock_latest s ON s.nm_id = p.nm_id
                   WHERE p.project_id = :project_id
                     AND COALESCE(s.stock_wb, 0) <= 0
@@ -825,7 +830,7 @@ async def get_articles_base_coverage(
                   p.nm_id::bigint AS nm_id,
                   MIN(p.vendor_code) AS vendor_code_raw_sample,
                   MIN(p.vendor_code_norm) AS vendor_code_norm
-                FROM products p
+                FROM v_wb_product_source p
                 LEFT JOIN stock_latest s ON s.nm_id = p.nm_id
                 WHERE p.project_id = :project_id
                   AND COALESCE(s.stock_wb, 0) <= 0
@@ -840,7 +845,7 @@ async def get_articles_base_coverage(
                 """
                 SELECT COUNT(*) FROM (
                   SELECT DISTINCT p.nm_id::bigint AS nm_id
-                  FROM products p
+                  FROM v_wb_product_source p
                   LEFT JOIN fbo_latest f ON f.nm_id = p.nm_id
                   WHERE p.project_id = :project_id
                     AND COALESCE(f.fbo_stock_qty, 0) <= 0
@@ -853,7 +858,7 @@ async def get_articles_base_coverage(
                   p.nm_id::bigint AS nm_id,
                   MIN(p.vendor_code) AS vendor_code_raw_sample,
                   MIN(p.vendor_code_norm) AS vendor_code_norm
-                FROM products p
+                FROM v_wb_product_source p
                 LEFT JOIN fbo_latest f ON f.nm_id = p.nm_id
                 WHERE p.project_id = :project_id
                   AND COALESCE(f.fbo_stock_qty, 0) <= 0
@@ -868,7 +873,7 @@ async def get_articles_base_coverage(
                 """
                 SELECT COUNT(*) FROM (
                   SELECT DISTINCT p.nm_id::bigint AS nm_id
-                  FROM products p
+                  FROM v_wb_product_source p
                   WHERE p.project_id = :project_id
                   EXCEPT
                   SELECT w.nm_id FROM wb_price_latest w
@@ -881,7 +886,7 @@ async def get_articles_base_coverage(
                   p.nm_id::bigint AS nm_id,
                   MIN(p.vendor_code) AS vendor_code_raw_sample,
                   MIN(p.vendor_code_norm) AS vendor_code_norm
-                FROM products p
+                FROM v_wb_product_source p
                 LEFT JOIN wb_price_latest w ON w.nm_id = p.nm_id
                 WHERE p.project_id = :project_id
                   AND w.nm_id IS NULL
@@ -896,7 +901,7 @@ async def get_articles_base_coverage(
                 """
                 SELECT COUNT(*) FROM (
                   SELECT DISTINCT p.nm_id::bigint AS nm_id
-                  FROM products p
+                  FROM v_wb_product_source p
                   WHERE p.project_id = :project_id
                   EXCEPT
                   SELECT f.nm_id FROM front_latest f
@@ -909,7 +914,7 @@ async def get_articles_base_coverage(
                   p.nm_id::bigint AS nm_id,
                   MIN(p.vendor_code) AS vendor_code_raw_sample,
                   MIN(p.vendor_code_norm) AS vendor_code_norm
-                FROM products p
+                FROM v_wb_product_source p
                 LEFT JOIN front_latest f ON f.nm_id = p.nm_id
                 WHERE p.project_id = :project_id
                   AND f.nm_id IS NULL
@@ -924,7 +929,7 @@ async def get_articles_base_coverage(
                 """
                 SELECT COUNT(*) FROM (
                   SELECT p.vendor_code_norm
-                  FROM products p
+                  FROM v_wb_product_source p
                   WHERE p.project_id = :project_id AND p.vendor_code_norm IS NOT NULL
                   GROUP BY p.vendor_code_norm
                   HAVING COUNT(*) > 1
@@ -938,7 +943,7 @@ async def get_articles_base_coverage(
                   COUNT(*)::int AS cnt,
                   MIN(p.vendor_code) AS vendor_code_raw_sample,
                   (ARRAY_AGG(p.nm_id ORDER BY p.nm_id))[1:5] AS nm_ids_sample
-                FROM products p
+                FROM v_wb_product_source p
                 WHERE p.project_id = :project_id
                   AND p.vendor_code_norm IS NOT NULL
                 GROUP BY p.vendor_code_norm

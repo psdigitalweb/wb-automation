@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from app.services.product_identity import WB_PRODUCT_SOURCE_CTES
 from app.services.wb_financial.sku_pnl_metrics import (
     compute_unit_metrics,
     safe_div,
@@ -258,7 +259,7 @@ def list_snapshot_rows(
         where += """
           AND internal_sku IN (
             SELECT vendor_code_norm
-            FROM products
+            FROM v_wb_product_source
             WHERE project_id = :project_id
               AND vendor_code_norm IS NOT NULL
               AND subject_id = :subject_id
@@ -308,7 +309,8 @@ def list_snapshot_rows(
         "as_of_date": period_to,
     }
     sql = f"""
-            WITH base_rows AS (
+            WITH {WB_PRODUCT_SOURCE_CTES},
+            base_rows AS (
                 SELECT
                     s.internal_sku,
                     NULLIF(regexp_replace(trim(both '/' from s.internal_sku), '^.*/', ''), '') AS sku_norm,
@@ -366,10 +368,9 @@ def list_snapshot_rows(
                 SELECT
                     p.vendor_code_norm AS sku_norm,
                     MIN(p.nm_id) AS nm_id
-                FROM products p
+                FROM product_source p
                 JOIN base_skus b ON b.sku_norm = p.vendor_code_norm
-                WHERE p.project_id = :project_id
-                  AND p.nm_id IS NOT NULL
+                WHERE p.nm_id IS NOT NULL
                 GROUP BY p.vendor_code_norm
             ),
             src_for_page AS (
@@ -771,14 +772,14 @@ def list_snapshot_rows(
             rows_prod = conn.execute(
                 text(
                     f"""
+                    WITH {WB_PRODUCT_SOURCE_CTES}
                     SELECT vendor_code_norm AS internal_sku,
                            title,
                            subject_name,
                            pics,
                            raw
-                    FROM products
-                    WHERE project_id = :project_id
-                      AND vendor_code_norm IN ({placeholders})
+                    FROM product_source
+                    WHERE vendor_code_norm IN ({placeholders})
                     """
                 ),
                 p,

@@ -433,7 +433,7 @@ async def get_project_frontend_prices(
                 FROM f_page
                 LEFT JOIN wb_price_latest wb
                   ON wb.nm_id = f_page.nm_id
-                LEFT JOIN products p
+                LEFT JOIN v_wb_product_source p
                   ON p.project_id = :project_id
                  AND p.nm_id = f_page.nm_id
                 LEFT JOIN rrp_prices rrp

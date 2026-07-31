@@ -8,6 +8,7 @@ from typing import Any, Dict, List
 from sqlalchemy import text
 
 from app.db import engine
+from app.services.product_identity import WB_PRODUCT_SOURCE_CTES
 
 
 def get_sales_trends(
@@ -24,15 +25,15 @@ def get_sales_trends(
         return []
 
     query = text(
-        """
-        WITH selected_products AS (
+        f"""
+        WITH {WB_PRODUCT_SOURCE_CTES},
+        selected_products AS (
             SELECT
                 p.nm_id::bigint AS nm_id,
                 MAX(p.vendor_code) AS vendor_code,
                 MAX(p.title) AS title
-            FROM products p
-            WHERE p.project_id = :project_id
-              AND p.nm_id = ANY(:nm_ids)
+            FROM product_source p
+            WHERE p.nm_id = ANY(:nm_ids)
             GROUP BY p.nm_id
         ), dates AS (
             SELECT generate_series(

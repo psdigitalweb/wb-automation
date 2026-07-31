@@ -39,6 +39,10 @@ from app.schemas.internal_data import (
     InternalDataValidateMappingResponse,
     InternalDataRowErrorsResponse,
     InternalDataProductsResponse,
+    ProductMappingDiagnosticsResponse,
+    ProductMappingStatusUpdate,
+    ProductMappingOut,
+    ProductMappingReconcileResponse,
     InternalCategoryOut,
     InternalCategoryCreate,
     InternalCategoryUpdate,
@@ -56,6 +60,11 @@ from app.services.internal_data.service import (
     test_url_for_project,
     introspect_source_for_project,
     validate_mapping_for_project,
+)
+from app.services.product_mapping_sync import (
+    get_product_mapping_diagnostics,
+    reconcile_project_product_mappings,
+    update_product_mapping_status,
 )
 
 
@@ -482,6 +491,70 @@ async def list_internal_data_products_endpoint(
 
 
 @router.get(
+    "/projects/{project_id}/internal-data/product-mappings",
+    response_model=ProductMappingDiagnosticsResponse,
+)
+async def list_product_mappings_endpoint(
+    project_id: int = Path(..., description="Project ID"),
+    mapping_status: Optional[str] = Query(None, alias="status"),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    current_user: dict = Depends(get_current_active_user),
+    membership: dict = Depends(get_project_membership),
+):
+    """List marketplace-to-internal product mapping coverage and conflicts."""
+    try:
+        result = get_product_mapping_diagnostics(
+            project_id=project_id,
+            status=mapping_status,
+            limit=limit,
+            offset=offset,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return ProductMappingDiagnosticsResponse(**result)
+
+
+@router.post(
+    "/projects/{project_id}/internal-data/product-mappings/reconcile",
+    response_model=ProductMappingReconcileResponse,
+)
+async def reconcile_product_mappings_endpoint(
+    project_id: int = Path(..., description="Project ID"),
+    current_user: dict = Depends(get_current_active_user),
+    membership: dict = Depends(require_project_admin),
+):
+    """Rebuild safe mappings from the latest catalog and marketplace products."""
+    result = reconcile_project_product_mappings(project_id=project_id)
+    return ProductMappingReconcileResponse(**result)
+
+
+@router.patch(
+    "/projects/{project_id}/internal-data/product-mappings/{mapping_id}",
+    response_model=ProductMappingOut,
+)
+async def update_product_mapping_status_endpoint(
+    body: ProductMappingStatusUpdate,
+    project_id: int = Path(..., description="Project ID"),
+    mapping_id: int = Path(..., description="Mapping ID"),
+    current_user: dict = Depends(get_current_active_user),
+    membership: dict = Depends(require_project_admin),
+):
+    """Confirm or reject one proposed marketplace product mapping."""
+    try:
+        result = update_product_mapping_status(
+            project_id=project_id,
+            mapping_id=mapping_id,
+            status=body.status,
+        )
+    except ValueError as exc:
+        if str(exc) == "mapping_not_found":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return ProductMappingOut(**result)
+
+
+@router.get(
     "/projects/{project_id}/internal-data/categories",
     response_model=InternalCategoryListOut,
 )
@@ -679,4 +752,3 @@ async def set_internal_product_category_endpoint(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         ) from e
-

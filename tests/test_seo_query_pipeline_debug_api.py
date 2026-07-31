@@ -57,6 +57,7 @@ def _build_client() -> tuple[TestClient, sessionmaker]:
                 """
             )
         )
+        session.execute(text("CREATE VIEW v_wb_product_source AS SELECT *, NULL AS marketplace_product_id FROM products"))
         session.execute(
             text(
                 """

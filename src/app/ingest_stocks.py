@@ -13,6 +13,7 @@ from app.db import engine
 from app.wb.client import WBClient
 from app import db_products
 from app.deps import get_current_active_user, get_project_membership
+from app.services.product_identity import resolve_marketplace_product_ids
 from app.utils.get_project_marketplace_token import get_wb_credentials_for_project
 
 router = APIRouter(prefix="/api/v1/ingest", tags=["ingest"])
@@ -159,8 +160,8 @@ async def ingest_stocks(project_id: int, run_id: int | None = None) -> Dict[str,
 
     insert_sql = text(
         """
-        INSERT INTO stock_snapshots (nm_id, warehouse_wb_id, quantity, snapshot_at, raw, project_id)
-        VALUES (:nm_id, :warehouse_wb_id, :quantity, :snapshot_at, :raw, :project_id)
+        INSERT INTO stock_snapshots (marketplace_product_id, nm_id, warehouse_wb_id, quantity, snapshot_at, raw, project_id)
+        VALUES (:marketplace_product_id, :nm_id, :warehouse_wb_id, :quantity, :snapshot_at, :raw, :project_id)
         """
     )
 
@@ -297,6 +298,14 @@ async def ingest_stocks(project_id: int, run_id: int | None = None) -> Dict[str,
 
             if rows:
                 with engine.begin() as conn:
+                    product_ids = resolve_marketplace_product_ids(
+                        project_id=project_id,
+                        marketplace_code="wildberries",
+                        marketplace_item_ids=(row["nm_id"] for row in rows),
+                        connection=conn,
+                    )
+                    for row in rows:
+                        row["marketplace_product_id"] = product_ids.get(str(row["nm_id"]))
                     conn.execute(insert_sql, rows)
                     total_inserted += len(rows)
 

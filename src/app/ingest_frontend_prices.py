@@ -19,6 +19,7 @@ from app.services.wb_current import (
     compute_hour_bucket_utc,
     upsert_wb_current_metrics_on_conn,
 )
+from app.services.product_identity import resolve_marketplace_product_ids
 from app import settings
 from app.wb.catalog_client import CatalogClient
 
@@ -1069,6 +1070,12 @@ async def ingest_frontend_brand_prices(
 
                     # Load seller-discounted customer prices and calculate pure WB extra discount.
                     customer_price_by_nm: Dict[int, Decimal] = {}
+                    product_ids = resolve_marketplace_product_ids(
+                        project_id=project_id,
+                        marketplace_code="wildberries",
+                        marketplace_item_ids=nm_ids,
+                        connection=conn,
+                    )
                     if nm_ids:
                         customer_price_sql = text(
                             """
@@ -1137,6 +1144,7 @@ async def ingest_frontend_brand_prices(
                         spp_events.append(
                             {
                                 "project_id": project_id,
+                                "marketplace_product_id": product_ids.get(str(nm)),
                                 "nm_id": nm,
                                 "prev_spp_percent": old_spp,
                                 "spp_percent": new_spp,
@@ -1150,6 +1158,7 @@ async def ingest_frontend_brand_prices(
                             """
                             INSERT INTO wb_spp_events (
                                 project_id,
+                                marketplace_product_id,
                                 nm_id,
                                 prev_spp_percent,
                                 spp_percent,
@@ -1158,6 +1167,7 @@ async def ingest_frontend_brand_prices(
                             )
                             VALUES (
                                 :project_id,
+                                :marketplace_product_id,
                                 :nm_id,
                                 :prev_spp_percent,
                                 :spp_percent,
@@ -1183,6 +1193,7 @@ async def ingest_frontend_brand_prices(
                             """
                             INSERT INTO wb_showcase_price_snapshots (
                                 project_id,
+                                marketplace_product_id,
                                 nm_id,
                                 price_showcase,
                                 spp_percent,
@@ -1191,6 +1202,7 @@ async def ingest_frontend_brand_prices(
                             )
                             VALUES (
                                 :project_id,
+                                :marketplace_product_id,
                                 :nm_id,
                                 :price_showcase,
                                 :spp_percent,
@@ -1205,6 +1217,7 @@ async def ingest_frontend_brand_prices(
                         snapshots_with_run = [
                             {
                                 **row_snap,
+                                "marketplace_product_id": product_ids.get(str(row_snap["nm_id"])),
                                 "ingest_run_id": run_id,
                             }
                             for row_snap in snapshots_rows

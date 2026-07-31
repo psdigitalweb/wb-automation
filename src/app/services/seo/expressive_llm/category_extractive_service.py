@@ -217,7 +217,7 @@ def _fetch_titles_for_nm_ids(session: Session, *, project_id: int, nm_ids: Seque
         text(
         """
         SELECT p.title
-        FROM products p
+        FROM v_wb_product_source p
         WHERE p.project_id = :project_id
           AND p.nm_id IN :nm_ids
           AND p.title IS NOT NULL

@@ -12,6 +12,7 @@ from sqlalchemy import text
 from app.db import engine
 from app.wb.client import WBClient
 from app.deps import get_current_active_user, get_project_membership
+from app.services.product_identity import resolve_marketplace_product_ids
 
 router = APIRouter(prefix="/api/v1/ingest", tags=["ingest"])
 
@@ -87,13 +88,13 @@ async def ingest_prices(project_id: int, run_id: int | None = None) -> Dict[str,
     # Prepare insert SQL (explicit created_at for consistent KPI snapshots)
     if has_raw_column:
         insert_sql = text("""
-            INSERT INTO price_snapshots (nm_id, wb_price, wb_discount, spp, customer_price, rrc, raw, project_id, created_at)
-            VALUES (:nm_id, :wb_price, :wb_discount, :spp, :customer_price, :rrc, CAST(:raw AS jsonb), :project_id, :created_at)
+            INSERT INTO price_snapshots (marketplace_product_id, nm_id, wb_price, wb_discount, spp, customer_price, rrc, raw, project_id, created_at)
+            VALUES (:marketplace_product_id, :nm_id, :wb_price, :wb_discount, :spp, :customer_price, :rrc, CAST(:raw AS jsonb), :project_id, :created_at)
         """)
     else:
         insert_sql = text("""
-            INSERT INTO price_snapshots (nm_id, wb_price, wb_discount, spp, customer_price, rrc, project_id, created_at)
-            VALUES (:nm_id, :wb_price, :wb_discount, :spp, :customer_price, :rrc, :project_id, :created_at)
+            INSERT INTO price_snapshots (marketplace_product_id, nm_id, wb_price, wb_discount, spp, customer_price, rrc, project_id, created_at)
+            VALUES (:marketplace_product_id, :nm_id, :wb_price, :wb_discount, :spp, :customer_price, :rrc, :project_id, :created_at)
         """)
 
     client = WBClient(token=token)
@@ -203,6 +204,14 @@ async def ingest_prices(project_id: int, run_id: int | None = None) -> Dict[str,
         # Insert batch
         if rows:
             with engine.begin() as conn:
+                product_ids = resolve_marketplace_product_ids(
+                    project_id=project_id,
+                    marketplace_code="wildberries",
+                    marketplace_item_ids=(row["nm_id"] for row in rows),
+                    connection=conn,
+                )
+                for row in rows:
+                    row["marketplace_product_id"] = product_ids.get(str(row["nm_id"]))
                 conn.execute(insert_sql, rows)
             total_inserted += len(rows)
             print(f"ingest_prices: inserted {len(rows)} price snapshots (total: {total_inserted})")

@@ -9,6 +9,7 @@ from typing import Any
 from sqlalchemy import text
 
 from app.db import engine
+from app.services.product_identity import resolve_marketplace_product_ids
 from app.services.wb_funnel_report_parser import ParsedWBFunnelReport
 
 
@@ -69,15 +70,21 @@ def import_funnel_report(
                 "created_by_user_id": created_by_user_id,
             },
         ).scalar_one()
+        identities = resolve_marketplace_product_ids(
+            project_id=project_id,
+            marketplace_code="wildberries",
+            marketplace_item_ids=(row.nm_id for row in report.rows),
+            connection=conn,
+        )
 
         raw_sql = text(
             """
             INSERT INTO wb_funnel_report_rows (
-                import_id, project_id, row_number, nm_id, stat_date, vendor_code,
+                import_id, project_id, row_number, nm_id, marketplace_product_id, stat_date, vendor_code,
                 product_name, is_deleted, impressions, card_clicks, reported_ctr,
                 quality_status, quality_flags, source_payload
             ) VALUES (
-                :import_id, :project_id, :row_number, :nm_id, :stat_date, :vendor_code,
+                :import_id, :project_id, :row_number, :nm_id, :marketplace_product_id, :stat_date, :vendor_code,
                 :product_name, :is_deleted, :impressions, :card_clicks, :reported_ctr,
                 :quality_status, :quality_flags, CAST(:source_payload AS jsonb)
             )
@@ -86,13 +93,14 @@ def import_funnel_report(
         canonical_sql = text(
             """
             INSERT INTO wb_funnel_ctr_daily (
-                project_id, nm_id, stat_date, impressions, card_clicks, reported_ctr,
+                project_id, nm_id, marketplace_product_id, stat_date, impressions, card_clicks, reported_ctr,
                 is_deleted, quality_status, quality_flags, last_import_id
             ) VALUES (
-                :project_id, :nm_id, :stat_date, :impressions, :card_clicks, :reported_ctr,
+                :project_id, :nm_id, :marketplace_product_id, :stat_date, :impressions, :card_clicks, :reported_ctr,
                 :is_deleted, :quality_status, :quality_flags, :import_id
             )
             ON CONFLICT (project_id, nm_id, stat_date) DO UPDATE SET
+                marketplace_product_id = EXCLUDED.marketplace_product_id,
                 impressions = EXCLUDED.impressions,
                 card_clicks = EXCLUDED.card_clicks,
                 reported_ctr = EXCLUDED.reported_ctr,
@@ -110,6 +118,7 @@ def import_funnel_report(
                 "project_id": project_id,
                 "row_number": row.row_number,
                 "nm_id": row.nm_id,
+                "marketplace_product_id": identities.get(str(row.nm_id)),
                 "stat_date": row.stat_date,
                 "vendor_code": row.vendor_code,
                 "product_name": row.product_name,

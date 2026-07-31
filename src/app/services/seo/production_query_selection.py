@@ -99,7 +99,7 @@ def _product_block(session: Session, *, project_id: int, nm_id: int) -> SeoProdu
         text(
             """
             SELECT nm_id, subject_name, title, description, dimensions, characteristics
-            FROM products
+            FROM v_wb_product_source
             WHERE project_id = :project_id
               AND nm_id = :nm_id
             ORDER BY updated_at DESC NULLS LAST, id DESC

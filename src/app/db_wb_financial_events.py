@@ -28,6 +28,7 @@ def upsert_event(
     currency: str,
     source_field: str,
     payload_hash: str,
+    marketplace_product_id: Optional[int] = None,
 ) -> bool:
     """Upsert event. Returns True if inserted, False if updated."""
     now = datetime.utcnow()
@@ -38,13 +39,13 @@ def upsert_event(
                     INSERT INTO wb_financial_events (
                         project_id, marketplace_code, report_id, line_id, line_uid_surrogate,
                         event_date, event_date_quality, period_from, period_to,
-                        nm_id, vendor_code, internal_sku, event_type, scope,
+                        nm_id, marketplace_product_id, vendor_code, internal_sku, event_type, scope,
                         amount, currency, source_field, payload_hash,
                         created_at, updated_at
                     ) VALUES (
                         :project_id, 'wildberries', :report_id, :line_id, NULL,
                         :event_date, :event_date_quality, :period_from, :period_to,
-                        :nm_id, :vendor_code, :internal_sku, :event_type, :scope,
+                        :nm_id, :marketplace_product_id, :vendor_code, :internal_sku, :event_type, :scope,
                         :amount, :currency, :source_field, :payload_hash,
                         :now, :now
                     )
@@ -55,6 +56,7 @@ def upsert_event(
                         payload_hash = EXCLUDED.payload_hash,
                         event_date = EXCLUDED.event_date,
                         event_date_quality = EXCLUDED.event_date_quality,
+                        marketplace_product_id = EXCLUDED.marketplace_product_id,
                         internal_sku = EXCLUDED.internal_sku,
                         updated_at = EXCLUDED.updated_at
                 """),
@@ -67,6 +69,7 @@ def upsert_event(
                     "period_from": period_from,
                     "period_to": period_to,
                     "nm_id": nm_id,
+                    "marketplace_product_id": marketplace_product_id,
                     "vendor_code": vendor_code,
                     "internal_sku": internal_sku,
                     "event_type": event_type,
@@ -86,13 +89,13 @@ def upsert_event(
                     INSERT INTO wb_financial_events (
                         project_id, marketplace_code, report_id, line_id, line_uid_surrogate,
                         event_date, event_date_quality, period_from, period_to,
-                        nm_id, vendor_code, internal_sku, event_type, scope,
+                        nm_id, marketplace_product_id, vendor_code, internal_sku, event_type, scope,
                         amount, currency, source_field, payload_hash,
                         created_at, updated_at
                     ) VALUES (
                         :project_id, 'wildberries', :report_id, NULL, :line_uid_surrogate,
                         :event_date, :event_date_quality, :period_from, :period_to,
-                        :nm_id, :vendor_code, :internal_sku, :event_type, :scope,
+                        :nm_id, :marketplace_product_id, :vendor_code, :internal_sku, :event_type, :scope,
                         :amount, :currency, :source_field, :payload_hash,
                         :now, :now
                     )
@@ -103,6 +106,7 @@ def upsert_event(
                         payload_hash = EXCLUDED.payload_hash,
                         event_date = EXCLUDED.event_date,
                         event_date_quality = EXCLUDED.event_date_quality,
+                        marketplace_product_id = EXCLUDED.marketplace_product_id,
                         internal_sku = EXCLUDED.internal_sku,
                         updated_at = EXCLUDED.updated_at
                 """),
@@ -115,6 +119,7 @@ def upsert_event(
                     "period_from": period_from,
                     "period_to": period_to,
                     "nm_id": nm_id,
+                    "marketplace_product_id": marketplace_product_id,
                     "vendor_code": vendor_code,
                     "internal_sku": internal_sku,
                     "event_type": event_type,

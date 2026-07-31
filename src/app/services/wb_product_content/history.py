@@ -18,6 +18,7 @@ from app.services.wb_product_content.normalization import (
     normalize_wb_card_content,
     parse_card_payload,
 )
+from app.services.product_identity import resolve_marketplace_product_id
 
 
 def history_enabled_for_project(project_id: int) -> bool:
@@ -155,6 +156,12 @@ def persist_product_content(
     params = _product_params(row, project_id)
 
     with engine.begin() as conn:
+        marketplace_product_id = resolve_marketplace_product_id(
+            project_id=project_id,
+            marketplace_code="wildberries",
+            marketplace_item_id=nm_id,
+            connection=conn,
+        )
         conn.execute(
             text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
             {"lock_key": f"wb-product-content:{int(project_id)}:{nm_id}"},
@@ -190,12 +197,16 @@ def persist_product_content(
                     SELECT content_snapshot
                     FROM wb_product_content_versions
                     WHERE project_id = :project_id
-                      AND nm_id = :nm_id
+                      AND (
+                          marketplace_product_id = :marketplace_product_id
+                          OR (marketplace_product_id IS NULL AND nm_id = :nm_id)
+                      )
                       AND version_no = :version_no
                     """
                 ),
                 {
                     "project_id": int(project_id),
+                    "marketplace_product_id": marketplace_product_id,
                     "nm_id": nm_id,
                     "version_no": old_version,
                 },
@@ -226,11 +237,13 @@ def persist_product_content(
                 text(
                     """
                     INSERT INTO wb_product_content_versions (
-                        project_id, nm_id, version_no, event_type, content_hash,
+                        project_id, marketplace_product_id, nm_id,
+                        version_no, event_type, content_hash,
                         normalization_version, content_snapshot, changed_fields,
                         change_types, observed_at, source_updated_at, ingest_run_id
                     ) VALUES (
-                        :project_id, :nm_id, :version_no, :event_type, :content_hash,
+                        :project_id, :marketplace_product_id, :nm_id,
+                        :version_no, :event_type, :content_hash,
                         :normalization_version, CAST(:content_snapshot AS jsonb),
                         CAST(:changed_fields AS jsonb), CAST(:change_types AS jsonb),
                         :observed_at, :source_updated_at, :ingest_run_id
@@ -240,6 +253,7 @@ def persist_product_content(
                 ),
                 {
                     "project_id": int(project_id),
+                    "marketplace_product_id": marketplace_product_id,
                     "nm_id": nm_id,
                     "version_no": version_no,
                     "event_type": "initial" if old_version == 0 else "changed",
@@ -260,10 +274,12 @@ def persist_product_content(
                 text(
                     """
                     INSERT INTO wb_product_main_photo_assets (
-                        project_id, nm_id, sha256, storage_path, source_url,
+                        project_id, marketplace_product_id, nm_id,
+                        sha256, storage_path, source_url,
                         content_type, file_size, downloaded_at
                     ) VALUES (
-                        :project_id, :nm_id, :sha256, :storage_path, :source_url,
+                        :project_id, :marketplace_product_id, :nm_id,
+                        :sha256, :storage_path, :source_url,
                         :content_type, :file_size, :downloaded_at
                     )
                     ON CONFLICT (project_id, nm_id, sha256) DO UPDATE SET
@@ -273,6 +289,7 @@ def persist_product_content(
                 ),
                 {
                     "project_id": int(project_id),
+                    "marketplace_product_id": marketplace_product_id,
                     "nm_id": nm_id,
                     "sha256": photo_attempt["sha256"],
                     "storage_path": photo_attempt["storage_path"],
@@ -291,12 +308,19 @@ def persist_product_content(
                        (SELECT sha256 FROM wb_product_main_photo_assets a WHERE a.id = p.asset_id) AS asset_hash
                 FROM wb_product_main_photo_periods p
                 WHERE project_id = :project_id
-                  AND nm_id = :nm_id
+                  AND (
+                      marketplace_product_id = :marketplace_product_id
+                      OR (marketplace_product_id IS NULL AND nm_id = :nm_id)
+                  )
                   AND observed_to IS NULL
                 FOR UPDATE
                 """
             ),
-            {"project_id": int(project_id), "nm_id": nm_id},
+            {
+                "project_id": int(project_id),
+                "marketplace_product_id": marketplace_product_id,
+                "nm_id": nm_id,
+            },
         ).mappings().first()
         effective_asset_hash = photo_attempt.get("sha256") if photo_attempt else None
         rotate_period = bool(
@@ -343,11 +367,13 @@ def persist_product_content(
                 text(
                     """
                     INSERT INTO wb_product_main_photo_periods (
-                        project_id, nm_id, content_version_id, asset_id, source_url,
+                        project_id, marketplace_product_id, nm_id,
+                        content_version_id, asset_id, source_url,
                         observed_from, source_updated_at, ingest_run_id,
                         archive_status, archive_error, updated_at
                     ) VALUES (
-                        :project_id, :nm_id, :content_version_id, :asset_id, :source_url,
+                        :project_id, :marketplace_product_id, :nm_id,
+                        :content_version_id, :asset_id, :source_url,
                         :observed_from, :source_updated_at, :ingest_run_id,
                         :archive_status, :archive_error, :observed_from
                     )
@@ -355,6 +381,7 @@ def persist_product_content(
                 ),
                 {
                     "project_id": int(project_id),
+                    "marketplace_product_id": marketplace_product_id,
                     "nm_id": nm_id,
                     "content_version_id": version_id,
                     "asset_id": asset_id,
@@ -401,6 +428,7 @@ def persist_product_content(
 
     return {
         "nm_id": nm_id,
+        "marketplace_product_id": marketplace_product_id,
         "initial": changed and old_version == 0,
         "changed": changed,
         "version_no": version_no,

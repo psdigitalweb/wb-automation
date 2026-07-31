@@ -74,6 +74,7 @@ def test_meaning_extraction_debug_endpoint_returns_three_meaning_objects_and_fla
                 """
             )
         )
+        session.execute(text("CREATE VIEW v_wb_product_source AS SELECT *, NULL AS marketplace_product_id FROM products"))
         session.execute(
             text(
                 """

@@ -148,6 +148,61 @@ class InternalDataProductsResponse(BaseModel):
     items: List[InternalDataProductItem]
 
 
+class ProductMappingDiagnosticsItem(BaseModel):
+    marketplace_product_id: int
+    marketplace_code: str
+    marketplace_item_id: str
+    marketplace_sku: Optional[str] = None
+    title: Optional[str] = None
+    mapping_id: Optional[int] = None
+    internal_catalog_product_id: Optional[int] = None
+    internal_sku: Optional[str] = None
+    mapping_source: Optional[str] = None
+    mapping_status: Optional[str] = None
+    confidence: Optional[float] = None
+    candidate_internal_skus: Optional[List[str]] = None
+    effective_status: str
+
+
+class ProductMappingDiagnosticsResponse(BaseModel):
+    project_id: int
+    internal_catalog_products: int
+    total_marketplace_products: int
+    confirmed: int
+    proposed: int
+    rejected: int
+    conflict: int
+    unmatched: int
+    items: List[ProductMappingDiagnosticsItem]
+    limit: int
+    offset: int
+
+
+class ProductMappingStatusUpdate(BaseModel):
+    status: str = Field(..., pattern="^(confirmed|rejected)$")
+
+
+class ProductMappingOut(BaseModel):
+    id: int
+    project_id: int
+    marketplace_product_id: int
+    internal_catalog_product_id: int
+    mapping_source: str
+    mapping_status: str
+    confidence: Optional[float] = None
+    metadata: Optional[Dict[str, Any]] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ProductMappingReconcileResponse(BaseModel):
+    status: str
+    snapshot_id: Optional[int] = None
+    catalog_products_upserted: int
+    confirmed_mappings_upserted: int
+    proposed_mappings_created: int
+
+
 class InternalDataSourceField(BaseModel):
     key: str = Field(..., description="Stable key for the field (e.g. header or '@attribute').")
     label: str = Field(..., description="Human-readable label for the field.")

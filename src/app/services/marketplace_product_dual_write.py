@@ -106,6 +106,217 @@ def mirror_wb_products(*, project_id: int, rows: Iterable[Dict[str, Any]]) -> Di
                 "nm_ids": nm_ids,
             },
         )
+        conn.execute(
+            text(
+                """
+                WITH identities AS (
+                    SELECT mp.id, mp.project_id, mp.marketplace_item_id
+                    FROM marketplace_products mp
+                    WHERE mp.project_marketplace_id = :connection_id
+                      AND mp.marketplace_item_id = ANY(:marketplace_item_ids)
+                ),
+                linked_feedback AS (
+                    UPDATE wb_feedback_snapshots fact
+                    SET marketplace_product_id = identity.id
+                    FROM identities identity
+                    WHERE fact.project_id = identity.project_id
+                      AND fact.nm_id::text = identity.marketplace_item_id
+                      AND fact.marketplace_product_id IS DISTINCT FROM identity.id
+                    RETURNING fact.id
+                ),
+                linked_content AS (
+                    UPDATE wb_product_content_versions fact
+                    SET marketplace_product_id = identity.id
+                    FROM identities identity
+                    WHERE fact.project_id = identity.project_id
+                      AND fact.nm_id::text = identity.marketplace_item_id
+                      AND fact.marketplace_product_id IS DISTINCT FROM identity.id
+                    RETURNING fact.id
+                ),
+                linked_assets AS (
+                    UPDATE wb_product_main_photo_assets fact
+                    SET marketplace_product_id = identity.id
+                    FROM identities identity
+                    WHERE fact.project_id = identity.project_id
+                      AND fact.nm_id::text = identity.marketplace_item_id
+                      AND fact.marketplace_product_id IS DISTINCT FROM identity.id
+                    RETURNING fact.id
+                ),
+                linked_prices AS (
+                    UPDATE price_snapshots fact
+                    SET marketplace_product_id = identity.id
+                    FROM identities identity
+                    WHERE fact.project_id = identity.project_id
+                      AND fact.nm_id::text = identity.marketplace_item_id
+                      AND fact.marketplace_product_id IS DISTINCT FROM identity.id
+                    RETURNING fact.id
+                ),
+                linked_stocks AS (
+                    UPDATE stock_snapshots fact
+                    SET marketplace_product_id = identity.id
+                    FROM identities identity
+                    WHERE fact.project_id = identity.project_id
+                      AND fact.nm_id::text = identity.marketplace_item_id
+                      AND fact.marketplace_product_id IS DISTINCT FROM identity.id
+                    RETURNING fact.id
+                ),
+                linked_supplier_stocks AS (
+                    UPDATE supplier_stock_snapshots fact
+                    SET marketplace_product_id = identity.id
+                    FROM identities identity
+                    WHERE fact.project_id = identity.project_id
+                      AND fact.nm_id::text = identity.marketplace_item_id
+                      AND fact.marketplace_product_id IS DISTINCT FROM identity.id
+                    RETURNING fact.id
+                ),
+                linked_current AS (
+                    UPDATE wb_current_metrics fact
+                    SET marketplace_product_id = identity.id
+                    FROM identities identity
+                    WHERE fact.project_id = identity.project_id
+                      AND fact.nm_id::text = identity.marketplace_item_id
+                      AND fact.marketplace_product_id IS DISTINCT FROM identity.id
+                    RETURNING fact.id
+                ),
+                linked_presence AS (
+                    UPDATE wb_showcase_product_presence fact
+                    SET marketplace_product_id = identity.id
+                    FROM identities identity
+                    WHERE fact.project_id = identity.project_id
+                      AND fact.nm_id::text = identity.marketplace_item_id
+                      AND fact.marketplace_product_id IS DISTINCT FROM identity.id
+                    RETURNING fact.nm_id
+                ),
+                linked_showcase_prices AS (
+                    UPDATE wb_showcase_price_snapshots fact
+                    SET marketplace_product_id = identity.id
+                    FROM identities identity
+                    WHERE fact.project_id = identity.project_id
+                      AND fact.nm_id::text = identity.marketplace_item_id
+                      AND fact.marketplace_product_id IS DISTINCT FROM identity.id
+                    RETURNING fact.id
+                ),
+                linked_fbo_daily AS (
+                    UPDATE wb_fbo_stock_daily_snapshots fact
+                    SET marketplace_product_id = identity.id
+                    FROM identities identity
+                    WHERE fact.project_id = identity.project_id
+                      AND fact.nm_id::text = identity.marketplace_item_id
+                      AND fact.marketplace_product_id IS DISTINCT FROM identity.id
+                    RETURNING fact.id
+                ),
+                linked_spp AS (
+                    UPDATE wb_spp_events fact
+                    SET marketplace_product_id = identity.id
+                    FROM identities identity
+                    WHERE fact.project_id = identity.project_id
+                      AND fact.nm_id::text = identity.marketplace_item_id
+                      AND fact.marketplace_product_id IS DISTINCT FROM identity.id
+                    RETURNING fact.id
+                ),
+                linked_card_stats AS (
+                    UPDATE wb_card_stats_daily fact SET marketplace_product_id = identity.id
+                    FROM identities identity
+                    WHERE fact.project_id = identity.project_id
+                      AND fact.nm_id::text = identity.marketplace_item_id
+                      AND fact.marketplace_product_id IS DISTINCT FROM identity.id
+                    RETURNING fact.id
+                ),
+                linked_search_terms AS (
+                    UPDATE wb_search_query_terms fact SET marketplace_product_id = identity.id
+                    FROM identities identity
+                    WHERE fact.project_id = identity.project_id
+                      AND fact.nm_id::text = identity.marketplace_item_id
+                      AND fact.marketplace_product_id IS DISTINCT FROM identity.id
+                    RETURNING fact.id
+                ),
+                linked_search_daily AS (
+                    UPDATE wb_search_query_daily fact SET marketplace_product_id = identity.id
+                    FROM identities identity
+                    WHERE fact.project_id = identity.project_id
+                      AND fact.nm_id::text = identity.marketplace_item_id
+                      AND fact.marketplace_product_id IS DISTINCT FROM identity.id
+                    RETURNING fact.id
+                ),
+                linked_funnel_rows AS (
+                    UPDATE wb_funnel_report_rows fact SET marketplace_product_id = identity.id
+                    FROM identities identity
+                    WHERE fact.project_id = identity.project_id
+                      AND fact.nm_id::text = identity.marketplace_item_id
+                      AND fact.marketplace_product_id IS DISTINCT FROM identity.id
+                    RETURNING fact.id
+                ),
+                linked_funnel_ctr AS (
+                    UPDATE wb_funnel_ctr_daily fact SET marketplace_product_id = identity.id
+                    FROM identities identity
+                    WHERE fact.project_id = identity.project_id
+                      AND fact.nm_id::text = identity.marketplace_item_id
+                      AND fact.marketplace_product_id IS DISTINCT FROM identity.id
+                    RETURNING fact.id
+                ),
+                linked_search_products AS (
+                    UPDATE wb_search_report_products fact SET marketplace_product_id = identity.id
+                    FROM identities identity
+                    WHERE fact.project_id = identity.project_id
+                      AND fact.nm_id::text = identity.marketplace_item_id
+                      AND fact.marketplace_product_id IS DISTINCT FROM identity.id
+                    RETURNING fact.id
+                ),
+                linked_search_keywords AS (
+                    UPDATE wb_search_report_keywords_cache fact SET marketplace_product_id = identity.id
+                    FROM identities identity
+                    WHERE fact.project_id = identity.project_id
+                      AND fact.nm_id::text = identity.marketplace_item_id
+                      AND fact.marketplace_product_id IS DISTINCT FROM identity.id
+                    RETURNING fact.id
+                ),
+                linked_financial_events AS (
+                    UPDATE wb_financial_events fact
+                    SET marketplace_product_id = identity.id
+                    FROM identities identity
+                    WHERE fact.project_id = identity.project_id
+                      AND fact.nm_id::text = identity.marketplace_item_id
+                      AND fact.marketplace_product_id IS DISTINCT FROM identity.id
+                    RETURNING fact.id
+                ),
+                linked_additional_costs AS (
+                    UPDATE additional_cost_entries fact
+                    SET marketplace_product_id = identity.id
+                    FROM identities identity
+                    WHERE fact.project_id = identity.project_id
+                      AND fact.scope = 'product'
+                      AND lower(COALESCE(fact.marketplace_code, 'wildberries')) = 'wildberries'
+                      AND COALESCE(fact.marketplace_item_id, fact.nm_id::text) = identity.marketplace_item_id
+                      AND fact.marketplace_product_id IS DISTINCT FROM identity.id
+                    RETURNING fact.id
+                )
+                UPDATE wb_product_main_photo_periods fact
+                SET marketplace_product_id = identity.id
+                FROM identities identity
+                WHERE fact.project_id = identity.project_id
+                  AND fact.nm_id::text = identity.marketplace_item_id
+                  AND fact.marketplace_product_id IS DISTINCT FROM identity.id
+                """
+            ),
+            {
+                "connection_id": int(connection["connection_id"]),
+                "marketplace_item_ids": [str(nm_id) for nm_id in nm_ids],
+            },
+        )
+        try:
+            from app.services.product_mapping_sync import reconcile_project_product_mappings
+
+            with conn.begin_nested():
+                reconcile_project_product_mappings(
+                    project_id=project_id,
+                    connection=conn,
+                )
+        except Exception:
+            logger.exception(
+                "Product mapping reconciliation failed after WB mirror; marketplace products remain valid "
+                "project_id=%s",
+                int(project_id),
+            )
     return {
         "status": "ok",
         "rows_requested": len(nm_ids),

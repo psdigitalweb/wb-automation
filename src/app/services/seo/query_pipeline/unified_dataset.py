@@ -268,7 +268,7 @@ def _load_wb_terms_rows(session: Session, *, project_id: int, category_id: int) 
                 t.created_at,
                 t.updated_at
             FROM wb_search_query_terms t
-            JOIN products p
+            JOIN v_wb_product_source p
               ON p.project_id = t.project_id
              AND p.nm_id = t.nm_id
             WHERE t.project_id = :project_id
@@ -303,7 +303,7 @@ def _load_wb_daily_rows(session: Session, *, project_id: int, category_id: int) 
                 d.created_at,
                 d.updated_at
             FROM wb_search_query_daily d
-            JOIN products p
+            JOIN v_wb_product_source p
               ON p.project_id = d.project_id
              AND p.nm_id = d.nm_id
             WHERE d.project_id = :project_id

@@ -11,6 +11,7 @@ from typing import Any
 from sqlalchemy import text
 
 from app.db import engine
+from app.services.product_identity import WB_PRODUCT_SOURCE_CTES
 
 
 MAX_REVIEWS_SENT = 300
@@ -23,6 +24,7 @@ _PHONE_RE = re.compile(r"(?<!\d)(?:\+?7|8)[\s()\-]*\d{3}[\s()\-]*\d{3}[\s\-]*\d{
 @dataclass(frozen=True)
 class ReviewOpinionInput:
     project_id: int
+    marketplace_product_id: int | None
     nm_id: int
     product_title: str
     reviews_total: int
@@ -68,9 +70,10 @@ def build_review_opinion_input(project_id: int, nm_id: int) -> ReviewOpinionInpu
     """Read only written reviews and build an anonymized stable payload."""
 
     product_sql = text(
-        """
-        SELECT title
-        FROM products
+        f"""
+        WITH {WB_PRODUCT_SOURCE_CTES}
+        SELECT marketplace_product_id, title
+        FROM product_source
         WHERE project_id = :project_id AND nm_id = :nm_id
         LIMIT 1
         """
@@ -88,7 +91,11 @@ def build_review_opinion_input(project_id: int, nm_id: int) -> ReviewOpinionInpu
                 )), '') IS NOT NULL
             )::int AS reviews_with_text
         FROM wb_feedback_snapshots
-        WHERE project_id = :project_id AND nm_id = :nm_id
+        WHERE project_id = :project_id
+          AND (
+              marketplace_product_id = :marketplace_product_id
+              OR (marketplace_product_id IS NULL AND nm_id = :nm_id)
+          )
         """
     )
     reviews_sql = text(
@@ -102,7 +109,10 @@ def build_review_opinion_input(project_id: int, nm_id: int) -> ReviewOpinionInpu
             raw->>'cons' AS cons
         FROM wb_feedback_snapshots
         WHERE project_id = :project_id
-          AND nm_id = :nm_id
+          AND (
+              marketplace_product_id = :marketplace_product_id
+              OR (marketplace_product_id IS NULL AND nm_id = :nm_id)
+          )
           AND NULLIF(BTRIM(CONCAT_WS(
                 ' ',
                 COALESCE(raw->>'text', ''),
@@ -117,6 +127,7 @@ def build_review_opinion_input(project_id: int, nm_id: int) -> ReviewOpinionInpu
         product_row = conn.execute(product_sql, params).mappings().first()
         if product_row is None:
             raise LookupError("product_not_found")
+        params["marketplace_product_id"] = product_row.get("marketplace_product_id")
         counts = conn.execute(counts_sql, params).mappings().one()
         raw_rows = [dict(row) for row in conn.execute(reviews_sql, params).mappings().all()]
 
@@ -184,6 +195,11 @@ def build_review_opinion_input(project_id: int, nm_id: int) -> ReviewOpinionInpu
     ).hexdigest()
     return ReviewOpinionInput(
         project_id=int(project_id),
+        marketplace_product_id=(
+            int(product_row["marketplace_product_id"])
+            if product_row.get("marketplace_product_id") is not None
+            else None
+        ),
         nm_id=int(nm_id),
         product_title=str(product_row.get("title") or ""),
         reviews_total=int(counts["reviews_total"] or 0),

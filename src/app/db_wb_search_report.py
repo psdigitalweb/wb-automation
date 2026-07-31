@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy import text
 
 from app.db import engine
+from app.services.product_identity import resolve_marketplace_product_id, resolve_marketplace_product_ids
 
 
 def get_keywords_cache_counts_by_nm_id(
@@ -92,7 +93,7 @@ def list_search_report_products_all(
             ) AS photos,
             p.metrics, p.raw, p.updated_at
         FROM wb_search_report_products p
-        LEFT JOIN products pr
+        LEFT JOIN v_wb_product_source pr
           ON pr.project_id = p.project_id
          AND CAST(pr.nm_id AS bigint) = p.nm_id
         WHERE {where_sql}
@@ -137,7 +138,7 @@ def list_search_report_subjects(
             COALESCE(MAX(p.subject_name), MAX(pr.subject_name), MAX(pr.category)) AS subject_name,
             COUNT(*)::int AS products_cnt
         FROM wb_search_report_products p
-        LEFT JOIN products pr
+        LEFT JOIN v_wb_product_source pr
           ON pr.project_id = p.project_id
          AND CAST(pr.nm_id AS bigint) = p.nm_id
         WHERE {where_sql}
@@ -280,17 +281,18 @@ def upsert_search_report_products(
     sql = text(
         """
         INSERT INTO wb_search_report_products (
-            snapshot_id, project_id, nm_id,
+            snapshot_id, project_id, nm_id, marketplace_product_id,
             vendor_code, name, brand_name,
             subject_id, subject_name, tag_id, tag_name,
             metrics, raw, ingest_run_id
         ) VALUES (
-            :snapshot_id, :project_id, :nm_id,
+            :snapshot_id, :project_id, :nm_id, :marketplace_product_id,
             :vendor_code, :name, :brand_name,
             :subject_id, :subject_name, :tag_id, :tag_name,
             CAST(:metrics AS jsonb), CAST(:raw AS jsonb), :ingest_run_id
         )
         ON CONFLICT (snapshot_id, nm_id) DO UPDATE SET
+            marketplace_product_id = EXCLUDED.marketplace_product_id,
             vendor_code = EXCLUDED.vendor_code,
             name = EXCLUDED.name,
             brand_name = EXCLUDED.brand_name,
@@ -306,6 +308,16 @@ def upsert_search_report_products(
     )
     n = 0
     with engine.begin() as conn:
+        identities = resolve_marketplace_product_ids(
+            project_id=project_id,
+            marketplace_code="wildberries",
+            marketplace_item_ids=(
+                r.get("nmId") or r.get("nm_id")
+                for r in rows
+                if isinstance(r, dict)
+            ),
+            connection=conn,
+        )
         for r in rows:
             if not isinstance(r, dict):
                 continue
@@ -317,6 +329,7 @@ def upsert_search_report_products(
                 "snapshot_id": int(snapshot_id),
                 "project_id": int(project_id),
                 "nm_id": int(nm_id),
+                "marketplace_product_id": identities.get(str(nm_id)),
                 "vendor_code": r.get("vendorCode") or r.get("vendor_code"),
                 "name": r.get("name") or r.get("productName") or r.get("title"),
                 "brand_name": r.get("brandName"),
@@ -429,7 +442,7 @@ def list_search_report_products(
             ) AS photos,
             p.metrics, p.raw, p.updated_at
         FROM wb_search_report_products p
-        LEFT JOIN products pr
+        LEFT JOIN v_wb_product_source pr
           ON pr.project_id = p.project_id
          AND CAST(pr.nm_id AS bigint) = p.nm_id
         WHERE {where_sql}
@@ -591,16 +604,22 @@ def upsert_keywords_cache(
     items: List[Dict[str, Any]],
     ingest_run_id: Optional[int] = None,
 ) -> None:
+    marketplace_product_id = resolve_marketplace_product_id(
+        project_id=project_id,
+        marketplace_code="wildberries",
+        marketplace_item_id=nm_id,
+    )
     sql = text(
         """
         INSERT INTO wb_search_report_keywords_cache (
-            project_id, snapshot_id, nm_id, top_order_by,
+            project_id, snapshot_id, nm_id, marketplace_product_id, top_order_by,
             "limit", items, fetched_at, ingest_run_id
         ) VALUES (
-            :project_id, :snapshot_id, :nm_id, :top_order_by,
+            :project_id, :snapshot_id, :nm_id, :marketplace_product_id, :top_order_by,
             :lim, CAST(:items AS jsonb), NOW(), :ingest_run_id
         )
         ON CONFLICT (snapshot_id, nm_id, top_order_by) DO UPDATE SET
+            marketplace_product_id = EXCLUDED.marketplace_product_id,
             "limit" = EXCLUDED."limit",
             items = EXCLUDED.items,
             fetched_at = NOW(),
@@ -615,6 +634,7 @@ def upsert_keywords_cache(
                 "project_id": int(project_id),
                 "snapshot_id": int(snapshot_id),
                 "nm_id": int(nm_id),
+                "marketplace_product_id": marketplace_product_id,
                 "top_order_by": str(top_order_by),
                 "lim": int(limit),
                 "items": json.dumps(items or [], ensure_ascii=False),

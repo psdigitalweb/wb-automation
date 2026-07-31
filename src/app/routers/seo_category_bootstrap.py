@@ -43,7 +43,7 @@ async def list_seo_categories_endpoint(
                         subject_id::int AS category_id,
                         MAX(subject_name) AS category_name,
                         COUNT(*)::int AS skus_count
-                    FROM products
+                    FROM v_wb_product_source
                     WHERE project_id = :project_id
                       AND subject_id IS NOT NULL
                       AND subject_name IS NOT NULL

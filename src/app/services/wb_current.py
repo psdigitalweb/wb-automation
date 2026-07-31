@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import text
 
 from app.db import engine
+from app.services.product_identity import resolve_marketplace_product_ids
 
 
 _DEFAULT_PROJECT_TZ = "Europe/Istanbul"
@@ -59,6 +60,7 @@ def _normalize_current_row(row: Dict[str, Any], run_id: int | None) -> Dict[str,
     """Ensure all expected keys exist for wb_current_metrics upsert."""
     return {
         "project_id": row["project_id"],
+        "marketplace_product_id": row.get("marketplace_product_id"),
         "nm_id": row["nm_id"],
         # Optional current metrics: allow absence -> None so COALESCE keeps old values.
         "current_qty_fbo": row.get("current_qty_fbo"),
@@ -74,6 +76,7 @@ _UPSERT_CURRENT_SQL = text(
     """
     INSERT INTO wb_current_metrics (
         project_id,
+        marketplace_product_id,
         nm_id,
         current_qty_fbo,
         current_qty_fbs,
@@ -85,6 +88,7 @@ _UPSERT_CURRENT_SQL = text(
     )
     VALUES (
         :project_id,
+        :marketplace_product_id,
         :nm_id,
         :current_qty_fbo,
         :current_qty_fbs,
@@ -96,6 +100,7 @@ _UPSERT_CURRENT_SQL = text(
     )
     ON CONFLICT (project_id, nm_id)
     DO UPDATE SET
+        marketplace_product_id = COALESCE(EXCLUDED.marketplace_product_id, wb_current_metrics.marketplace_product_id),
         current_qty_fbo = COALESCE(EXCLUDED.current_qty_fbo, wb_current_metrics.current_qty_fbo),
         current_qty_fbs = COALESCE(EXCLUDED.current_qty_fbs, wb_current_metrics.current_qty_fbs),
         current_price_showcase = COALESCE(EXCLUDED.current_price_showcase, wb_current_metrics.current_price_showcase),
@@ -128,6 +133,18 @@ def upsert_wb_current_metrics_on_conn(
     ]
     if not normalized:
         return 0
+
+    project_ids = {int(row["project_id"]) for row in normalized}
+    for project_id in project_ids:
+        project_rows = [row for row in normalized if int(row["project_id"]) == project_id]
+        product_ids = resolve_marketplace_product_ids(
+            project_id=project_id,
+            marketplace_code="wildberries",
+            marketplace_item_ids=(row["nm_id"] for row in project_rows),
+            connection=conn,
+        )
+        for row in project_rows:
+            row["marketplace_product_id"] = product_ids.get(str(row["nm_id"]))
 
     conn.execute(_UPSERT_CURRENT_SQL, normalized)
 

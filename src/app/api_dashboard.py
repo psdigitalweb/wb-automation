@@ -77,13 +77,10 @@ async def get_dashboard_metrics(
                         sql = text("SELECT COUNT(*) AS cnt FROM stock_snapshots WHERE project_id = :project_id")
                         result = _safe_execute(sql, {"project_id": project_id}).mappings().all()
                     else:
-                        # supplier_stock_snapshots doesn't have project_id
                         sql = text("""
                             SELECT COUNT(*) AS cnt
                             FROM supplier_stock_snapshots s
-                            JOIN products p
-                              ON p.project_id = :project_id
-                             AND p.nm_id = s.nm_id
+                            WHERE s.project_id = :project_id
                         """)
                         result = _safe_execute(sql, {"project_id": project_id}).mappings().all()
                 else:
@@ -107,13 +104,10 @@ async def get_dashboard_metrics(
             # Keep default value None
         
         try:
-            # supplier_stock_snapshots doesn't always have project_id; derive by joining products (project_id,nm_id)
             sql = text("""
                 SELECT MAX(COALESCE(s.last_change_date, s.snapshot_at)) AS max_date
                 FROM supplier_stock_snapshots s
-                JOIN products p
-                  ON p.project_id = :project_id
-                 AND p.nm_id = s.nm_id
+                WHERE s.project_id = :project_id
             """)
             result = _safe_execute(sql, {"project_id": project_id}).mappings().all()
             if result and result[0].get("max_date"):
@@ -252,7 +246,7 @@ async def get_dashboard_kpis(
         WITH
         wb_products AS (
             SELECT COUNT(*)::bigint AS total
-            FROM products
+            FROM v_wb_product_source
             WHERE project_id = :project_id
         ),
         wb_warehouses AS (
@@ -279,15 +273,13 @@ async def get_dashboard_kpis(
         ),
         prod_nm_ids AS (
             SELECT DISTINCT p.nm_id::bigint AS nm_id
-            FROM products p
+            FROM v_wb_product_source p
             WHERE p.project_id = :project_id
         ),
         fbo_run AS (
             SELECT MAX(COALESCE(s.last_change_date, s.snapshot_at)) AS run_at
             FROM supplier_stock_snapshots s
-            JOIN products p
-              ON p.project_id = :project_id
-             AND p.nm_id = s.nm_id
+            WHERE s.project_id = :project_id
         ),
         fbo_wh_latest AS (
             SELECT DISTINCT ON (s.nm_id, s.warehouse_name)
@@ -297,7 +289,8 @@ async def get_dashboard_kpis(
                 COALESCE(s.last_change_date, s.snapshot_at) AS updated_at
             FROM supplier_stock_snapshots s
             JOIN prod_nm_ids pn ON pn.nm_id = s.nm_id
-            WHERE s.nm_id IS NOT NULL
+            WHERE s.project_id = :project_id
+              AND s.nm_id IS NOT NULL
             ORDER BY s.nm_id, s.warehouse_name, COALESCE(s.last_change_date, s.snapshot_at) DESC
         ),
         fbo_latest AS (

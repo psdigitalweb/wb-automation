@@ -29,6 +29,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from app.db import engine
+from app.services.product_identity import resolve_marketplace_product_id
 from app.deps import allow_client_portal_read, get_current_active_user, get_project_membership, require_project_admin
 from app.services.wb_storefront_brands import get_project_frontend_brand_id_strings
 from app.utils.get_project_marketplace_token import get_wb_token_for_project
@@ -308,7 +309,7 @@ def _build_discrepancies_sql(
             front_run.run_at   AS showcase_run_at,
             wb_price_latest.wb_price_updated_at,
             wb_price_latest.wb_price_source
-        FROM products p
+        FROM v_wb_product_source p
         LEFT JOIN rrp_latest ON btrim(rrp_latest.vendor_code_norm) = btrim(p.vendor_code_norm)
         LEFT JOIN wb_price_latest ON wb_price_latest.nm_id = p.nm_id
         LEFT JOIN front_latest ON front_latest.nm_id = p.nm_id
@@ -725,21 +726,27 @@ def _insert_manual_price_snapshot(
         sql = text(
             """
             INSERT INTO price_snapshots
-                (nm_id, wb_price, wb_discount, spp, customer_price, rrc, raw, project_id, created_at)
+                (marketplace_product_id, nm_id, wb_price, wb_discount, spp, customer_price, rrc, raw, project_id, created_at)
             VALUES
-                (:nm_id, :wb_price, :wb_discount, :spp, :customer_price, :rrc, CAST(:raw AS jsonb), :project_id, :created_at)
+                (:marketplace_product_id, :nm_id, :wb_price, :wb_discount, :spp, :customer_price, :rrc, CAST(:raw AS jsonb), :project_id, :created_at)
             """
         )
     else:
         sql = text(
             """
             INSERT INTO price_snapshots
-                (nm_id, wb_price, wb_discount, spp, customer_price, rrc, project_id, created_at)
+                (marketplace_product_id, nm_id, wb_price, wb_discount, spp, customer_price, rrc, project_id, created_at)
             VALUES
-                (:nm_id, :wb_price, :wb_discount, :spp, :customer_price, :rrc, :project_id, :created_at)
+                (:marketplace_product_id, :nm_id, :wb_price, :wb_discount, :spp, :customer_price, :rrc, :project_id, :created_at)
             """
         )
     with engine.begin() as conn:
+        params["marketplace_product_id"] = resolve_marketplace_product_id(
+            project_id=project_id,
+            marketplace_code="wildberries",
+            marketplace_item_id=nm_id,
+            connection=conn,
+        )
         conn.execute(sql, params)
 
 
@@ -1226,7 +1233,7 @@ async def get_wb_price_discrepancies(
             
             # Check products count
             products_count = conn.execute(
-                text("SELECT COUNT(*) FROM products WHERE project_id = :project_id AND vendor_code_norm IS NOT NULL"),
+                text("SELECT COUNT(*) FROM v_wb_product_source WHERE project_id = :project_id AND vendor_code_norm IS NOT NULL"),
                 {"project_id": project_id},
             ).scalar() or 0
             
@@ -1253,7 +1260,7 @@ async def get_wb_price_discrepancies(
             # Check mapping: products with vendor_code_norm that match internal_sku
             mapping_count = conn.execute(
                 text("""
-                    SELECT COUNT(DISTINCT p.vendor_code_norm) FROM products p
+                    SELECT COUNT(DISTINCT p.vendor_code_norm) FROM v_wb_product_source p
                     JOIN internal_products ip ON ip.internal_sku = p.vendor_code_norm
                     JOIN internal_product_prices ipp ON ipp.internal_product_id = ip.id
                     JOIN internal_data_snapshots ids ON ipp.snapshot_id = ids.id
@@ -1377,7 +1384,7 @@ async def get_wb_price_discrepancies(
                             COUNT(rrp_latest.vendor_code_norm) AS products_with_rrp,
                             COUNT(front_latest.nm_id) AS products_with_frontend,
                             COUNT(CASE WHEN rrp_latest.vendor_code_norm IS NOT NULL AND front_latest.nm_id IS NOT NULL THEN 1 END) AS products_with_both
-                        FROM products p
+                        FROM v_wb_product_source p
                         LEFT JOIN rrp_latest ON btrim(rrp_latest.vendor_code_norm) = btrim(p.vendor_code_norm)
                         LEFT JOIN front_latest ON front_latest.nm_id = p.nm_id
                         WHERE p.project_id = :project_id AND p.vendor_code_norm IS NOT NULL
@@ -1469,7 +1476,7 @@ async def get_wb_price_discrepancies(
                 ).scalar() or 0
                 
                 products_count = conn.execute(
-                    text("SELECT COUNT(*) FROM products WHERE project_id = :project_id"),
+                    text("SELECT COUNT(*) FROM v_wb_product_source WHERE project_id = :project_id"),
                     {"project_id": project_id},
                 ).scalar() or 0
                 
@@ -1556,7 +1563,7 @@ async def get_wb_price_discrepancies(
                                 )
                                 SELECT COUNT(*)::bigint
                                 FROM src
-                                JOIN products p
+                                JOIN v_wb_product_source p
                                   ON p.project_id = :project_id
                                  AND p.vendor_code_norm = src.sku_norm
                                 WHERE src.sku_norm IS NOT NULL
@@ -1653,7 +1660,7 @@ async def get_wb_price_discrepancies(
                             ORDER BY f.nm_id, f.snapshot_at DESC
                         )
                         SELECT COUNT(*) AS count
-                        FROM products p
+                        FROM v_wb_product_source p
                         LEFT JOIN rrp_latest ON btrim(rrp_latest.vendor_code_norm) = btrim(p.vendor_code_norm)
                         LEFT JOIN front_latest ON front_latest.nm_id = p.nm_id
                         WHERE p.project_id = :project_id
@@ -1963,7 +1970,7 @@ async def get_wb_categories(
         SELECT DISTINCT
             p.subject_id AS id,
             p.subject_name AS name
-        FROM products p
+        FROM v_wb_product_source p
         WHERE p.project_id = :project_id
           AND p.subject_id IS NOT NULL
         ORDER BY name NULLS LAST, id

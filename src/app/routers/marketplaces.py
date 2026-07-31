@@ -1372,7 +1372,7 @@ async def list_wb_product_subjects(
                 text(
                     """
                     SELECT subject_id, subject_name, COUNT(*)::bigint AS skus_count
-                    FROM products
+                    FROM v_wb_product_source
                     WHERE project_id = :project_id
                       AND subject_id IS NOT NULL
                       AND subject_name IS NOT NULL

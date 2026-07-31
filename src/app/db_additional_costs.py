@@ -12,6 +12,18 @@ from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy import text
 
 from app.db import engine
+from app.services.product_identity import resolve_marketplace_product_id
+
+
+def _resolve_product_identity(project_id: int, data: dict) -> Optional[int]:
+    marketplace_item_id = data.get("marketplace_item_id") or data.get("nm_id")
+    if data.get("scope") != "product" or marketplace_item_id is None:
+        return None
+    return resolve_marketplace_product_id(
+        project_id=project_id,
+        marketplace_code=data.get("marketplace_code") or "wildberries",
+        marketplace_item_id=marketplace_item_id,
+    )
 
 
 def _validate_scope_fields(scope: str, data: dict) -> None:
@@ -25,16 +37,19 @@ def _validate_scope_fields(scope: str, data: dict) -> None:
         ValueError: If scope and fields are inconsistent
     """
     if scope == 'project':
-        if data.get('marketplace_code') or data.get('internal_sku') or data.get('nm_id'):
-            raise ValueError("scope='project' requires all marketplace_code, internal_sku, nm_id to be NULL")
+        if data.get('marketplace_code') or data.get('internal_sku') or data.get('nm_id') or data.get('marketplace_item_id'):
+            raise ValueError("scope='project' requires product and marketplace identifiers to be NULL")
     elif scope == 'marketplace':
         if not data.get('marketplace_code'):
             raise ValueError("scope='marketplace' requires marketplace_code")
-        if data.get('internal_sku') or data.get('nm_id'):
-            raise ValueError("scope='marketplace' requires internal_sku and nm_id to be NULL")
+        if data.get('internal_sku') or data.get('nm_id') or data.get('marketplace_item_id'):
+            raise ValueError("scope='marketplace' requires product identifiers to be NULL")
     elif scope == 'product':
-        if not data.get('internal_sku'):
-            raise ValueError("scope='product' requires internal_sku")
+        has_marketplace_identity = bool(
+            data.get('marketplace_code') and (data.get('marketplace_item_id') or data.get('nm_id'))
+        )
+        if not data.get('internal_sku') and not has_marketplace_identity:
+            raise ValueError("scope='product' requires internal_sku or marketplace_code + marketplace_item_id")
     else:
         raise ValueError(f"Invalid scope: {scope}. Must be 'project', 'marketplace', or 'product'")
 
@@ -57,6 +72,7 @@ def create_additional_cost_entry(project_id: int, data: dict) -> dict:
     
     # Validate scope vs fields
     _validate_scope_fields(scope, data)
+    marketplace_product_id = _resolve_product_identity(project_id, {**data, "scope": scope})
     
     # Prepare payload JSON
     payload = data.get("payload", {})
@@ -84,6 +100,8 @@ def create_additional_cost_entry(project_id: int, data: dict) -> dict:
             vendor,
             description,
             nm_id,
+            marketplace_item_id,
+            marketplace_product_id,
             internal_sku,
             source,
             external_uid,
@@ -105,6 +123,8 @@ def create_additional_cost_entry(project_id: int, data: dict) -> dict:
             :vendor,
             :description,
             :nm_id,
+            :marketplace_item_id,
+            :marketplace_product_id,
             :internal_sku,
             :source,
             :external_uid,
@@ -129,6 +149,10 @@ def create_additional_cost_entry(project_id: int, data: dict) -> dict:
         "vendor": data.get("vendor"),
         "description": data.get("description"),
         "nm_id": data.get("nm_id"),
+        "marketplace_item_id": data.get("marketplace_item_id") or (
+            str(data["nm_id"]) if data.get("nm_id") is not None else None
+        ),
+        "marketplace_product_id": marketplace_product_id,
         "internal_sku": data.get("internal_sku"),
         "source": data.get("source", "manual"),
         "external_uid": data.get("external_uid"),
@@ -193,6 +217,7 @@ def list_additional_cost_entries(
     marketplace_code: Optional[str] = None,
     category: Optional[str] = None,
     nm_id: Optional[int] = None,
+    marketplace_item_id: Optional[str] = None,
     internal_sku: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
@@ -235,6 +260,9 @@ def list_additional_cost_entries(
     if nm_id is not None:
         where_clauses.append("nm_id = :nm_id")
         params["nm_id"] = nm_id
+    if marketplace_item_id is not None:
+        where_clauses.append("marketplace_item_id = :marketplace_item_id")
+        params["marketplace_item_id"] = marketplace_item_id
     if internal_sku is not None:
         where_clauses.append("internal_sku = :internal_sku")
         params["internal_sku"] = internal_sku
@@ -274,6 +302,12 @@ def update_additional_cost_entry(project_id: int, entry_id: int, patch: dict) ->
     if not patch:
         # No updates, just return existing entry
         return get_additional_cost_entry(project_id, entry_id)
+
+    patch = dict(patch)
+    if "nm_id" in patch and "marketplace_item_id" not in patch:
+        patch["marketplace_item_id"] = (
+            str(patch["nm_id"]) if patch["nm_id"] is not None else None
+        )
     
     # Get current entry to know current scope
     current_entry = get_additional_cost_entry(project_id, entry_id)
@@ -288,14 +322,31 @@ def update_additional_cost_entry(project_id: int, entry_id: int, patch: dict) ->
         "marketplace_code": patch.get("marketplace_code", current_entry.get("marketplace_code")),
         "internal_sku": patch.get("internal_sku", current_entry.get("internal_sku")),
         "nm_id": patch.get("nm_id", current_entry.get("nm_id")),
+        "marketplace_item_id": patch.get(
+            "marketplace_item_id", current_entry.get("marketplace_item_id")
+        ),
     }
     
     # Validate scope vs fields
     _validate_scope_fields(new_scope, merged_data)
+
+    identity_fields_changed = any(
+        field in patch for field in ("scope", "marketplace_code", "nm_id", "marketplace_item_id")
+    )
+    if identity_fields_changed:
+        marketplace_product_id = _resolve_product_identity(
+            project_id,
+            {**merged_data, "scope": new_scope},
+        )
+    else:
+        marketplace_product_id = current_entry.get("marketplace_product_id")
     
     # Build dynamic SET clause
     set_clauses = ["updated_at = NOW()"]
     params: Dict[str, Any] = {"entry_id": entry_id, "project_id": project_id}
+    if identity_fields_changed:
+        set_clauses.append("marketplace_product_id = :marketplace_product_id")
+        params["marketplace_product_id"] = marketplace_product_id
     
     if "scope" in patch:
         set_clauses.append("scope = :scope")
@@ -333,6 +384,9 @@ def update_additional_cost_entry(project_id: int, entry_id: int, patch: dict) ->
     if "nm_id" in patch:
         set_clauses.append("nm_id = :nm_id")
         params["nm_id"] = patch["nm_id"]
+    if "marketplace_item_id" in patch:
+        set_clauses.append("marketplace_item_id = :marketplace_item_id")
+        params["marketplace_item_id"] = patch["marketplace_item_id"]
     if "internal_sku" in patch:
         set_clauses.append("internal_sku = :internal_sku")
         params["internal_sku"] = patch["internal_sku"]
@@ -438,13 +492,33 @@ def get_additional_cost_summary(
     # Build GROUP BY clause based on level
     if level == "project":
         group_by = "category, subcategory"
-        select_fields = "category, subcategory, NULL::text AS marketplace_code, NULL::text AS internal_sku, NULL::bigint AS nm_id"
+        prorated_fields = "category, subcategory"
+        result_fields = (
+            "category, subcategory, NULL::text AS marketplace_code, NULL::text AS internal_sku, "
+            "NULL::bigint AS nm_id, NULL::text AS marketplace_item_id, "
+            "NULL::bigint AS marketplace_product_id"
+        )
     elif level == "marketplace":
         group_by = "marketplace_code, category, subcategory"
-        select_fields = "category, subcategory, marketplace_code, NULL::text AS internal_sku, NULL::bigint AS nm_id"
+        prorated_fields = "category, subcategory, marketplace_code"
+        result_fields = (
+            "category, subcategory, marketplace_code, NULL::text AS internal_sku, "
+            "NULL::bigint AS nm_id, NULL::text AS marketplace_item_id, "
+            "NULL::bigint AS marketplace_product_id"
+        )
     elif level == "product":
-        group_by = "internal_sku, category, subcategory"
-        select_fields = "category, subcategory, marketplace_code, internal_sku, MIN(nm_id) AS nm_id"
+        group_by = (
+            "marketplace_code, marketplace_product_id, marketplace_item_id, "
+            "internal_sku, category, subcategory"
+        )
+        prorated_fields = (
+            "category, subcategory, marketplace_code, marketplace_product_id, "
+            "marketplace_item_id, internal_sku, nm_id"
+        )
+        result_fields = (
+            "category, subcategory, marketplace_code, internal_sku, MIN(nm_id) AS nm_id, "
+            "marketplace_item_id, marketplace_product_id"
+        )
     else:
         raise ValueError(f"Invalid level: {level}")
     
@@ -452,7 +526,7 @@ def get_additional_cost_summary(
     sql = text(f"""
         WITH prorated AS (
             SELECT
-                {select_fields},
+                {prorated_fields},
                 amount,
                 period_from,
                 period_to,
@@ -464,7 +538,7 @@ def get_additional_cost_summary(
             WHERE {where_sql}
         )
         SELECT
-            {select_fields},
+            {result_fields},
             SUM(amount * overlap_days::numeric / NULLIF(entry_days, 0)) AS prorated_amount
         FROM prorated
         GROUP BY {group_by}

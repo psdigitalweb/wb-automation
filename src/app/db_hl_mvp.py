@@ -19,7 +19,7 @@ def count_controls_for_test_sku(project_id: int, test_nm_id: int) -> int:
             text(
                 """
                 SELECT p.subject_id
-                FROM products p
+                FROM v_wb_product_source p
                 WHERE p.project_id = :project_id AND p.nm_id = :nm_id
                 """
             ),
@@ -35,7 +35,7 @@ def count_controls_for_test_sku(project_id: int, test_nm_id: int) -> int:
                 text(
                     """
                     SELECT COUNT(*)
-                    FROM products p
+                    FROM v_wb_product_source p
                     WHERE p.project_id = :project_id
                       AND p.nm_id != :nm_id
                       AND p.subject_id = :subject_id
@@ -165,7 +165,7 @@ def list_hl_mvp_experiments(
             p.title AS product_title
         FROM hl_mvp_experiments e
         JOIN hypotheses h ON h.id = e.hypothesis_id
-        LEFT JOIN products p ON p.project_id = e.project_id AND p.nm_id = e.nm_id
+        LEFT JOIN v_wb_product_source p ON p.project_id = e.project_id AND p.nm_id = e.nm_id
         WHERE e.project_id = :project_id
     """
     params: Dict[str, Any] = {"project_id": project_id, "limit": limit}
@@ -236,7 +236,7 @@ def get_hl_mvp_experiment(experiment_id: int, project_id: Optional[int] = None) 
             p.title AS product_title
         FROM hl_mvp_experiments e
         JOIN hypotheses h ON h.id = e.hypothesis_id
-        LEFT JOIN products p ON p.project_id = e.project_id AND p.nm_id = e.nm_id
+        LEFT JOIN v_wb_product_source p ON p.project_id = e.project_id AND p.nm_id = e.nm_id
         WHERE e.id = :experiment_id
     """
     params: Dict[str, Any] = {"experiment_id": experiment_id}

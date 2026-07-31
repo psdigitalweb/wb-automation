@@ -18,7 +18,7 @@ def list_project_nm_ids(project_id: int) -> list[int]:
                 text(
                     """
                     SELECT nm_id
-                    FROM products
+                    FROM v_wb_product_source
                     WHERE project_id = :project_id
                       AND nm_id IS NOT NULL
                     ORDER BY nm_id
@@ -242,9 +242,10 @@ def list_product_groups(
                 s.warehouse_name,
                 COALESCE(s.quantity, 0)::bigint AS qty
             FROM supplier_stock_snapshots s
-            JOIN products sp
+            JOIN v_wb_product_source sp
               ON sp.project_id = :project_id
              AND sp.nm_id = s.nm_id
+            WHERE s.project_id = :project_id
             ORDER BY
                 s.nm_id,
                 s.warehouse_name,
@@ -258,7 +259,7 @@ def list_product_groups(
         matched_groups AS (
             SELECT DISTINCT m.wb_group_id
             FROM wb_product_group_memberships m
-            JOIN products p
+            JOIN v_wb_product_source p
               ON p.project_id = m.project_id
              AND p.nm_id = m.nm_id
             LEFT JOIN fbs ON fbs.nm_id = m.nm_id
@@ -316,7 +317,7 @@ def list_product_groups(
                                     END
                             ) AS preview
                             FROM wb_product_group_memberships gm
-                            JOIN products p
+                            JOIN v_wb_product_source p
                               ON p.project_id = gm.project_id
                              AND p.nm_id = gm.nm_id
                             WHERE gm.project_id = :project_id
@@ -360,7 +361,7 @@ def list_product_group_categories(project_id: int) -> list[dict[str, Any]]:
                     p.subject_name AS name,
                     COUNT(DISTINCT m.wb_group_id)::integer AS groups_count
                 FROM wb_product_group_memberships m
-                JOIN products p
+                JOIN v_wb_product_source p
                   ON p.project_id = m.project_id
                  AND p.nm_id = m.nm_id
                 WHERE m.project_id = :project_id
@@ -395,7 +396,7 @@ def get_group_members(project_id: int, wb_group_id: int) -> list[dict[str, Any]]
                         ELSE NULL
                     END AS image_url
                 FROM wb_product_group_memberships m
-                JOIN products p
+                JOIN v_wb_product_source p
                   ON p.project_id = m.project_id
                  AND p.nm_id = m.nm_id
                 WHERE m.project_id = :project_id
@@ -481,6 +482,7 @@ def get_group_comparison(
                 COALESCE(s.quantity, 0)::bigint AS qty
             FROM supplier_stock_snapshots s
             JOIN members m ON m.nm_id = s.nm_id
+            WHERE s.project_id = :project_id
             ORDER BY
                 s.nm_id,
                 s.warehouse_name,
@@ -587,7 +589,7 @@ def get_group_comparison(
             COALESCE(f.orders, 0) AS orders,
             COALESCE(f.revenue, 0) AS revenue
         FROM members m
-        JOIN products p
+        JOIN v_wb_product_source p
           ON p.project_id = :project_id
          AND p.nm_id = m.nm_id
         LEFT JOIN funnel f ON f.nm_id = m.nm_id
@@ -763,7 +765,7 @@ def get_group_series(
                 COALESCE(f.orders, 0) AS orders,
                 COALESCE(f.revenue, 0) AS revenue
             FROM requested r
-            JOIN products p
+            JOIN v_wb_product_source p
               ON p.project_id = :project_id
              AND p.nm_id = r.nm_id
             CROSS JOIN days d

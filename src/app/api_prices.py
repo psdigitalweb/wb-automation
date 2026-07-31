@@ -143,7 +143,7 @@ async def get_products_with_latest_price(
             lp.customer_price,
             lp.rrc,
             lp.price_at
-        FROM products p
+        FROM v_wb_product_source p
         LEFT JOIN v_products_latest_price lp ON p.nm_id = lp.nm_id
         ORDER BY p.nm_id
         LIMIT :limit OFFSET :offset
@@ -184,7 +184,7 @@ async def get_products_with_price_and_stock(
             lp.price_at,
             ls.total_quantity,
             ls.stock_at
-        FROM products p
+        FROM v_wb_product_source p
         LEFT JOIN v_products_latest_price lp ON p.nm_id = lp.nm_id
         LEFT JOIN v_products_latest_stock ls ON p.nm_id = ls.nm_id
         ORDER BY p.nm_id

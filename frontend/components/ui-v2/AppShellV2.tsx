@@ -6,7 +6,14 @@ import { apiGetData } from '../../lib/apiClient'
 import RailNav from './RailNav'
 import SubNav from './SubNav'
 import TopbarV2 from './TopbarV2'
-import { filterRailItemsByMarketplaces, getActiveRailId, getProjectRoute, railItems, subNavGroupsByRail } from './navModel'
+import {
+  filterRailItemsByMarketplaces,
+  filterSubNavGroupsByMarketplaces,
+  getActiveRailId,
+  getProjectRoute,
+  railItems,
+  subNavGroupsByRail,
+} from './navModel'
 import './ui-v2.css'
 
 type AppShellV2Props = {
@@ -27,13 +34,16 @@ export default function AppShellV2({ children }: AppShellV2Props) {
   const isProjectsIndex = pathname === '/app/projects'
   const [openRail, setOpenRail] = useState(activeRail)
   const [navCollapsed, setNavCollapsed] = useState(false)
-  const subNavGroups = subNavGroupsByRail[openRail] ?? []
-  const showSubNav = Boolean(projectId && subNavGroups.length > 0)
   const [connectedMarketplaces, setConnectedMarketplaces] = useState<Set<string> | null>(null)
   const visibleRailItems = useMemo(
     () => filterRailItemsByMarketplaces(railItems, connectedMarketplaces),
     [connectedMarketplaces],
   )
+  const subNavGroups = useMemo(
+    () => filterSubNavGroupsByMarketplaces(subNavGroupsByRail[openRail] ?? [], connectedMarketplaces),
+    [connectedMarketplaces, openRail],
+  )
+  const showSubNav = Boolean(projectId && subNavGroups.length > 0)
 
   useEffect(() => {
     setOpenRail(activeRail)

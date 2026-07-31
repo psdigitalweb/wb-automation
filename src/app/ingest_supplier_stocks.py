@@ -12,6 +12,7 @@ from sqlalchemy import text
 from app.db import engine
 from app.wb.client import WBClient
 from app.deps import get_current_active_user, get_project_membership
+from app.services.product_identity import resolve_marketplace_product_ids
 from app.utils.get_project_marketplace_token import get_wb_credentials_for_project
 
 router = APIRouter(prefix="/api/v1/ingest", tags=["ingest"])
@@ -90,10 +91,11 @@ async def ingest_supplier_stocks(project_id: int, run_id: int | None = None) -> 
     max_date_sql = text("""
         SELECT MAX(last_change_date) AS max_date
         FROM supplier_stock_snapshots
+        WHERE project_id = :project_id
     """)
     
     with engine.connect() as conn:
-        result = conn.execute(max_date_sql).mappings().all()
+        result = conn.execute(max_date_sql, {"project_id": int(project_id)}).mappings().all()
         max_date = result[0]["max_date"] if result and result[0].get("max_date") else None
     
     if max_date:
@@ -119,18 +121,20 @@ async def ingest_supplier_stocks(project_id: int, run_id: int | None = None) -> 
     
     insert_sql = text("""
         INSERT INTO supplier_stock_snapshots (
+            project_id, marketplace_product_id,
             snapshot_at, last_change_date, warehouse_name, nm_id,
             supplier_article, barcode, tech_size, quantity, quantity_full,
             in_way_to_client, in_way_from_client, is_supply, is_realization,
             price, discount, raw
         )
         VALUES (
+            :project_id, :marketplace_product_id,
             now(), :last_change_date, :warehouse_name, :nm_id,
             :supplier_article, :barcode, :tech_size, :quantity, :quantity_full,
             :in_way_to_client, :in_way_from_client, :is_supply, :is_realization,
             :price, :discount, :raw
         )
-        ON CONFLICT (last_change_date, nm_id, barcode, warehouse_name) DO NOTHING
+        ON CONFLICT (project_id, last_change_date, nm_id, barcode, warehouse_name) DO NOTHING
     """)
     
     total_pages = 0
@@ -190,6 +194,7 @@ async def ingest_supplier_stocks(project_id: int, run_id: int | None = None) -> 
                 continue
             
             rows.append({
+                "project_id": int(project_id),
                 "last_change_date": last_change_date_dt,
                 "warehouse_name": warehouse_name,
                 "nm_id": int(nm_id),
@@ -209,6 +214,14 @@ async def ingest_supplier_stocks(project_id: int, run_id: int | None = None) -> 
         
         if rows:
             with engine.begin() as conn:
+                product_ids = resolve_marketplace_product_ids(
+                    project_id=project_id,
+                    marketplace_code="wildberries",
+                    marketplace_item_ids=(row["nm_id"] for row in rows),
+                    connection=conn,
+                )
+                for row in rows:
+                    row["marketplace_product_id"] = product_ids.get(str(row["nm_id"]))
                 result = conn.execute(insert_sql, rows)
                 # ON CONFLICT DO NOTHING: rowcount reflects actual inserts
                 inserted = int(result.rowcount or 0)
@@ -298,7 +311,7 @@ async def ingest_supplier_stocks(project_id: int, run_id: int | None = None) -> 
     
     # Финальная проверка: получить max(last_change_date) из БД
     with engine.connect() as conn:
-        result = conn.execute(max_date_sql).mappings().all()
+        result = conn.execute(max_date_sql, {"project_id": int(project_id)}).mappings().all()
         final_max_date = result[0]["max_date"] if result and result[0].get("max_date") else None
     
     print(f"ingest_supplier_stocks: finished. pages={total_pages}, total_received={total_received}, total_inserted={total_inserted}, max(last_change_date)={final_max_date}")
