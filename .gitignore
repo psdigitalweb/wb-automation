@@ -65,9 +65,16 @@ nginx/letsencrypt-ecomcore/
 nginx/letsencrypt-reports-zakka/
 
 .project_proxy_secret_key
+.project_secrets_key
+.docker_tmp/
+artifacts/
+outputs/
 audit/
 celerybeat-schedule*
 infra/docker/*.dump
 backup_*.dump
 docs/verification/
 *.bak_*
+
+# Accidental shell redirection artifact
+=
