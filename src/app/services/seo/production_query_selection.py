@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -35,7 +36,7 @@ from app.services.seo.query_meaning_matcher.canonical import stable_hash
 from app.services.seo.query_pipeline.normalization import normalize_query_text
 
 
-PRODUCTION_QUERY_SELECTION_MODEL = "openai/gpt-4o"
+PRODUCTION_QUERY_SELECTION_MODEL = os.getenv("OPENROUTER_QUERY_SELECTION_MODEL", "openai/gpt-4.1-mini")
 PRODUCTION_QUERY_SELECTION_PROMPT_VERSION = "query_selection_id_only_prompt_v1"
 QUERY_SELECTION_PROMPT_TEMPLATE_PATH = Path(__file__).resolve().parents[4] / "config" / "seo" / "prompts" / "QUERY_SELECTION_ID_ONLY_PROMPT_V1.txt"
 AGREED_CANDIDATE_LIMIT = 2200

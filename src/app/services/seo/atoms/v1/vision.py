@@ -6,8 +6,6 @@ import json
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-import httpx
-
 from app import settings
 from app.services.seo.atoms.v1.guards import append_atom_unique
 from app.services.seo.atoms.v1.llm_extractors import (
@@ -16,6 +14,7 @@ from app.services.seo.atoms.v1.llm_extractors import (
     _sanitize_atoms_payload,
 )
 from app.services.seo.atoms.v1.schemas import MeaningAtom, SkuAtoms
+from app.services.seo.providers.http_client import build_openrouter_http_client
 from app.services.seo.query_meaning_matcher.canonical import stable_hash
 
 
@@ -374,7 +373,7 @@ def extract_vision_sku_atoms(
         "HTTP-Referer": "https://ecomcore.local",
         "X-Title": "EcomCore SEO Vision Experiment",
     }
-    with httpx.Client(timeout=timeout_seconds) as client:
+    with build_openrouter_http_client(timeout_seconds=timeout_seconds) as client:
         response = client.post(f"{settings.OPENROUTER_BASE_URL.rstrip('/')}/chat/completions", headers=headers, json=payload)
         response.raise_for_status()
         data = response.json()

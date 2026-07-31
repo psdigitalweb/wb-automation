@@ -77,7 +77,10 @@ class WBMarketplaceStatus(BaseModel):
     is_enabled: bool = Field(..., description="Whether Wildberries is enabled for the project")
     has_token: bool = Field(..., description="Whether API token is set")
     brand_id: Optional[int] = Field(None, description="Brand ID from settings_json")
-    connected: bool = Field(..., description="True if enabled, has token, and has brand_id")
+    connected: bool = Field(..., description="True if enabled and has token")
+    storefront_configured: bool = Field(False, description="True if at least one storefront brand is configured")
+    storefront_brand_ids: List[int] = Field(default_factory=list, description="Enabled storefront brand IDs")
+    legacy_brand_id: Optional[int] = Field(None, description="Legacy brand_id from settings_json")
     updated_at: datetime = Field(..., description="Last update timestamp")
 
 
@@ -92,10 +95,22 @@ class WBSettingsStatus(BaseModel):
 class WBMarketplaceStatusV2(BaseModel):
     """Status response for Wildberries marketplace (frontend-friendly, no secrets)."""
     is_enabled: bool
-    is_configured: bool = Field(..., description="True if token exists AND brand_id exists")
+    is_configured: bool = Field(..., description="True if enabled and token exists")
     credentials: WBCredentialsStatus
     settings: WBSettingsStatus
+    storefront_configured: bool = Field(False, description="True if at least one storefront brand is configured")
+    storefront_brand_ids: List[int] = Field(default_factory=list, description="Enabled storefront brand IDs")
+    legacy_brand_id: Optional[int] = Field(None, description="Legacy brand_id from settings_json")
     updated_at: datetime
+
+
+class WBTokenValidationResponse(BaseModel):
+    """Result of validating the stored Wildberries API token."""
+
+    valid: bool = Field(..., description="True if WB accepted the stored token")
+    has_token: bool = Field(..., description="True if a token is stored for this project")
+    message: Optional[str] = Field(None, description="Validation result details")
+    checked_at: datetime = Field(..., description="Validation timestamp")
 
 
 class WBMarketplaceUpdate(BaseModel):
@@ -602,6 +617,9 @@ class WBUnitPnlRow(BaseModel):
     delta_fact_to_rrp_pct: Optional[float] = None
     commission_vv_signed: Optional[float] = None
     acquiring: Optional[float] = None
+    wb_own_total_signed: Optional[float] = None
+    wb_common_allocated_total: Optional[float] = None
+    wb_common_allocated_per_unit: Optional[float] = None
     wb_total_signed: Optional[float] = None
     wb_total_cost_per_unit: Optional[float] = None
     cogs_per_unit: Optional[float] = None
@@ -609,6 +627,14 @@ class WBUnitPnlRow(BaseModel):
     profit_per_unit: Optional[float] = None
     margin_pct_of_revenue: Optional[float] = None
     cogs_missing: bool = False
+    packaging_cost_per_unit: Optional[float] = None
+    packaging_cost_total: Optional[float] = None
+    packaging_missing: bool = False
+    additional_costs_total: float = 0
+    additional_costs_per_unit: float = 0
+    full_profit_per_unit: Optional[float] = None
+    full_profit_total: Optional[float] = None
+    full_margin_pct_of_revenue: Optional[float] = None
 
 
 class WBUnitPnlResponse(BaseModel):
@@ -631,10 +657,14 @@ class WBUnitPnlDetailsResponse(BaseModel):
     base_calc: Dict[str, Any] = Field(default_factory=dict)
     commission_vv_signed: Optional[float] = Field(None, description="WB commission as in report (signed, can be negative)")
     acquiring: Optional[float] = Field(None, description="Acquiring fee")
+    wb_own_total_signed: Optional[float] = Field(None, description="WB net effect from SKU-bound report rows only")
+    wb_common_allocated_total: Optional[float] = Field(None, description="Allocated nm_id=0 WB net effect for this SKU")
+    wb_common_allocated_per_unit: Optional[float] = Field(None, description="Allocated nm_id=0 WB net effect per sale row")
     wb_total_signed: Optional[float] = Field(None, description="WB net effect: commission_vv_signed + acquiring + logistics + storage + acceptance + deduction + penalty")
     wb_total_pct_of_sale: Optional[float] = Field(None, description="wb_total_signed as % of sale_amount")
     wb_costs_per_unit: Dict[str, Any] = Field(default_factory=dict)
     profitability: Dict[str, Any] = Field(default_factory=dict)
+    extended_costs: Dict[str, Any] = Field(default_factory=dict)
     logistics_counts: Dict[str, Any] = Field(default_factory=dict)
     raw_lines_preview: Optional[List[Dict[str, Any]]] = None
     debug: Optional[Dict[str, Any]] = None
@@ -677,4 +707,3 @@ class SystemMarketplacePublicStatus(BaseModel):
     is_globally_enabled: bool = Field(..., description="Whether marketplace is globally enabled")
     is_visible: bool = Field(..., description="Whether marketplace is visible in UI")
     sort_order: int = Field(..., description="Sort order for display")
-

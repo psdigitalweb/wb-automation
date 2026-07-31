@@ -50,6 +50,7 @@
   border-right: 0.5px solid var(--color-border);
   display: flex;
   flex-direction: column;
+  transition: width 150ms var(--ease-out), flex-basis 150ms var(--ease-out);
 }
 
 .ec-rail-logo {
@@ -86,7 +87,17 @@
 }
 
 .ec-rail-list {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding-top: 8px;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.ec-rail-list::-webkit-scrollbar {
+  display: none;
 }
 
 .ec-rail-divider {
@@ -129,37 +140,71 @@
   display: inline-flex;
 }
 
-.ec-rail-indicator {
-  position: absolute;
-  top: -5px;
-  right: -7px;
-  width: 7px;
-  height: 7px;
-  border-radius: 999px;
-  background: var(--color-success);
-  box-shadow: 0 0 0 2px var(--color-surface);
-}
-
-.ec-rail-indicator.is-purple {
-  background: oklch(58% 0.16 305);
-}
-
-.ec-rail-badge-dot {
-  position: absolute;
-  top: -5px;
-  right: -7px;
-  width: 7px;
-  height: 7px;
-  border-radius: 999px;
-  background: var(--color-danger);
-  box-shadow: 0 0 0 2px var(--color-surface);
-}
-
 .ec-rail-label {
   font-size: 9px;
   font-weight: 600;
   letter-spacing: 0.02em;
   line-height: 1.15;
+}
+
+.ec-rail-collapse {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  margin: 10px auto;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-surface-2);
+  color: var(--color-text-2);
+  box-shadow: inset 0 0 0 0.5px var(--color-border);
+  cursor: pointer;
+  transition:
+    background 120ms var(--ease-out),
+    color 120ms var(--ease-out),
+    transform 120ms var(--ease-out),
+    box-shadow 120ms var(--ease-out);
+}
+
+.ec-rail-collapse svg {
+  transform: rotate(180deg);
+  transition: transform 150ms var(--ease-out);
+}
+
+.ec-rail-collapse:hover {
+  background: var(--color-accent-soft);
+  color: var(--color-accent-text);
+  box-shadow: inset 0 0 0 0.5px color-mix(in oklch, var(--color-accent) 35%, transparent);
+  transform: translateX(-1px);
+}
+
+.ec-ui-v2.is-nav-collapsed .ec-rail {
+  width: 56px;
+  flex-basis: 56px;
+}
+
+.ec-ui-v2.is-nav-collapsed .ec-rail-item {
+  width: 44px;
+  height: 44px;
+}
+
+.ec-ui-v2.is-nav-collapsed .ec-rail-label {
+  display: none;
+}
+
+.ec-ui-v2.is-nav-collapsed .ec-rail-divider {
+  margin-inline: 10px;
+}
+
+.ec-ui-v2.is-nav-collapsed .ec-rail-collapse svg {
+  transform: none;
+}
+
+.ec-ui-v2.is-nav-collapsed .ec-rail-collapse:hover {
+  transform: translateX(1px);
 }
 
 .ec-subnav {

@@ -41,6 +41,7 @@ services:
       # Where uploaded Internal Data files are stored inside container
       # Must be writable and persistent (mounted volume below)
       - INTERNAL_DATA_DIR=/data/internal_data
+      - WB_CONTENT_MEDIA_DIR=/data/wb-content-history
       # Bootstrap admin user on startup (only if users table is empty)
       # Set BOOTSTRAP_ADMIN=1 in .env to enable, along with BOOTSTRAP_ADMIN_USERNAME, BOOTSTRAP_ADMIN_PASSWORD, BOOTSTRAP_ADMIN_EMAIL
       # Default: disabled (0) for security
@@ -51,6 +52,7 @@ services:
     volumes:
       # Persistent storage for Internal Data uploads (required on server)
       - internal_data:/data/internal_data
+      - wb_content_history:/data/wb-content-history
     # Entrypoint waits for PostgreSQL, runs migrations (with advisory lock protection), then starts uvicorn
     entrypoint: ["python", "/app/scripts/docker-entrypoint.py"]
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --app-dir /app/src
@@ -75,8 +77,10 @@ services:
       env_file: ../../.env
       environment:
         - PYTHONPATH=/app/src
+        - WB_CONTENT_MEDIA_DIR=/data/wb-content-history
       volumes:
         - internal_data:/data/internal_data
+        - wb_content_history:/data/wb-content-history
       command: celery -A app.celery_app worker -l info
       depends_on:
         - redis
@@ -155,6 +159,8 @@ volumes:
   postgres_data:
     driver: local
   internal_data:
+    driver: local
+  wb_content_history:
     driver: local
 
 networks:

@@ -37,13 +37,18 @@ logger = logging.getLogger(__name__)
 
 # nmIds limit per history request (swagger)
 NM_IDS_BATCH_SIZE = 20
-# Fast-path: chunk size for POST /api/analytics/v3/sales-funnel/products
-FAST_PATH_CHUNK_SIZE = 1000
+# Backfill uses POST /api/analytics/v3/sales-funnel/products for one day at a
+# time. WB limits this endpoint per seller, so keep the loop deliberately slow.
+PRODUCTS_BACKFILL_CHUNK_SIZE = 1000
+PRODUCTS_BACKFILL_REQUEST_INTERVAL_SECONDS = 25
+PRODUCTS_BACKFILL_RATE_LIMIT_DELAY_SECONDS = 10 * 60
+FAST_PATH_CHUNK_SIZE = PRODUCTS_BACKFILL_CHUNK_SIZE
 # Retries per batch before split or quarantine (hard resume)
 MAX_BATCH_ATTEMPTS = 3
 
 STRATEGY_FAST_PATH = "fast_path_products"
 STRATEGY_LEGACY = "legacy_history"
+STRATEGY_PRODUCTS_THROTTLED = "products_throttled"
 
 
 def _cursor_for_json(c: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -80,6 +85,72 @@ def _ingest_error_stats(
     if request_summary is not None:
         out["request_summary"] = request_summary
     return out
+
+
+def _pause_backfill_after_transient_error(
+    *,
+    project_id: int,
+    run_id: int,
+    date_from: date,
+    date_to: date,
+    current_date: date,
+    offset: int,
+    strategy: str,
+    run_context: Dict[str, Any],
+    pause_reason: str,
+    error_message: str,
+    status_code: Optional[int] = None,
+    error: Optional[Any] = None,
+    request_summary: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Persist cursor and let execute_ingest schedule continuation for retryable WB failures."""
+    from datetime import datetime as dt
+
+    current_date_str = current_date.isoformat()
+    date_from_str = date_from.isoformat()
+    date_to_str = date_to.isoformat()
+    mark_backfill_state_paused(
+        project_id,
+        JOB_CODE_WB_CARD_STATS_DAILY,
+        date_from,
+        date_to,
+        run_id,
+        cursor_date=current_date,
+        cursor_nm_offset=offset,
+        error_message=error_message[:2000],
+        meta_json={
+            "strategy": strategy,
+            "pause_reason": pause_reason,
+            "processed_batches": run_context.get("processed_batches", 0),
+            "processed_days": run_context.get("processed_days", 0),
+            "rows_upserted": run_context.get("rows_upserted", 0),
+            "failed_batches_count": run_context.get("failed_batches_count", 0),
+        },
+    )
+    result: Dict[str, Any] = {
+        "ok": False,
+        "reason": "progress_saved",
+        "pause_reason": pause_reason,
+        "project_id": project_id,
+        "domain": "wb_card_stats_daily",
+        "cursor": {"date": current_date_str, "nm_offset": offset},
+        "saved_date_from": date_from_str,
+        "saved_date_to": date_to_str,
+        "processed_days": run_context.get("processed_days", 0),
+        "processed_batches": run_context.get("processed_batches", 0),
+        "rows_upserted": run_context.get("rows_upserted", 0),
+        "failed_batches_count": run_context.get("failed_batches_count", 0),
+        "range_status": "paused",
+        "strategy": strategy,
+        "finished_at": dt.utcnow().isoformat(),
+    }
+    if status_code is not None:
+        result["status_code"] = status_code
+    if error is not None:
+        result["error"] = error
+    if request_summary is not None:
+        result["request_summary"] = request_summary
+    return result
 
 
 # Known API -> DB column mapping for funnel history
@@ -605,20 +676,10 @@ async def ingest_wb_card_stats_daily(
             }
         return out
 
-    # Strategy: fixed for whole run/range; from range_state if resumed
-    meta = (range_state or {}).get("meta_json") or {}
-    if not isinstance(meta, dict):
-        meta = {}
-    existing_strategy = meta.get("strategy")
-    if existing_strategy in (STRATEGY_FAST_PATH, STRATEGY_LEGACY):
-        strategy = existing_strategy
-        logger.info(
-            "wb_card_stats_daily backfill: strategy resumed from range_state strategy=%s",
-            strategy,
-        )
-    else:
-        strategy = STRATEGY_FAST_PATH if params.get("use_fast_path") else STRATEGY_LEGACY
-        logger.info("wb_card_stats_daily backfill: strategy=%s (from params)", strategy)
+    # Backfill has one supported mechanism: throttled daily requests to
+    # /sales-funnel/products. Old saved fast/legacy strategy metadata is ignored.
+    strategy = STRATEGY_PRODUCTS_THROTTLED
+    logger.info("wb_card_stats_daily backfill: strategy=%s", strategy)
 
     # Fallback: if no range state and no cursor, try old partial checkpoint from ingest_runs (migration only)
     if not range_state and not (isinstance(cursor, dict) and cursor and cursor.get("date") is not None):
@@ -687,7 +748,8 @@ async def ingest_wb_card_stats_daily(
     date_from_str = date_from.isoformat()
     date_to_str = date_to.isoformat()
 
-    # Running stats (shared with _process_batch_with_retry / fast-path). _cursor_* = next batch to process (for failed state).
+    # Running stats (shared with _process_batch_with_retry / products backfill).
+    # _cursor_* = next batch to process (for failed state).
     run_context: Dict[str, Any] = {
         "processed_batches": 0,
         "processed_days": 0,
@@ -849,14 +911,15 @@ async def ingest_wb_card_stats_daily(
             },
         )
 
-        if strategy == STRATEGY_FAST_PATH:
-            # Fast-path: chunks of 1000 nmIds per request; zero-fill after full chunk response
+        if strategy == STRATEGY_PRODUCTS_THROTTLED:
+            # Throttled products backfill: one day at a time, chunks of 1000 nmIds
+            # per request; zero-fill after full chunk response.
             logger.info(
-                "wb_card_stats_daily fast-path start date_from=%s date_to=%s nm_ids_total=%s batch_size=%s range_status=%s loaded_cursor=%s loaded_cursor_source=%s",
+                "wb_card_stats_daily products backfill start date_from=%s date_to=%s nm_ids_total=%s batch_size=%s range_status=%s loaded_cursor=%s loaded_cursor_source=%s",
                 date_from_str,
                 date_to_str,
                 len(nm_ids),
-                FAST_PATH_CHUNK_SIZE,
+                PRODUCTS_BACKFILL_CHUNK_SIZE,
                 range_status,
                 cursor,
                 loaded_cursor_source,
@@ -873,7 +936,7 @@ async def ingest_wb_card_stats_daily(
                     elapsed = time.monotonic() - started
                     if elapsed >= max_seconds:
                         logger.info(
-                            "wb_card_stats_daily backfill fast-path: stopping max_seconds current_date=%s nm_offset=%s",
+                            "wb_card_stats_daily products backfill: stopping max_seconds current_date=%s nm_offset=%s",
                             current_date_str,
                             offset,
                         )
@@ -904,7 +967,7 @@ async def ingest_wb_card_stats_daily(
                         }
                     if run_context["processed_batches"] >= max_batches:
                         logger.info(
-                            "wb_card_stats_daily backfill fast-path: stopping max_batches current_date=%s nm_offset=%s",
+                            "wb_card_stats_daily products backfill: stopping max_batches current_date=%s nm_offset=%s",
                             current_date_str,
                             offset,
                         )
@@ -934,13 +997,13 @@ async def ingest_wb_card_stats_daily(
                             "finished_at": dt.utcnow().isoformat(),
                         }
 
-                    chunk_nm_ids = nm_ids[offset : offset + FAST_PATH_CHUNK_SIZE]
+                    chunk_nm_ids = nm_ids[offset : offset + PRODUCTS_BACKFILL_CHUNK_SIZE]
                     try:
                         products, currency = await client.get_sales_funnel_products_all_pages(
                             date_from=current_date_str,
                             date_to=current_date_str,
                             nm_ids=chunk_nm_ids,
-                            limit=FAST_PATH_CHUNK_SIZE,
+                            limit=PRODUCTS_BACKFILL_CHUNK_SIZE,
                             skip_deleted_nm=False,
                         )
                     except WBAnalyticsUnauthorizedError as e:
@@ -972,6 +1035,37 @@ async def ingest_wb_card_stats_daily(
                         }
                     except WBAnalyticsBadRequestError as e:
                         err_msg = f"wb_analytics_bad_request: {e.detail or e}"
+                        if e.status_code == 429:
+                            remaining = max_seconds - (time.monotonic() - started)
+                            if remaining > PRODUCTS_BACKFILL_RATE_LIMIT_DELAY_SECONDS + 5:
+                                logger.info(
+                                    "wb_card_stats_daily products backfill: rate limited, sleeping current_date=%s nm_offset=%s delay_seconds=%s",
+                                    current_date_str,
+                                    offset,
+                                    PRODUCTS_BACKFILL_RATE_LIMIT_DELAY_SECONDS,
+                                )
+                                time.sleep(PRODUCTS_BACKFILL_RATE_LIMIT_DELAY_SECONDS)
+                                continue
+                            logger.info(
+                                "wb_card_stats_daily products backfill: pausing after rate limit current_date=%s nm_offset=%s",
+                                current_date_str,
+                                offset,
+                            )
+                            return _pause_backfill_after_transient_error(
+                                project_id=project_id,
+                                run_id=run_id,
+                                date_from=date_from,
+                                date_to=date_to,
+                                current_date=current_date,
+                                offset=offset,
+                                strategy=strategy,
+                                run_context=run_context,
+                                pause_reason="wb_analytics_rate_limited",
+                                error_message=err_msg,
+                                status_code=e.status_code,
+                                error=e.detail,
+                                request_summary=e.request_summary,
+                            )
                         mark_backfill_state_failed(
                             project_id,
                             JOB_CODE_WB_CARD_STATS_DAILY,
@@ -1000,30 +1094,45 @@ async def ingest_wb_card_stats_daily(
                         }
                     except WBAnalyticsNetworkError as e:
                         err_msg = f"wb_analytics_network_error: {e}"
-                        mark_backfill_state_failed(
-                            project_id,
-                            JOB_CODE_WB_CARD_STATS_DAILY,
-                            date_from,
-                            date_to,
-                            run_id,
-                            cursor_date=current_date,
-                            cursor_nm_offset=offset,
-                            error_message=err_msg[:2000],
-                            meta_json={
-                                "strategy": strategy,
-                                "processed_batches": run_context["processed_batches"],
-                                "rows_upserted": run_context["rows_upserted"],
-                            },
+                        logger.info(
+                            "wb_card_stats_daily products backfill: pausing after network error current_date=%s nm_offset=%s",
+                            current_date_str,
+                            offset,
                         )
-                        return {
-                            "ok": False,
-                            "reason": "wb_analytics_network_error",
-                            "project_id": project_id,
-                            "error": str(e),
-                            "range_status": "failed",
-                            "cursor": {"date": current_date_str, "nm_offset": offset},
-                            "finished_at": dt.utcnow().isoformat(),
-                        }
+                        return _pause_backfill_after_transient_error(
+                            project_id=project_id,
+                            run_id=run_id,
+                            date_from=date_from,
+                            date_to=date_to,
+                            current_date=current_date,
+                            offset=offset,
+                            strategy=strategy,
+                            run_context=run_context,
+                            pause_reason="wb_analytics_network_error",
+                            error_message=err_msg,
+                            error=str(e),
+                        )
+                    except Exception as e:
+                        err_msg = f"wb_analytics_network_error: {type(e).__name__}: {e}"
+                        logger.info(
+                            "wb_card_stats_daily products backfill: pausing after unexpected network error current_date=%s nm_offset=%s error_type=%s",
+                            current_date_str,
+                            offset,
+                            type(e).__name__,
+                        )
+                        return _pause_backfill_after_transient_error(
+                            project_id=project_id,
+                            run_id=run_id,
+                            date_from=date_from,
+                            date_to=date_to,
+                            current_date=current_date,
+                            offset=offset,
+                            strategy=strategy,
+                            run_context=run_context,
+                            pause_reason="wb_analytics_network_error",
+                            error_message=err_msg,
+                            error=str(e) or type(e).__name__,
+                        )
 
                     rows = _rows_from_products_chunk(
                         products, chunk_nm_ids, current_date, currency
@@ -1037,7 +1146,7 @@ async def ingest_wb_card_stats_daily(
                     returned_count = len(products)
                     missing_count = len(chunk_nm_ids) - returned_count
                     logger.info(
-                        "wb_card_stats_daily fast-path chunk date=%s nm_offset=%s requested_nm_ids=%s returned_products_count=%s missing_nm_ids_count=%s rows_upserted_batch=%s cursor_saved=%s",
+                        "wb_card_stats_daily products backfill chunk date=%s nm_offset=%s requested_nm_ids=%s returned_products_count=%s missing_nm_ids_count=%s rows_upserted_batch=%s cursor_saved=%s",
                         current_date_str,
                         offset,
                         len(chunk_nm_ids),
@@ -1047,12 +1156,14 @@ async def ingest_wb_card_stats_daily(
                         next_cursor,
                     )
                     offset += len(chunk_nm_ids)
+                    if offset < len(nm_ids) or di < len(dates) - 1:
+                        time.sleep(PRODUCTS_BACKFILL_REQUEST_INTERVAL_SECONDS)
 
                 run_context["processed_days"] += 1
                 start_nm_offset = 0
 
             logger.info(
-                "wb_card_stats_daily backfill fast-path: reason=completed_range cursor_end=%s",
+                "wb_card_stats_daily products backfill: reason=completed_range cursor_end=%s",
                 {"date": date_to_str, "nm_offset": len(nm_ids)},
             )
             cursor_end = {"date": date_to_str, "nm_offset": len(nm_ids)}
@@ -1200,6 +1311,27 @@ async def ingest_wb_card_stats_daily(
                     }
                 except WBAnalyticsBadRequestError as e:
                     err_msg = f"wb_analytics_bad_request: {e.detail or e}"
+                    if e.status_code == 429:
+                        logger.info(
+                            "wb_card_stats_daily backfill: pausing after rate limit current_date=%s nm_offset=%s",
+                            current_date_str,
+                            offset,
+                        )
+                        return _pause_backfill_after_transient_error(
+                            project_id=project_id,
+                            run_id=run_id,
+                            date_from=date_from,
+                            date_to=date_to,
+                            current_date=current_date,
+                            offset=offset,
+                            strategy=strategy,
+                            run_context=run_context,
+                            pause_reason="wb_analytics_rate_limited",
+                            error_message=err_msg,
+                            status_code=e.status_code,
+                            error=e.detail,
+                            request_summary=e.request_summary,
+                        )
                     mark_backfill_state_failed(
                         project_id,
                         JOB_CODE_WB_CARD_STATS_DAILY,

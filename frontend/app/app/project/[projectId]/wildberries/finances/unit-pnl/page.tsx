@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { useParams, useSearchParams, useRouter } from 'next/navigation'
+import { useParams, useSearchParams, useRouter, usePathname } from 'next/navigation'
 import Link from 'next/link'
 import {
   getWBUnitPnl,
@@ -16,6 +16,7 @@ import {
   type ApiError,
 } from '@/lib/apiClient'
 import { HeaderSummary } from './HeaderSummary'
+import { HeaderSummaryFull } from './HeaderSummaryFull'
 import PortalBackButton from '@/components/PortalBackButton'
 import { usePageTitle } from '@/hooks/usePageTitle'
 import styles from './unit-pnl.module.css'
@@ -205,6 +206,9 @@ export default function WBUnitPnlPage() {
   const params = useParams()
   const searchParams = useSearchParams()
   const router = useRouter()
+  const pathname = usePathname()
+  const useFullWbTakeSummary = pathname.includes('/unit-pnl-full')
+  const reportPath = useFullWbTakeSummary ? 'unit-pnl-full' : 'unit-pnl'
   const projectId = params.projectId as string
   usePageTitle('WB Unit PnL', projectId)
 
@@ -344,9 +348,9 @@ export default function WBUnitPnlPage() {
       if (orderVal) qs.set('order', orderVal)
       qs.set('offset', String(newOffset))
       qs.set('limit', String(newLimit))
-      return `/app/project/${projectId}/wildberries/finances/unit-pnl?${qs.toString()}`
+      return `/app/project/${projectId}/wildberries/finances/${reportPath}?${qs.toString()}`
     },
-    [projectId, mode, reportId, rrDtFrom, rrDtTo, search, category, filterHeader, sort, order]
+    [projectId, reportPath, mode, reportId, rrDtFrom, rrDtTo, search, category, filterHeader, sort, order]
   )
 
   const handleRefresh = useCallback(() => {
@@ -432,6 +436,7 @@ export default function WBUnitPnlPage() {
   const headerTotals = data?.header_totals
   const items = data?.items ?? []
   const rowsTotal = data?.rows_total ?? 0
+  const SummaryComponent = useFullWbTakeSummary ? HeaderSummaryFull : HeaderSummary
 
   const canGoPrev = offset > 0
   const canGoNext = offset + limit < rowsTotal
@@ -477,9 +482,7 @@ export default function WBUnitPnlPage() {
 
   const SORTABLE_COLUMNS = [
     { key: 'sold_units', label: 'Продано, шт' },
-    { key: 'total_to_pay', label: 'К выплате, ₽' },
-    { key: 'margin_pct_of_revenue', label: 'Маржа, %' },
-    { key: 'wb_pct_of_sale', label: '% WB итого (на ед)' },
+    { key: 'wb_total_cost_per_unit', label: 'WB/шт' },
   ] as const
 
   return (
@@ -588,7 +591,7 @@ export default function WBUnitPnlPage() {
             <h2>{headerTotals.filter_header ? 'Сводка по отфильтрованным SKU' : 'Сводка по выборке'}</h2>
           </div>
           <div className={styles.cardBody}>
-            <HeaderSummary headerTotals={headerTotals} items={items} />
+            <SummaryComponent headerTotals={headerTotals} items={items} />
             <div className={styles.summaryMeta}>
               Операций (строк отчёта): {headerTotals.scope_lines_total ?? headerTotals.lines_total ?? 0} · SKU в
               выборке: {headerTotals.skus_total ?? 0}
@@ -689,7 +692,9 @@ export default function WBUnitPnlPage() {
                       )}
                     </th>
                   ))}
-                  <th className={styles.numberCell}>Прибыль, ₽/шт</th>
+                  <th className={styles.numberCell}>Расходы/шт</th>
+                  <th className={styles.numberCell}>Прибыль/шт</th>
+                  <th className={styles.numberCell}>Маржа</th>
                 </tr>
               </thead>
               <tbody>
@@ -701,6 +706,14 @@ export default function WBUnitPnlPage() {
                   const subLabel = row.vendor_code
                     ? `${row.nm_id} · ${row.vendor_code}`
                     : `${row.nm_id}`
+                  const expenseParts = [
+                    row.cogs_per_unit,
+                    row.packaging_cost_per_unit,
+                    row.additional_costs_per_unit ?? 0,
+                  ]
+                  const expensesPerUnit = !row.cogs_missing && !row.packaging_missing && expenseParts.every((value) => value != null)
+                    ? expenseParts.reduce((sum, value) => sum + Number(value ?? 0), 0)
+                    : null
                   return (
                     <React.Fragment key={row.nm_id}>
                       <tr
@@ -737,29 +750,16 @@ export default function WBUnitPnlPage() {
                         </td>
                         <td className={styles.numberCell}>{formatInt(row.net_sales_cnt)}</td>
                         <td className={`${styles.numberCell} ${styles.strongCell}`}>
-                          {formatRUB(row.total_to_pay)}
+                          {row.wb_total_cost_per_unit != null ? formatRUB(row.wb_total_cost_per_unit) : '—'}
                         </td>
                         <td className={styles.numberCell}>
-                          {row.cogs_missing
-                            ? '—'
-                            : row.margin_pct_of_revenue != null
-                              ? `${formatPct(row.margin_pct_of_revenue)}%`
-                              : '—'}
+                          {expensesPerUnit != null ? formatRUB(expensesPerUnit) : '—'}
                         </td>
                         <td className={styles.numberCell}>
-                          {(() => {
-                            const fp = row.fact_price_avg ?? 0
-                            const wb = row.wb_total_cost_per_unit
-                            if (!fp || fp <= 0 || wb == null) return '—'
-                            return `${formatPct((wb / fp) * 100)}%`
-                          })()}
+                          {row.full_profit_per_unit != null ? formatRUB(row.full_profit_per_unit) : '—'}
                         </td>
                         <td className={styles.numberCell}>
-                          {row.cogs_missing
-                            ? '—'
-                            : row.profit_per_unit != null
-                              ? formatRUB(row.profit_per_unit)
-                              : '—'}
+                          {row.full_margin_pct_of_revenue != null ? `${formatPct(row.full_margin_pct_of_revenue)}%` : '—'}
                         </td>
                       </tr>
                       {isExpanded && (
@@ -863,7 +863,7 @@ function MetricLine({
 }
 
 function DetailsPanel({ details, row }: { details: WBUnitPnlDetailsResponse; row: WBUnitPnlRow }) {
-  const { product, base_calc, wb_costs_per_unit, logistics_counts, profitability } = details
+  const { product, base_calc, wb_costs_per_unit, logistics_counts, profitability, extended_costs } = details
 
   const commissionVvSigned = details.commission_vv_signed ?? 0
   const acquiring = details.acquiring ?? 0
@@ -879,6 +879,9 @@ function DetailsPanel({ details, row }: { details: WBUnitPnlDetailsResponse; row
   const salesCnt = row?.sales_cnt ?? 0
   const breakdown = wb_costs_per_unit?.breakdown
   const wbTotalCostPerUnit = wb_costs_per_unit?.total ?? breakdown?.total ?? null
+  const perUnitFromTotal = (value: number | null | undefined) => (
+    value != null && salesCnt > 0 ? formatRUB(value / salesCnt) : '—'
+  )
 
   const profitUnit = profitability?.profit_per_unit ?? row?.profit_per_unit
   const marginPct = profitability?.margin_pct_of_revenue ?? row?.margin_pct_of_revenue
@@ -1002,6 +1005,94 @@ function DetailsPanel({ details, row }: { details: WBUnitPnlDetailsResponse; row
                 : '—'
             }
           />
+        </div>
+      </div>
+
+      <div className={`${styles.detailsCard} ${styles.detailsFull}`}>
+        <h3 className={styles.detailsTitle}>Полная экономика</h3>
+        <div className={styles.detailsEconomyGrid}>
+          <div>
+            <div className={styles.sectionKicker}>На единицу</div>
+            <div className={styles.metricList}>
+              <MetricLine
+                label="Упаковка"
+                value={
+                  extended_costs?.packaging_cost_per_unit != null
+                    ? formatRUB(extended_costs.packaging_cost_per_unit)
+                    : '—'
+                }
+              />
+              <MetricLine
+                label="Индивидуальные расходы SKU"
+                value={perUnitFromTotal(extended_costs?.product_additional_costs_total)}
+              />
+              <MetricLine
+                label="Логистика FBS и возвраты"
+                value={perUnitFromTotal(extended_costs?.marketplace_additional_costs_total)}
+              />
+              <MetricLine
+                label="ФОТ"
+                value={perUnitFromTotal(extended_costs?.warehouse_labor_costs_total)}
+              />
+              <MetricLine
+                label="Итого операционные расходы"
+                value={formatRUB(extended_costs?.additional_costs_per_unit ?? 0)}
+              />
+              <MetricLine
+                label="Полная прибыль"
+                value={row.full_profit_per_unit != null ? formatRUB(row.full_profit_per_unit) : '—'}
+              />
+              <MetricLine
+                label="Полная маржа"
+                value={
+                  row.full_margin_pct_of_revenue != null
+                    ? `${formatPct(row.full_margin_pct_of_revenue)}%`
+                    : '—'
+                }
+              />
+            </div>
+          </div>
+          <div>
+            <div className={styles.sectionKicker}>Итого по SKU</div>
+            <div className={styles.metricList}>
+              <MetricLine
+                label="Упаковка"
+                value={
+                  extended_costs?.packaging_cost_total != null
+                    ? formatRUB(extended_costs.packaging_cost_total)
+                    : '—'
+                }
+              />
+              <MetricLine
+                label="Индивидуальные расходы SKU"
+                value={formatRUB(extended_costs?.product_additional_costs_total ?? 0)}
+              />
+              <MetricLine
+                label="Логистика FBS и возвраты"
+                value={formatRUB(extended_costs?.marketplace_additional_costs_total ?? 0)}
+              />
+              <MetricLine
+                label="ФОТ"
+                value={formatRUB(extended_costs?.warehouse_labor_costs_total ?? 0)}
+              />
+              <MetricLine
+                label="Итого операционные расходы"
+                value={formatRUB(extended_costs?.additional_costs_total ?? 0)}
+              />
+              <MetricLine
+                label="Полная прибыль"
+                value={row.full_profit_total != null ? formatRUB(row.full_profit_total) : '—'}
+              />
+              <MetricLine
+                label="Полная маржа"
+                value={
+                  row.full_margin_pct_of_revenue != null
+                    ? `${formatPct(row.full_margin_pct_of_revenue)}%`
+                    : '—'
+                }
+              />
+            </div>
+          </div>
         </div>
       </div>
 

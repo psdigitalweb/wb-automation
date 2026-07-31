@@ -18,12 +18,15 @@ type ProjectMarketplace = {
   is_enabled: boolean
 }
 
+const NAV_COLLAPSED_STORAGE_KEY = 'ecomcore.nav.collapsed'
+
 export default function AppShellV2({ children }: AppShellV2Props) {
   const pathname = usePathname() || '/app/projects'
   const { projectId, restPath } = getProjectRoute(pathname)
   const activeRail = getActiveRailId(pathname)
   const isProjectsIndex = pathname === '/app/projects'
   const [openRail, setOpenRail] = useState(activeRail)
+  const [navCollapsed, setNavCollapsed] = useState(false)
   const subNavGroups = subNavGroupsByRail[openRail] ?? []
   const showSubNav = Boolean(projectId && subNavGroups.length > 0)
   const [connectedMarketplaces, setConnectedMarketplaces] = useState<Set<string> | null>(null)
@@ -35,6 +38,28 @@ export default function AppShellV2({ children }: AppShellV2Props) {
   useEffect(() => {
     setOpenRail(activeRail)
   }, [activeRail])
+
+  useEffect(() => {
+    try {
+      setNavCollapsed(window.localStorage.getItem(NAV_COLLAPSED_STORAGE_KEY) === '1')
+    } catch {
+      setNavCollapsed(false)
+    }
+  }, [])
+
+  function changeNavCollapsed(collapsed: boolean) {
+    setNavCollapsed(collapsed)
+    try {
+      window.localStorage.setItem(NAV_COLLAPSED_STORAGE_KEY, collapsed ? '1' : '0')
+    } catch {
+      // The shell still works when browser storage is unavailable.
+    }
+  }
+
+  function openPrimary(id: string) {
+    if (navCollapsed) changeNavCollapsed(false)
+    setOpenRail(id)
+  }
 
   useEffect(() => {
     if (!projectId) {
@@ -66,18 +91,29 @@ export default function AppShellV2({ children }: AppShellV2Props) {
   }, [projectId])
 
   return (
-    <div className={`ec-ui-v2 ${isProjectsIndex ? 'ec-ui-v2-projects-index' : ''}`}>
+    <div
+      className={`ec-ui-v2 ${isProjectsIndex ? 'ec-ui-v2-projects-index' : ''} ${
+        navCollapsed ? 'is-nav-collapsed' : ''
+      }`}
+    >
       {isProjectsIndex ? null : (
         <RailNav
           activePrimary={activeRail}
           openPrimary={openRail}
           projectId={projectId}
           items={visibleRailItems}
-          onPrimaryOpen={setOpenRail}
+          collapsed={navCollapsed}
+          onPrimaryOpen={openPrimary}
+          onCollapsedChange={changeNavCollapsed}
         />
       )}
       {isProjectsIndex ? null : (
-        <SubNav visible={showSubNav} projectId={projectId} restPath={restPath} groups={subNavGroups} />
+        <SubNav
+          visible={showSubNav && !navCollapsed}
+          projectId={projectId}
+          restPath={restPath}
+          groups={subNavGroups}
+        />
       )}
       <div className="ec-main-zone">
         <TopbarV2 variant={isProjectsIndex ? 'projects' : 'app'} />

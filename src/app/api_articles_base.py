@@ -5,7 +5,7 @@ This endpoint provides a denormalized "article base" table per project, combinin
 - latest RRP XML snapshot (rrp_price, rrp_stock)
 - latest WB price snapshot (wb_price, wb_discount)
 - latest WB stock snapshot (stock_wb)
-- latest frontend prices snapshot for project brand_id (showcase_price, spp)
+- latest frontend prices snapshot for project storefront brands (showcase_price, spp)
 
 It is designed for the frontend page /app/project/{projectId}/articles-base.
 """
@@ -20,6 +20,7 @@ from sqlalchemy import text
 
 from app.db import engine
 from app.deps import get_current_active_user, get_project_membership
+from app.services.wb_storefront_brands import get_project_frontend_brand_id_strings
 from app.utils.ttl_cache import (
     delete as cache_delete,
     get_json as cache_get_json,
@@ -73,7 +74,7 @@ async def get_project_articles_base(
     missing_rrp: bool = Query(False, description="Filter: missing RRP (by vendor_code_norm)"),
     missing_wb_stock: bool = Query(False, description="[DEPRECATED] Alias for missing_fbs_stock"),
     missing_wb_price: bool = Query(False, description="Filter: missing WB price snapshot (by nm_id)"),
-    missing_front: bool = Query(False, description="Filter: missing frontend price (by nm_id + brand_id run)"),
+    missing_front: bool = Query(False, description="Filter: missing frontend price (by nm_id + storefront brand run)"),
     has_fbs_stock: bool = Query(False, description="Filter: FBS stock qty > 0 (WB merchant availability)"),
     missing_fbs_stock: bool = Query(False, description="Filter: missing FBS stock (qty = 0)"),
     has_fbo_stock: bool = Query(False, description="Filter: FBO stock qty > 0 (WB warehouses / supplier stocks)"),
@@ -139,14 +140,6 @@ async def get_project_articles_base(
     sql = text(
         f"""
         WITH
-        brand AS (
-            SELECT pm.settings_json->>'brand_id' AS brand_id
-            FROM project_marketplaces pm
-            JOIN marketplaces m ON m.id = pm.marketplace_id
-            WHERE pm.project_id = :project_id
-              AND m.code = 'wildberries'
-            LIMIT 1
-        ),
         rrp_run AS (
             SELECT MAX(snapshot_at) AS run_at
             FROM rrp_snapshots
@@ -160,9 +153,8 @@ async def get_project_articles_base(
         front_run AS (
             SELECT MAX(f.snapshot_at) AS run_at
             FROM frontend_catalog_price_snapshots f
-            JOIN brand b ON b.brand_id IS NOT NULL
             WHERE f.query_type = 'brand'
-              AND f.query_value = b.brand_id
+              AND f.query_value = ANY(:brand_ids)
         ),
         wb_price_keys AS (
             SELECT ps.nm_id::bigint AS nm_id
@@ -173,10 +165,9 @@ async def get_project_articles_base(
         front_keys AS (
             SELECT f.nm_id::bigint AS nm_id
             FROM frontend_catalog_price_snapshots f
-            JOIN brand b ON b.brand_id IS NOT NULL
             JOIN front_run r ON f.snapshot_at = r.run_at
             WHERE f.query_type = 'brand'
-              AND f.query_value = b.brand_id
+              AND f.query_value = ANY(:brand_ids)
             GROUP BY f.nm_id
         ),
         prod_nm_ids AS (
@@ -319,10 +310,9 @@ async def get_project_articles_base(
                 f.discount_calc_percent AS spp
             FROM frontend_catalog_price_snapshots f
             JOIN keys k ON k.nm_id = f.nm_id
-            JOIN brand b ON b.brand_id IS NOT NULL
             JOIN front_run r ON f.snapshot_at = r.run_at
             WHERE f.query_type = 'brand'
-              AND f.query_value = b.brand_id
+              AND f.query_value = ANY(:brand_ids)
             ORDER BY f.nm_id, f.snapshot_at DESC
         )
         SELECT
@@ -355,8 +345,10 @@ async def get_project_articles_base(
         """
     )
 
+    brand_ids = get_project_frontend_brand_id_strings(project_id)
     params = {
         "project_id": project_id,
+        "brand_ids": brand_ids,
         "qpat": qpat,
         "qnum": qnum,
         "only_wb": only_in_stock_wb,
@@ -440,14 +432,6 @@ async def get_articles_base_summary(
     sql = text(
         """
         WITH
-        brand AS (
-            SELECT pm.settings_json->>'brand_id' AS brand_id
-            FROM project_marketplaces pm
-            JOIN marketplaces m ON m.id = pm.marketplace_id
-            WHERE pm.project_id = :project_id
-              AND m.code = 'wildberries'
-            LIMIT 1
-        ),
         totals AS (
             SELECT
                 COUNT(*)::bigint AS total_products,
@@ -481,9 +465,8 @@ async def get_articles_base_summary(
         frontend_prices_at AS (
             SELECT MAX(f.snapshot_at) AS frontend_prices_at
             FROM frontend_catalog_price_snapshots f
-            JOIN brand b ON b.brand_id IS NOT NULL
             WHERE f.query_type = 'brand'
-              AND f.query_value = b.brand_id
+              AND f.query_value = ANY(:brand_ids)
         ),
         rrp_run AS (
             SELECT MAX(snapshot_at) AS run_at
@@ -547,19 +530,17 @@ async def get_articles_base_summary(
         front_run AS (
             SELECT MAX(f.snapshot_at) AS run_at
             FROM frontend_catalog_price_snapshots f
-            JOIN brand b ON b.brand_id IS NOT NULL
             WHERE f.query_type = 'brand'
-              AND f.query_value = b.brand_id
+              AND f.query_value = ANY(:brand_ids)
         ),
         front_latest AS (
             SELECT DISTINCT ON (f.nm_id)
                 f.nm_id::bigint AS nm_id,
                 f.price_product AS front_price
             FROM frontend_catalog_price_snapshots f
-            JOIN brand b ON b.brand_id IS NOT NULL
             JOIN front_run r ON f.snapshot_at = r.run_at
             WHERE f.query_type = 'brand'
-              AND f.query_value = b.brand_id
+              AND f.query_value = ANY(:brand_ids)
             ORDER BY f.nm_id, f.snapshot_at DESC
         ),
         prod_codes AS (
@@ -601,7 +582,13 @@ async def get_articles_base_summary(
     )
 
     with engine.connect() as conn:
-        row = conn.execute(sql, {"project_id": project_id}).mappings().first()
+        row = conn.execute(
+            sql,
+            {
+                "project_id": project_id,
+                "brand_ids": get_project_frontend_brand_id_strings(project_id),
+            },
+        ).mappings().first()
         if not row:
             payload = {"totals": {"total_products": 0, "total_vendor_code_norm": 0}}
             cache_set_json(cache_key, payload, ttl_s)
@@ -705,29 +692,19 @@ async def get_articles_base_coverage(
         WHERE ps.project_id = :project_id
         ORDER BY ps.nm_id, ps.created_at DESC
     ),
-    brand AS (
-        SELECT pm.settings_json->>'brand_id' AS brand_id
-        FROM project_marketplaces pm
-        JOIN marketplaces m ON m.id = pm.marketplace_id
-        WHERE pm.project_id = :project_id
-          AND m.code = 'wildberries'
-        LIMIT 1
-    ),
     front_run AS (
         SELECT MAX(f.snapshot_at) AS run_at
         FROM frontend_catalog_price_snapshots f
-        JOIN brand b ON b.brand_id IS NOT NULL
         WHERE f.query_type = 'brand'
-          AND f.query_value = b.brand_id
+          AND f.query_value = ANY(:brand_ids)
     ),
     front_latest AS (
         SELECT DISTINCT ON (f.nm_id)
             f.nm_id::bigint AS nm_id
         FROM frontend_catalog_price_snapshots f
-        JOIN brand b ON b.brand_id IS NOT NULL
         JOIN front_run r ON f.snapshot_at = r.run_at
         WHERE f.query_type = 'brand'
-          AND f.query_value = b.brand_id
+          AND f.query_value = ANY(:brand_ids)
         ORDER BY f.nm_id, f.snapshot_at DESC
     )
     ,
@@ -757,7 +734,11 @@ async def get_articles_base_coverage(
     )
     """
 
-    params = {"project_id": project_id, "limit": limit}
+    params = {
+        "project_id": project_id,
+        "limit": limit,
+        "brand_ids": get_project_frontend_brand_id_strings(project_id),
+    }
 
     def q(sql_body: str):
         with engine.connect() as conn:

@@ -7,6 +7,7 @@ const REPORTS_ALLOWED_PAGES = new Set([
   '/client/404',
   '/unit-pnl',
   '/price-discrepancies',
+  '/spp-dynamics',
   '/favicon.ico',
 ])
 
@@ -15,6 +16,7 @@ const REPORTS_ALLOWED_API_PREFIXES = [
   '/api/v1/projects/1/marketplaces/wildberries/products/subjects',
   '/api/v1/projects/1/marketplaces/wildberries/finances/reports/search',
   '/api/v1/projects/1/wildberries/price-discrepancies',
+  '/api/v1/projects/1/wildberries/spp-dynamics',
   '/api/v1/projects/1/wildberries/categories',
 ]
 
@@ -56,11 +58,19 @@ export function middleware(req: NextRequest) {
       }
       return NextResponse.rewrite(url)
     }
+    if (pathname === '/spp-dynamics') {
+      const url = req.nextUrl.clone()
+      url.pathname = '/app/project/1/wildberries/spp-dynamics'
+      return NextResponse.rewrite(url)
+    }
     if (pathname.startsWith('/app/project/1/wildberries/finances/unit-pnl')) {
       return NextResponse.redirect(new URL('/unit-pnl' + search, req.url))
     }
     if (pathname.startsWith('/app/project/1/wildberries/price-discrepancies')) {
       return NextResponse.redirect(new URL('/price-discrepancies' + search, req.url))
+    }
+    if (pathname.startsWith('/app/project/1/wildberries/spp-dynamics')) {
+      return NextResponse.redirect(new URL('/spp-dynamics' + search, req.url))
     }
     if (pathname.startsWith('/api/')) {
       if (isAllowedReportsApi(pathname)) {
@@ -86,6 +96,9 @@ export function middleware(req: NextRequest) {
   }
   if (pathname === '/price-discrepancies') {
     return NextResponse.redirect(new URL('/app/project/1/wildberries/price-discrepancies?only_below_rrp=true', req.url))
+  }
+  if (pathname === '/spp-dynamics') {
+    return NextResponse.redirect(new URL('/app/project/1/wildberries/spp-dynamics' + search, req.url))
   }
 
   return NextResponse.next()

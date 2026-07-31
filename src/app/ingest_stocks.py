@@ -135,7 +135,7 @@ async def ingest_stocks(project_id: int, run_id: int | None = None) -> Dict[str,
     print(f"ingest_stocks: using {len(warehouses)} warehouses from wb_warehouses")
 
     # 2. Получаем chrtIds из products
-    chrt_ids = db_products.get_chrt_ids()
+    chrt_ids = db_products.get_chrt_ids(project_id)
     if not chrt_ids:
         print(
             "ingest_stocks: no chrtIds found in products; "
@@ -149,7 +149,7 @@ async def ingest_stocks(project_id: int, run_id: int | None = None) -> Dict[str,
         f"run_id={run_id}"
     )
 
-    client = WBClient()
+    client = WBClient(token=token)
 
     # Один run_at для всего прогона, чтобы все строки snapshot'а имели одинаковый timestamp
     run_at = datetime.now(timezone.utc)

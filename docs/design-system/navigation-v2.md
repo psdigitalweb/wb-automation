@@ -32,12 +32,12 @@ Enabled:
 - `unit-pnl`: `/app/project/:projectId/wildberries/finances/unit-pnl`
 - `funnel`: `/app/project/:projectId/wildberries/funnel-signals`
 - `reviews`: `/app/project/:projectId/wildberries/reviews`
+- `catalog`: `/app/project/:projectId/wildberries/catalog`
 
 Disabled/future:
 
 - `geo-sales`
 - `spp-dynamics`
-- `catalog`
 - `prices`
 - `stocks`
 

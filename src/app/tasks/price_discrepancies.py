@@ -15,6 +15,7 @@ from sqlalchemy import text
 
 from app.celery_app import celery_app
 from app.db import engine
+from app.services.wb_storefront_brands import get_project_frontend_brand_id_strings
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,7 @@ def diagnose_data_availability(project_id: int) -> Dict[str, Any]:
     """Diagnose data availability for price discrepancies report.
     
     Checks:
-    - brand_id configuration in project_marketplaces
+    - WB storefront brand configuration
     - RRP snapshots availability
     - Price snapshots availability
     - Frontend catalog price snapshots availability
@@ -46,11 +47,10 @@ def diagnose_data_availability(project_id: int) -> Dict[str, Any]:
     }
     
     with engine.connect() as conn:
-        # Check 1: brand_id configuration
-        brand_id_result = conn.execute(
+        # Check 1: WB storefront brand configuration
+        marketplace_result = conn.execute(
             text("""
-                SELECT pm.settings_json->>'brand_id' AS brand_id,
-                       pm.is_enabled,
+                SELECT pm.is_enabled,
                        m.code AS marketplace_code
                 FROM project_marketplaces pm
                 JOIN marketplaces m ON m.id = pm.marketplace_id
@@ -60,38 +60,29 @@ def diagnose_data_availability(project_id: int) -> Dict[str, Any]:
             """),
             {"project_id": project_id},
         ).mappings().first()
+        brand_ids = get_project_frontend_brand_id_strings(project_id)
         
-        if not brand_id_result:
+        if not marketplace_result:
             diagnostics["errors"].append(
                 "No Wildberries marketplace configured for this project. "
                 "Please configure marketplace in project settings."
             )
-            diagnostics["checks"]["brand_id"] = {
+            diagnostics["checks"]["storefront_brands"] = {
                 "configured": False,
-                "brand_id": None,
+                "brand_ids": [],
                 "is_enabled": False,
             }
         else:
-            brand_id_str = brand_id_result.get("brand_id")
-            brand_id = None
-            if brand_id_str:
-                try:
-                    brand_id = int(brand_id_str)
-                except (ValueError, TypeError):
-                    diagnostics["warnings"].append(
-                        f"brand_id is not a valid integer: {brand_id_str}"
-                    )
-            
-            diagnostics["checks"]["brand_id"] = {
-                "configured": brand_id is not None,
-                "brand_id": brand_id,
-                "is_enabled": bool(brand_id_result.get("is_enabled")),
+            diagnostics["checks"]["storefront_brands"] = {
+                "configured": bool(brand_ids),
+                "brand_ids": brand_ids,
+                "is_enabled": bool(marketplace_result.get("is_enabled")),
             }
             
-            if not brand_id:
+            if not brand_ids:
                 diagnostics["warnings"].append(
-                    "brand_id is not configured in project_marketplaces.settings_json. "
-                    "Frontend catalog prices cannot be filtered by brand."
+                    "WB storefront brands are not configured. "
+                    "Frontend catalog prices cannot be scoped for this project."
                 )
         
         # Check 2: RRP snapshots
@@ -150,8 +141,8 @@ def diagnose_data_availability(project_id: int) -> Dict[str, Any]:
                 "Run prices ingestion to populate data."
             )
         
-        # Check 4: Frontend catalog price snapshots (if brand_id is configured)
-        if brand_id:
+        # Check 4: Frontend catalog price snapshots (if storefront brands are configured)
+        if brand_ids:
             frontend_stats = conn.execute(
                 text("""
                     SELECT 
@@ -161,9 +152,9 @@ def diagnose_data_availability(project_id: int) -> Dict[str, Any]:
                         MIN(snapshot_at) AS earliest_snapshot_at
                     FROM frontend_catalog_price_snapshots
                     WHERE query_type = 'brand'
-                      AND query_value = :brand_id
+                      AND query_value = ANY(:brand_ids)
                 """),
-                {"brand_id": str(brand_id)},
+                {"brand_ids": [str(brand_id) for brand_id in brand_ids]},
             ).mappings().first()
             
             frontend_count = frontend_stats["total_count"] or 0
@@ -176,7 +167,7 @@ def diagnose_data_availability(project_id: int) -> Dict[str, Any]:
             
             if frontend_count == 0:
                 diagnostics["warnings"].append(
-                    f"No frontend catalog price snapshots found for brand_id={brand_id}. "
+                    f"No frontend catalog price snapshots found for storefront brands={brand_ids}. "
                     "Run frontend_prices ingestion to populate data."
                 )
         else:
@@ -185,7 +176,7 @@ def diagnose_data_availability(project_id: int) -> Dict[str, Any]:
                 "distinct_nm_ids": 0,
                 "latest_snapshot_at": None,
                 "earliest_snapshot_at": None,
-                "skipped": "brand_id not configured",
+                "skipped": "storefront brands not configured",
             }
         
         # Check 5: Stock snapshots
@@ -276,17 +267,9 @@ def diagnose_data_availability(project_id: int) -> Dict[str, Any]:
                 )
         
         # Check 8: Sample query to see if report would return data
-        if brand_id and products_count > 0:
+        if brand_ids and products_count > 0:
             sample_query = text("""
                 WITH
-                brand AS (
-                    SELECT pm.settings_json->>'brand_id' AS brand_id
-                    FROM project_marketplaces pm
-                    JOIN marketplaces m ON m.id = pm.marketplace_id
-                    WHERE pm.project_id = :project_id
-                      AND m.code = 'wildberries'
-                    LIMIT 1
-                ),
                 rrp_run AS (
                     SELECT MAX(snapshot_at) AS run_at
                     FROM rrp_snapshots
@@ -295,9 +278,8 @@ def diagnose_data_availability(project_id: int) -> Dict[str, Any]:
                 front_run AS (
                     SELECT MAX(f.snapshot_at) AS run_at
                     FROM frontend_catalog_price_snapshots f
-                    JOIN brand b ON b.brand_id IS NOT NULL
                     WHERE f.query_type = 'brand'
-                      AND f.query_value = b.brand_id
+                      AND f.query_value = ANY(:brand_ids)
                 ),
                 rrp_latest AS (
                     SELECT s.vendor_code_norm,
@@ -312,10 +294,9 @@ def diagnose_data_availability(project_id: int) -> Dict[str, Any]:
                         f.nm_id::bigint AS nm_id,
                         f.price_product AS showcase_price
                     FROM frontend_catalog_price_snapshots f
-                    JOIN brand b ON b.brand_id IS NOT NULL
                     JOIN front_run r ON f.snapshot_at = r.run_at
                     WHERE f.query_type = 'brand'
-                      AND f.query_value = b.brand_id
+                      AND f.query_value = ANY(:brand_ids)
                     ORDER BY f.nm_id, f.snapshot_at DESC
                 )
                 SELECT COUNT(*) AS sample_count
@@ -329,7 +310,10 @@ def diagnose_data_availability(project_id: int) -> Dict[str, Any]:
                 LIMIT 10
             """)
             
-            sample_result = conn.execute(sample_query, {"project_id": project_id}).scalar()
+            sample_result = conn.execute(
+                sample_query,
+                {"project_id": project_id, "brand_ids": [str(brand_id) for brand_id in brand_ids]},
+            ).scalar()
             diagnostics["checks"]["sample_report_query"] = {
                 "rows_with_both_rrp_and_showcase": sample_result or 0,
             }

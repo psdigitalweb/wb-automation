@@ -215,7 +215,7 @@ export default function ProjectDashboard() {
           <div className={styles.panelHeader}>
             <div>
               <div className={styles.eyebrow}>Пульс проекта</div>
-              <h2>Загружаем реальные данные</h2>
+              <h2>Загружаем данные</h2>
             </div>
           </div>
           <div className={styles.skeletonGrid} aria-label="Загрузка">

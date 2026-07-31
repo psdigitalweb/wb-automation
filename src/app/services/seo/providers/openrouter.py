@@ -5,10 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Sequence
 
-import httpx
-
 from app import settings
 from app.services.seo.providers.base import ChatMessage, ChatProvider, ChatResponse, EmbeddingProvider, EmbeddingResponse
+from app.services.seo.providers.http_client import build_openrouter_http_client
 
 
 @dataclass
@@ -34,7 +33,7 @@ class OpenRouterProvider(ChatProvider, EmbeddingProvider):
 
     def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         url = f"{self.base_url.rstrip('/')}/{path.lstrip('/')}"
-        with httpx.Client(timeout=self.timeout_seconds) as client:
+        with build_openrouter_http_client(timeout_seconds=self.timeout_seconds) as client:
             response = client.post(url, headers=self._build_headers(), json=payload)
             response.raise_for_status()
             data = response.json()

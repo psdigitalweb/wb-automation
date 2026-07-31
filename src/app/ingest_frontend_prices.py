@@ -6,7 +6,7 @@ import os
 import random
 import time
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
@@ -84,6 +84,26 @@ def compute_retry_sleep_seconds(retry_count: int) -> int:
     sleep = base * (1.0 + jitter)
     sleep = max(10.0, min(float(settings.FRONTEND_PRICES_MAX_RETRY_SLEEP_SECONDS), sleep))
     return int(round(sleep))
+
+
+def calculate_spp_percent_from_customer_price(
+    price_showcase: Any,
+    customer_price: Any,
+) -> int | None:
+    """Calculate WB extra discount from seller-discounted customer price."""
+    if price_showcase is None or customer_price is None:
+        return None
+    try:
+        showcase = Decimal(str(price_showcase))
+        customer = Decimal(str(customer_price))
+    except Exception:
+        return None
+    if showcase < 0 or customer <= 0:
+        return None
+
+    raw = (Decimal("1") - (showcase / customer)) * Decimal("100")
+    bounded = max(Decimal("0"), min(Decimal("100"), raw))
+    return int(bounded.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
 def compute_retry_sleep_429(retry_count: int) -> int:
@@ -340,6 +360,10 @@ async def ingest_frontend_brand_prices(
     proxy_scheme: str | None = None,
     http_min_retries: Optional[int] = None,
     http_timeout_jitter_sec: Optional[int] = None,
+    rate_limit_max_retries: Optional[int] = None,
+    rate_limit_base_sleep_seconds: Optional[int] = None,
+    rate_limit_max_sleep_seconds: Optional[int] = None,
+    rate_limit_max_total_wait_seconds: Optional[int] = None,
     min_coverage_ratio: Optional[float] = None,
     max_runtime_seconds: Optional[int] = None,
 ) -> Dict[str, Any]:
@@ -583,6 +607,22 @@ async def ingest_frontend_brand_prices(
         last_meta: dict | None = None
         page_attempts = 10
         retry_count_429 = 0
+        max_429_retries = int(rate_limit_max_retries) if rate_limit_max_retries and rate_limit_max_retries > 0 else 5
+        rate_limit_base_sleep = (
+            int(rate_limit_base_sleep_seconds)
+            if rate_limit_base_sleep_seconds is not None and rate_limit_base_sleep_seconds > 0
+            else 2
+        )
+        rate_limit_max_sleep = (
+            int(rate_limit_max_sleep_seconds)
+            if rate_limit_max_sleep_seconds is not None and rate_limit_max_sleep_seconds > 0
+            else 60
+        )
+        rate_limit_max_total_wait = (
+            int(rate_limit_max_total_wait_seconds)
+            if rate_limit_max_total_wait_seconds is not None and rate_limit_max_total_wait_seconds > 0
+            else settings.FRONTEND_PRICES_MAX_TOTAL_RETRY_WAIT_SECONDS
+        )
         for page_attempt in range(1, page_attempts + 1):
             data = await client.fetch_brand_catalog_page(brand_id, page, base_url)
             last_meta = getattr(client, "last_request_meta", None)
@@ -595,18 +635,18 @@ async def ingest_frontend_brand_prices(
             except Exception:
                 status_code = None
 
-            # Rate limit (429): backoff 2, 4, 8, 16, 32 sec (cap 60), max 5 retries then fail brand.
+            # Rate limit (429): backoff 2, 4, 8, 16, 32 sec (cap 60), bounded retries then fail brand.
             if status_code == 429:
                 retry_count_429 += 1
-                if retry_count_429 > 5:
+                if retry_count_429 > max_429_retries:
                     return {
                         "error": "rate_limited_max_retries",
-                        "detail": "HTTP 429 after 5 retries",
+                        "detail": f"HTTP 429 after {max_429_retries} retries",
                         "page": page,
                         "retry_count": retry_count_429,
                         **proxy_meta,
                     }
-                sleep_s = compute_retry_sleep_429(retry_count_429)
+                sleep_s = min(rate_limit_base_sleep * (2 ** (retry_count_429 - 1)), rate_limit_max_sleep)
                 runtime_s = time.monotonic() - started_monotonic
 
                 # Limits: stop gracefully (skipped rate_limited) instead of running forever.
@@ -616,7 +656,7 @@ async def ingest_frontend_brand_prices(
                     else settings.FRONTEND_PRICES_MAX_RUNTIME_SECONDS
                 )
                 if (
-                    (total_retry_wait_seconds + sleep_s) > settings.FRONTEND_PRICES_MAX_TOTAL_RETRY_WAIT_SECONDS
+                    (total_retry_wait_seconds + sleep_s) > rate_limit_max_total_wait
                     or runtime_s > max_runtime
                 ):
                     if run_id is not None:
@@ -979,20 +1019,12 @@ async def ingest_frontend_brand_prices(
 
             # Prepare current+history rows only if we have project context
             if project_id is not None:
-                # Treat discount_calc_percent as SPP approximation for showcase prices.
-                spp_percent_val: int | None = None
-                if discount_calc_percent is not None:
-                    try:
-                        spp_percent_val = int(discount_calc_percent)
-                    except Exception:
-                        spp_percent_val = None
-
                 metrics_rows.append(
                     {
                         "project_id": project_id,
                         "nm_id": nm_id_int,
                         "current_price_showcase": float(price_product) if price_product else None,
-                        "current_spp_percent": spp_percent_val,
+                        "current_spp_percent": None,
                     }
                 )
                 # snapshot_at bucket is per-run, per-project
@@ -1002,7 +1034,7 @@ async def ingest_frontend_brand_prices(
                         "project_id": project_id,
                         "nm_id": nm_id_int,
                         "price_showcase": float(price_product) if price_product else None,
-                        "spp_percent": spp_percent_val,
+                        "spp_percent": None,
                         "snapshot_at": snapshot_at,
                     }
                 )
@@ -1033,8 +1065,49 @@ async def ingest_frontend_brand_prices(
 
                 # 2) WB current + history + SPP events, only when we have project_id & run_id
                 if project_id is not None and run_id is not None and metrics_rows:
-                    # Load old SPP for keys in a single query
                     nm_ids = sorted({m["nm_id"] for m in metrics_rows})
+
+                    # Load seller-discounted customer prices and calculate pure WB extra discount.
+                    customer_price_by_nm: Dict[int, Decimal] = {}
+                    if nm_ids:
+                        customer_price_sql = text(
+                            """
+                            SELECT DISTINCT ON (nm_id)
+                                nm_id,
+                                customer_price
+                            FROM price_snapshots
+                            WHERE project_id = :project_id
+                              AND nm_id = ANY(:nm_ids)
+                              AND created_at <= :context_at + INTERVAL '1 hour'
+                              AND customer_price IS NOT NULL
+                            ORDER BY nm_id, created_at DESC
+                            """
+                        )
+                        price_rows = conn.execute(
+                            customer_price_sql,
+                            {
+                                "project_id": project_id,
+                                "nm_ids": nm_ids,
+                                "context_at": run_started_at,
+                            },
+                        ).mappings().all()
+                        for r in price_rows:
+                            customer_price_by_nm[int(r["nm_id"])] = Decimal(str(r["customer_price"]))
+
+                    for m in metrics_rows:
+                        nm = int(m["nm_id"])
+                        m["current_spp_percent"] = calculate_spp_percent_from_customer_price(
+                            m.get("current_price_showcase"),
+                            customer_price_by_nm.get(nm),
+                        )
+                    for row_snap in snapshots_rows:
+                        nm = int(row_snap["nm_id"])
+                        row_snap["spp_percent"] = calculate_spp_percent_from_customer_price(
+                            row_snap.get("price_showcase"),
+                            customer_price_by_nm.get(nm),
+                        )
+
+                    # Load old SPP for keys in a single query
                     old_spp_by_nm: Dict[int, int | None] = {}
                     if nm_ids:
                         old_sql = text(
@@ -1228,6 +1301,35 @@ async def ingest_frontend_brand_prices(
                 "failed_pages": failed_pages,
                 **proxy_meta,
             }
+
+    presence_stats = None
+    completed_all_pages = (
+        not failed_pages
+        and (
+            (total_pages is not None and pages_fetched >= total_pages)
+            or (total_pages is None and max_pages <= 0)
+        )
+        and not (
+            total_pages is not None
+            and max_pages > 0
+            and max_pages < total_pages
+        )
+    )
+    if (
+        settings.WB_SHOWCASE_PRESENCE_ENABLED
+        and project_id is not None
+        and run_id is not None
+        and completed_all_pages
+    ):
+        from app.services.wb_product_content.presence import apply_complete_showcase_run
+
+        presence_stats = apply_complete_showcase_run(
+            project_id=int(project_id),
+            brand_id=int(brand_id),
+            seen_nm_ids=seen_nm_ids,
+            ingest_run_id=int(run_id),
+            observed_at=run_started_at,
+        )
     
     return {
         "run_at": run_at_iso,
@@ -1243,6 +1345,8 @@ async def ingest_frontend_brand_prices(
         "current_upserts_total": current_upserts_total,
         "showcase_snapshots_inserted_total": showcase_snapshots_inserted_total,
         "spp_events_inserted_total": spp_events_inserted_total,
+        "showcase_presence_applied": presence_stats is not None,
+        "showcase_presence": presence_stats,
         **proxy_meta,
     }
 

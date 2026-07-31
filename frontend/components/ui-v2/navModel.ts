@@ -30,8 +30,6 @@ export type RailItemConfig = {
   match: (pathname: string) => boolean
   hasSubNav?: boolean
   requiresProject?: boolean
-  indicator?: 'green' | 'purple'
-  badge?: boolean
   marketplaceCode?: 'wildberries' | 'ozon'
 }
 
@@ -71,7 +69,6 @@ export const railItems: Array<RailItemConfig | { divider: true }> = [
       !/^\/app\/project\/\d+\/wildberries\/hypothesis-lab(?:\/|$)/.test(pathname),
     requiresProject: true,
     hasSubNav: true,
-    indicator: 'green',
     marketplaceCode: 'wildberries',
   },
   {
@@ -90,10 +87,9 @@ export const railItems: Array<RailItemConfig | { divider: true }> = [
     icon: 'puzzle',
     href: (projectId) => (projectId ? `/app/project/${projectId}/seo` : '/app/projects'),
     match: (pathname) =>
-      /^\/app\/project\/\d+\/(seo|wildberries\/hypothesis-lab|tests|supplies|design)(?:\/|$)/.test(pathname),
+      /^\/app\/project\/\d+\/(seo|competitor-reviews|wildberries\/hypothesis-lab|tests|supplies|design)(?:\/|$)/.test(pathname),
     requiresProject: true,
     hasSubNav: true,
-    indicator: 'purple',
   },
   { divider: true },
   {
@@ -111,7 +107,6 @@ export const railItems: Array<RailItemConfig | { divider: true }> = [
     href: (projectId) => (projectId ? `/app/project/${projectId}/wildberries/funnel-signals` : '/app/projects'),
     match: () => false,
     requiresProject: true,
-    badge: true,
   },
   {
     id: 'expenses',
@@ -140,6 +135,13 @@ export const subNavGroupsByRail: Record<string, SubNavGroup[]> = {
       id: 'reports',
       label: 'Отчеты',
       items: [
+        {
+          id: 'sales-trends',
+          label: 'Динамика продаж',
+          icon: 'chart',
+          href: (projectId) => `/app/project/${projectId}/wildberries/sales-trends`,
+          match: (rest) => rest.startsWith('wildberries/sales-trends'),
+        },
         {
           id: 'price-discrepancies',
           label: 'Расхождение цен',
@@ -179,17 +181,22 @@ export const subNavGroupsByRail: Record<string, SubNavGroup[]> = {
           id: 'geo-sales',
           label: 'Гео продаж',
           icon: 'chart',
-          href: () => '#',
-          match: () => false,
-          disabled: true,
+          href: (projectId) => `/app/project/${projectId}/wildberries/order-geography`,
+          match: (rest) => rest.startsWith('wildberries/order-geography'),
         },
         {
           id: 'spp-dynamics',
           label: 'Динамика СПП',
           icon: 'chart',
-          href: () => '#',
-          match: () => false,
-          disabled: true,
+          href: (projectId) => `/app/project/${projectId}/wildberries/spp-dynamics`,
+          match: (rest) => rest.startsWith('wildberries/spp-dynamics'),
+        },
+        {
+          id: 'product-groups',
+          label: 'Аналитика связок',
+          icon: 'chart',
+          href: (projectId) => `/app/project/${projectId}/wildberries/product-groups`,
+          match: (rest) => rest.startsWith('wildberries/product-groups'),
         },
       ],
     },
@@ -201,9 +208,8 @@ export const subNavGroupsByRail: Record<string, SubNavGroup[]> = {
           id: 'catalog',
           label: 'Каталог',
           icon: 'box',
-          href: () => '#',
-          match: () => false,
-          disabled: true,
+          href: (projectId) => `/app/project/${projectId}/wildberries/catalog`,
+          match: (rest) => rest.startsWith('wildberries/catalog'),
         },
         {
           id: 'prices',
@@ -283,6 +289,13 @@ export const subNavGroupsByRail: Record<string, SubNavGroup[]> = {
           icon: 'spark',
           href: (projectId) => `/app/project/${projectId}/wildberries/hypothesis-lab/experiments`,
           match: (rest) => rest.startsWith('wildberries/hypothesis-lab'),
+        },
+        {
+          id: 'competitor-reviews',
+          label: 'Отзывы конкурентов',
+          icon: 'inbox',
+          href: (projectId) => `/app/project/${projectId}/competitor-reviews`,
+          match: (rest) => rest.startsWith('competitor-reviews'),
         },
         {
           id: 'tests',
@@ -453,8 +466,10 @@ export function humanizeSegment(segment: string): string {
     'unit-pnl': 'Юнит-экономика',
     'sku-pnl': 'SKU PnL',
     'content-analytics': 'Аналитика карточек',
+    catalog: 'Каталог товаров',
     reviews: 'Отзывы',
     'funnel-signals': 'Воронка',
+    'product-groups': 'Аналитика связок',
     'search-report': 'Поисковые запросы',
     'price-discrepancies': 'Расхождения цен',
     'stock-without-photos': 'Товары без фото',
@@ -471,6 +486,7 @@ export function humanizeSegment(segment: string): string {
     ingestion: 'Загрузки',
     cogs: 'Себестоимость',
     'additional-costs': 'Расходы',
+    'competitor-reviews': 'Анализ отзывов конкурентов',
   }
 
   return known[segment] ?? segment.replace(/-/g, ' ').replace(/^\w/, (char) => char.toUpperCase())

@@ -1,0 +1,380 @@
+.page {
+  min-width: 0;
+  color: var(--color-text);
+}
+
+.header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.eyebrow {
+  margin-bottom: 4px;
+  color: var(--color-text-3);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.header h1 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+
+.header p {
+  margin: 5px 0 0;
+  color: var(--color-text-2);
+  font-size: 12px;
+}
+
+.filters {
+  display: grid;
+  grid-template-columns:
+    minmax(220px, 1.5fr)
+    minmax(132px, 0.75fr)
+    minmax(132px, 0.75fr)
+    minmax(128px, 0.7fr)
+    minmax(230px, 1.25fr)
+    auto;
+  align-items: end;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 12px;
+  border: 0.5px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.filters label {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  color: var(--color-text-2);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.filters input,
+.filters select {
+  width: 100%;
+  height: 32px;
+  min-width: 0;
+  padding: 0 10px;
+  border: 0.5px solid var(--color-border);
+  border-radius: 6px;
+  outline: none;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 12px;
+}
+
+.filters input:focus,
+.filters select:focus {
+  border-color: var(--color-info);
+  box-shadow: var(--shadow-focus);
+}
+
+.filters button {
+  height: 32px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--color-accent);
+  color: white;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.filters button:hover {
+  background: var(--color-accent-hover);
+}
+
+.filters button:disabled {
+  cursor: default;
+  opacity: 0.65;
+}
+
+.statusCard {
+  min-height: 180px;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  border: 0.5px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-surface);
+  color: var(--color-text-2);
+  font-size: 13px;
+  text-align: center;
+}
+
+.error {
+  color: var(--color-danger);
+}
+
+.tableWrap {
+  overflow-x: auto;
+  border: 0.5px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.table {
+  width: 100%;
+  min-width: 1120px;
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+}
+
+.table th {
+  height: 36px;
+  padding: 0 12px;
+  border-bottom: 0.5px solid var(--color-border);
+  background: var(--color-surface-2);
+  color: var(--color-text-3);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.table td {
+  height: 112px;
+  padding: 8px 12px;
+  border-bottom: 0.5px solid var(--color-border);
+  vertical-align: middle;
+}
+
+.table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.table tbody tr:hover td {
+  background: var(--color-surface-2);
+}
+
+.photoColumn {
+  width: 98px;
+}
+
+.productColumn {
+  width: 286px;
+}
+
+.priceColumn {
+  width: 190px;
+}
+
+.reachColumn {
+  width: 160px;
+}
+
+.funnelColumn {
+  width: 215px;
+}
+
+.resultColumn {
+  width: 185px;
+}
+
+.photoCell {
+  padding-left: 12px !important;
+  padding-right: 8px !important;
+}
+
+.photo,
+.photoPlaceholder {
+  width: 72px;
+  height: 96px;
+  border: 0.5px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface-2);
+}
+
+.photo {
+  display: block;
+  object-fit: cover;
+}
+
+.photoPlaceholder {
+  display: grid;
+  place-items: center;
+  color: var(--color-text-3);
+  font-size: 10px;
+  text-align: center;
+}
+
+.cellLines {
+  display: grid;
+  gap: 8px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.cellLines > div {
+  min-width: 0;
+  min-height: 16px;
+}
+
+.productLines {
+  gap: 9px;
+}
+
+.productTitle {
+  display: block;
+  overflow: hidden;
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.productTitle:hover {
+  color: var(--color-accent-text);
+  text-decoration: underline;
+}
+
+.secondaryLine {
+  overflow: hidden;
+  color: var(--color-text-2);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.secondaryLine a {
+  color: var(--color-accent-text);
+  font-family: var(--font-mono, "Geist Mono", ui-monospace, monospace);
+  text-decoration: none;
+}
+
+.secondaryLine a:hover {
+  text-decoration: underline;
+}
+
+.separator {
+  margin: 0 6px;
+  color: var(--color-text-3);
+}
+
+.rating {
+  color: var(--color-warning);
+  font-weight: 600;
+}
+
+.activityDot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--color-text-3);
+  vertical-align: 1px;
+}
+
+.activityDotActive {
+  background: var(--color-success);
+}
+
+.primaryMetric {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.metricLabel {
+  display: inline-block;
+  min-width: 72px;
+  margin-right: 8px;
+  color: var(--color-text-3);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.inlineHint {
+  margin-left: 7px;
+  color: var(--color-text-3);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 4px 0;
+  color: var(--color-text-2);
+  font-size: 11px;
+}
+
+.freshness {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pagination {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.pagination button,
+.pagination select {
+  height: 28px;
+  border: 0.5px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 11px;
+}
+
+.pagination button {
+  padding: 0 10px;
+  cursor: pointer;
+}
+
+.pagination button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.pagination select {
+  padding: 0 7px;
+}
+
+@media (max-width: 1200px) {
+  .filters {
+    grid-template-columns: repeat(3, minmax(150px, 1fr));
+  }
+
+  .filters button {
+    width: 100%;
+  }
+}
+
+@media (max-width: 760px) {
+  .filters {
+    grid-template-columns: 1fr;
+  }
+
+  .footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

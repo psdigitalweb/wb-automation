@@ -67,7 +67,7 @@ export default function ProjectIngestionPage() {
 
   const [activeTab, setActiveTab] = useState<TabKey>('schedules')
   const [frontendPricesProxyEnabled, setFrontendPricesProxyEnabled] = useState(false)
-  const [frontendPricesBrandCount, setFrontendPricesBrandCount] = useState<number>(1)
+  const [frontendPricesBrandCount, setFrontendPricesBrandCount] = useState<number>(0)
 
   const [schedules, setSchedules] = useState<Schedule[]>([])
   const [loadingSchedules, setLoadingSchedules] = useState(false)
@@ -141,9 +141,9 @@ export default function ProjectIngestionPage() {
         const n = Array.isArray(brands)
           ? brands.filter((b: any) => b.enabled !== false).length
           : s?.brand_id != null ? 1 : 0
-        setFrontendPricesBrandCount(n > 0 ? n : 1)
+        setFrontendPricesBrandCount(n)
       })
-      .catch(() => setFrontendPricesBrandCount(1))
+      .catch(() => setFrontendPricesBrandCount(0))
   }, [projectId])
 
   useEffect(() => {
@@ -550,6 +550,22 @@ export default function ProjectIngestionPage() {
       const status = stats.status === 'partial' ? 'partial' : stats.ok ? 'ok' : 'fail'
       const parts = [`${ok}/${total} брендов`, status === 'partial' ? 'partial' : null, items != null ? `items:${items}` : null].filter(Boolean)
       return parts.join(' ')
+    }
+
+    if (stats.domain === 'wb_product_groups') {
+      const returned = asNum(stats.products_returned)
+      const requested = asNum(stats.products_requested)
+      const groups = asNum(stats.groups_multi_member)
+      const changed = asNum(stats.memberships_changed)
+      const created = asNum(stats.memberships_created)
+      return [
+        returned != null && requested != null ? `${returned}/${requested} товаров` : null,
+        groups != null ? `${groups} связок` : null,
+        created != null ? `новых:${created}` : null,
+        changed != null ? `изменено:${changed}` : null,
+      ]
+        .filter(Boolean)
+        .join(' ')
     }
 
     if ('inserted' in stats || 'updated' in stats) {
@@ -1347,7 +1363,7 @@ export default function ProjectIngestionPage() {
                       <tr key={s.id}>
                         <td>{s.marketplace_code}</td>
                         <td>
-                          {s.job_code}
+                          {jobs.find((job) => job.job_code === s.job_code)?.title || s.job_code}
                           {s.job_code === 'frontend_prices' && (
                             <span
                               style={{
@@ -1361,10 +1377,11 @@ export default function ProjectIngestionPage() {
                                 fontWeight: 600,
                               }}
                             >
-                              Брендов: {frontendPricesBrandCount}
+                              {frontendPricesBrandCount > 0 ? `Брендов: ${frontendPricesBrandCount}` : 'Бренды не настроены'}
                             </span>
                           )}
-                          {s.job_code === 'frontend_prices' && frontendPricesProxyEnabled && (
+                          {(s.job_code === 'frontend_prices' || s.job_code === 'wb_product_groups') &&
+                            frontendPricesProxyEnabled && (
                             <span
                               style={{
                                 display: 'inline-block',
@@ -1637,7 +1654,7 @@ export default function ProjectIngestionPage() {
                         <td>{renderStatusBadge(r.status, r)}</td>
                         <td>{r.marketplace_code}</td>
                         <td>
-                          {r.job_code}
+                          {jobs.find((job) => job.job_code === r.job_code)?.title || r.job_code}
                           {r.job_code === 'frontend_prices' && (
                             <span
                               style={{
@@ -1651,10 +1668,11 @@ export default function ProjectIngestionPage() {
                                 fontWeight: 600,
                               }}
                             >
-                              Брендов: {frontendPricesBrandCount}
+                              {frontendPricesBrandCount > 0 ? `Брендов: ${frontendPricesBrandCount}` : 'Бренды не настроены'}
                             </span>
                           )}
-                          {r.job_code === 'frontend_prices' && frontendPricesProxyEnabled && (
+                          {(r.job_code === 'frontend_prices' || r.job_code === 'wb_product_groups') &&
+                            frontendPricesProxyEnabled && (
                             <span
                               style={{
                                 display: 'inline-block',

@@ -13,6 +13,8 @@ from app.db_wb_analytics import (
     get_funnel_signals_raw,
     get_funnel_categories,
 )
+from app.db_wb_sales_trends import get_sales_trends
+from app.db_wb_order_geography import get_order_geography
 from app.db_wb_reviews import get_reviews_summary, list_reviews_by_nm_id
 from app.db_stocks import (
     get_latest_fbo_stock_totals_by_nm_id,
@@ -43,6 +45,8 @@ from app.schemas.wildberries_analytics import (
     FunnelSignalsCategoryItem,
     WBProductLookupItem,
     WBProductLookupResponse,
+    SalesTrendsResponse,
+    OrderGeographyResponse,
 )
 from app.schemas.wildberries_search_report import (
     WBSearchReportKeywordsMultiResponse,
@@ -59,6 +63,79 @@ from app.utils.get_project_marketplace_token import get_wb_analytics_token_for_p
 from app.wb.analytics_client import WBAnalyticsClient, WBAnalyticsBadRequestError, WBAnalyticsUnauthorizedError
 
 router = APIRouter(prefix="/api/v1", tags=["wildberries-analytics"])
+
+
+@router.get(
+    "/projects/{project_id}/wildberries/sales-trends",
+    response_model=SalesTrendsResponse,
+    summary="Daily WB sales and moving averages for selected products",
+)
+async def get_sales_trends_endpoint(
+    project_id: int = Path(..., description="Project ID"),
+    period_from: date = Query(..., description="Start date (YYYY-MM-DD)"),
+    period_to: date = Query(..., description="End date (YYYY-MM-DD)"),
+    nm_ids: List[int] = Query(..., description="One or more WB nm_id values"),
+    window_days: int = Query(7, ge=2, le=90, description="Trailing moving-average window"),
+    _member=Depends(get_project_membership),
+):
+    if period_from > period_to:
+        raise HTTPException(status_code=400, detail="period_from must be before or equal to period_to")
+    if (period_to - period_from).days > 730:
+        raise HTTPException(status_code=400, detail="period must not exceed 731 days")
+    unique_nm_ids = list(dict.fromkeys(nm_ids))
+    if len(unique_nm_ids) > 10:
+        raise HTTPException(status_code=400, detail="no more than 10 nm_ids are allowed")
+
+    series = get_sales_trends(
+        project_id=project_id,
+        nm_ids=unique_nm_ids,
+        period_from=period_from,
+        period_to=period_to,
+        window_days=window_days,
+    )
+    return SalesTrendsResponse(
+        period_from=period_from.isoformat(),
+        period_to=period_to.isoformat(),
+        window_days=window_days,
+        series=series,
+    )
+
+
+@router.get(
+    "/projects/{project_id}/wildberries/order-geography",
+    response_model=OrderGeographyResponse,
+    summary="WB order geography from finance report raw lines",
+)
+async def get_order_geography_endpoint(
+    project_id: int = Path(..., description="Project ID"),
+    period_from: date = Query(..., description="Start date (YYYY-MM-DD)"),
+    period_to: date = Query(..., description="End date (YYYY-MM-DD)"),
+    group_by: str = Query("region", description="country, region, city, ppvz, office"),
+    country: Optional[str] = Query(None, description="Filter by site_country"),
+    nm_id: Optional[int] = Query(None, description="Filter by nm_id"),
+    vendor_code: Optional[str] = Query(None, description="Filter by vendor code/article"),
+    office_name: Optional[str] = Query(None, description="Filter by WB office/warehouse name"),
+    limit: int = Query(100, ge=1, le=500, description="Max rows"),
+    _member=Depends(get_project_membership),
+):
+    """Geography of WB sales based on ppvz_office fields in finance report payload."""
+    if period_from > period_to:
+        raise HTTPException(status_code=400, detail="period_from must be before or equal to period_to")
+    if group_by not in {"country", "region", "city", "ppvz", "office"}:
+        raise HTTPException(status_code=400, detail="group_by must be one of: country, region, city, ppvz, office")
+
+    payload = get_order_geography(
+        project_id=project_id,
+        date_from=period_from,
+        date_to=period_to,
+        group_by=group_by,
+        country=country,
+        nm_id=nm_id,
+        vendor_code=vendor_code,
+        office_name=office_name,
+        limit=limit,
+    )
+    return OrderGeographyResponse(**payload)
 
 
 @router.get(
@@ -86,6 +163,7 @@ async def get_content_analytics_summary_endpoint(
     period_from: date = Query(..., description="Start date (YYYY-MM-DD)"),
     period_to: date = Query(..., description="End date (YYYY-MM-DD)"),
     nm_id: Optional[int] = Query(None, description="Filter by nm_id"),
+    ctr_mode: str = Query("raw", pattern="^(raw|quality_filtered)$"),
     _member=Depends(get_project_membership),
 ):
     """Aggregated funnel by nm_id: opens, add to cart, cart rate, orders, conversion, revenue."""
@@ -94,6 +172,7 @@ async def get_content_analytics_summary_endpoint(
         period_from=period_from,
         period_to=period_to,
         nm_id=nm_id,
+        ctr_mode=ctr_mode,
     )
     return ContentAnalyticsSummaryResponse(
         items=[ContentAnalyticsSummaryItem(**r) for r in rows]
@@ -193,6 +272,7 @@ async def get_funnel_signals_endpoint(
     only_enterprise_gt0: bool = Query(False, description="Only SKU with enterprise stock > 0"),
     only_fbo_gt0: bool = Query(False, description="Only SKU with FBO stock > 0"),
     signal_code: Optional[str] = Query(None, description="Filter by signal code"),
+    ctr_mode: str = Query("raw", pattern="^(raw|quality_filtered)$"),
     page: int = Query(1, ge=1, description="Page number (1-based)"),
     page_size: int = Query(50, ge=1, le=500, description="Items per page"),
     sort: str = Query(
@@ -211,6 +291,7 @@ async def get_funnel_signals_endpoint(
         period_to=period_to,
         only_cart_gt0=only_cart_gt0,
         wb_category=None,
+        ctr_mode=ctr_mode,
     )
     items = compute_funnel_signals(raw, min_opens=min_opens)
     if wb_category is not None:

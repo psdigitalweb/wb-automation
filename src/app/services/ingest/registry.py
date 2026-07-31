@@ -51,7 +51,11 @@ async def _wrap_ingest_stocks(project_id: int, run_id: int) -> Dict[str, Any]:
 
 
 async def _wrap_ingest_prices(project_id: int, run_id: int) -> Dict[str, Any]:
-    await _ingest_prices(project_id=project_id, run_id=run_id)
+    result = await _ingest_prices(project_id=project_id, run_id=run_id)
+    if isinstance(result, dict):
+        if "finished_at" not in result:
+            result = {**result, "finished_at": datetime.utcnow().isoformat()}
+        return result
     return {
         "ok": True,
         "scope": "project",
@@ -61,15 +65,28 @@ async def _wrap_ingest_prices(project_id: int, run_id: int) -> Dict[str, Any]:
     }
 
 
+async def _wrap_wb_product_groups(project_id: int, run_id: int) -> Dict[str, Any]:
+    from app.services.wb_product_groups import ingest_wb_product_groups
+
+    result = await ingest_wb_product_groups(project_id=project_id, run_id=run_id)
+    return {
+        **result,
+        "finished_at": datetime.utcnow().isoformat(),
+    }
+
+
 async def _wrap_ingest_products(project_id: int, run_id: int) -> Dict[str, Any]:
-    await _ingest_products(project_id, loop_delay_s=0)
+    result = await _ingest_products(project_id, loop_delay_s=0, run_id=run_id)
     stats: Dict[str, Any] = {
-        "ok": True,
+        **(result if isinstance(result, dict) else {}),
+        "ok": bool(result.get("ok", True)) if isinstance(result, dict) else True,
         "scope": "project",
         "project_id": project_id,
         "domain": "products",
         "finished_at": datetime.utcnow().isoformat(),
     }
+    if stats["ok"] is False:
+        return stats
 
     # Optional chaining: after products ingestion, build RRP snapshots from Internal Data.
     # This covers the common order on fresh DBs: Internal Data already imported, then products arrive.
@@ -302,16 +319,16 @@ async def _wrap_frontend_prices(project_id: int, run_id: int) -> Dict[str, Any]:
     from app.db import engine
     from app.ingest_frontend_prices import ingest_frontend_brand_prices
     from app.services.ingest.runs import get_run, set_run_progress
+    from app.services.wb_storefront_brands import extract_frontend_brand_ids
     from app.tasks.ingestion import _get_frontend_prices_proxy_config
 
-    # Load WB settings: brand_id, base_url_template, frontend_prices (limit, max_pages, sleep, brands[])
+    # Load WB settings: storefront brand scope, base_url_template, frontend_prices (limit, max_pages, sleep).
     with engine.connect() as conn:
         wb_row = conn.execute(
             text(
                 """
-                SELECT pm.settings_json->>'brand_id' AS brand_id,
+                SELECT pm.settings_json AS settings_json,
                        pm.settings_json->'frontend_prices'->>'base_url_template' AS base_url_template,
-                       pm.settings_json->'frontend_prices'->'brands' AS fp_brands,
                        pm.settings_json->'frontend_prices'->>'limit' AS fp_limit,
                        pm.settings_json->'frontend_prices'->>'max_pages' AS fp_max_pages,
                        pm.settings_json->'frontend_prices'->>'sleep_base_ms' AS fp_sleep_base_ms,
@@ -320,7 +337,11 @@ async def _wrap_frontend_prices(project_id: int, run_id: int) -> Dict[str, Any]:
                        pm.settings_json->'frontend_prices'->>'http_min_retries' AS fp_http_min_retries,
                        pm.settings_json->'frontend_prices'->>'http_timeout_jitter_sec' AS fp_http_timeout_jitter_sec,
                        pm.settings_json->'frontend_prices'->>'min_coverage_ratio' AS fp_min_coverage_ratio,
-                       pm.settings_json->'frontend_prices'->>'max_runtime_seconds' AS fp_max_runtime_seconds
+                       pm.settings_json->'frontend_prices'->>'max_runtime_seconds' AS fp_max_runtime_seconds,
+                       pm.settings_json->'frontend_prices'->>'rate_limit_max_retries' AS fp_rate_limit_max_retries,
+                       pm.settings_json->'frontend_prices'->>'rate_limit_base_sleep_seconds' AS fp_rate_limit_base_sleep_seconds,
+                       pm.settings_json->'frontend_prices'->>'rate_limit_max_sleep_seconds' AS fp_rate_limit_max_sleep_seconds,
+                       pm.settings_json->'frontend_prices'->>'rate_limit_max_total_wait_seconds' AS fp_rate_limit_max_total_wait_seconds
                 FROM project_marketplaces pm
                 JOIN marketplaces m ON m.id = pm.marketplace_id
                 WHERE pm.project_id = :project_id AND m.code = 'wildberries'
@@ -344,35 +365,7 @@ async def _wrap_frontend_prices(project_id: int, run_id: int) -> Dict[str, Any]:
             ).scalar_one_or_none()
     base_url_template = (base_url_template or "").strip()
 
-    # Build brand_ids: (a) settings frontend_prices.brands with enabled=true, (b) else legacy settings_json.brand_id
-    brand_ids: List[int] = []
-    fp_brands = (wb_row or {}).get("fp_brands")
-    if fp_brands is not None and isinstance(fp_brands, list):
-        for b in fp_brands:
-            if not isinstance(b, dict):
-                continue
-            if not b.get("enabled", True):
-                continue
-            bid = b.get("brand_id")
-            if bid is not None:
-                try:
-                    brand_ids.append(int(bid))
-                except (ValueError, TypeError):
-                    pass
-    if not brand_ids:
-        brand_id_str = (wb_row or {}).get("brand_id")
-        if brand_id_str:
-            try:
-                brand_ids = [int(brand_id_str)]
-            except (ValueError, TypeError):
-                return {
-                    "ok": False,
-                    "scope": "project",
-                    "project_id": project_id,
-                    "domain": "frontend_prices",
-                    "reason": "invalid_brand_id",
-                    "error": f"Invalid brand_id: {brand_id_str}",
-                }
+    brand_ids: List[int] = extract_frontend_brand_ids((wb_row or {}).get("settings_json"))
 
     if not brand_ids:
         return {
@@ -380,8 +373,8 @@ async def _wrap_frontend_prices(project_id: int, run_id: int) -> Dict[str, Any]:
             "scope": "project",
             "project_id": project_id,
             "domain": "frontend_prices",
-            "reason": "no_brands_configured",
-            "error": "Добавьте бренды в Настройках Wildberries (блок «Бренды»).",
+            "reason": "no_storefront_brands_configured",
+            "error": "Добавьте бренд витрины WB в настройках Wildberries для загрузки frontend_prices.",
         }
 
     if not base_url_template:
@@ -436,6 +429,10 @@ async def _wrap_frontend_prices(project_id: int, run_id: int) -> Dict[str, Any]:
             pass
     fp_min_coverage_ratio: Optional[float] = None
     fp_max_runtime_seconds: Optional[int] = None
+    fp_rate_limit_max_retries: Optional[int] = None
+    fp_rate_limit_base_sleep_seconds: Optional[int] = None
+    fp_rate_limit_max_sleep_seconds: Optional[int] = None
+    fp_rate_limit_max_total_wait_seconds: Optional[int] = None
     if wb_row:
         try:
             if wb_row.get("fp_min_coverage_ratio") is not None:
@@ -445,6 +442,26 @@ async def _wrap_frontend_prices(project_id: int, run_id: int) -> Dict[str, Any]:
         try:
             if wb_row.get("fp_max_runtime_seconds") is not None:
                 fp_max_runtime_seconds = int(wb_row["fp_max_runtime_seconds"])
+        except (ValueError, TypeError):
+            pass
+        try:
+            if wb_row.get("fp_rate_limit_max_retries") is not None:
+                fp_rate_limit_max_retries = int(wb_row["fp_rate_limit_max_retries"])
+        except (ValueError, TypeError):
+            pass
+        try:
+            if wb_row.get("fp_rate_limit_base_sleep_seconds") is not None:
+                fp_rate_limit_base_sleep_seconds = int(wb_row["fp_rate_limit_base_sleep_seconds"])
+        except (ValueError, TypeError):
+            pass
+        try:
+            if wb_row.get("fp_rate_limit_max_sleep_seconds") is not None:
+                fp_rate_limit_max_sleep_seconds = int(wb_row["fp_rate_limit_max_sleep_seconds"])
+        except (ValueError, TypeError):
+            pass
+        try:
+            if wb_row.get("fp_rate_limit_max_total_wait_seconds") is not None:
+                fp_rate_limit_max_total_wait_seconds = int(wb_row["fp_rate_limit_max_total_wait_seconds"])
         except (ValueError, TypeError):
             pass
     # app_settings.sleep_ms only as fallback when project did not set sleep_base_ms/fp_sleep_ms
@@ -515,6 +532,10 @@ async def _wrap_frontend_prices(project_id: int, run_id: int) -> Dict[str, Any]:
             http_timeout_jitter_sec=fp_http_timeout_jitter_sec,
             min_coverage_ratio=fp_min_coverage_ratio,
             max_runtime_seconds=fp_max_runtime_seconds,
+            rate_limit_max_retries=fp_rate_limit_max_retries,
+            rate_limit_base_sleep_seconds=fp_rate_limit_base_sleep_seconds,
+            rate_limit_max_sleep_seconds=fp_rate_limit_max_sleep_seconds,
+            rate_limit_max_total_wait_seconds=fp_rate_limit_max_total_wait_seconds,
         )
         if isinstance(result, dict) and result.get("error"):
             failed_brands.append({
@@ -708,6 +729,13 @@ _JOB_DEFINITIONS: Dict[str, JobDefinition] = {
     "products": {
         "job_code": "products",
         "title": "Загрузка каталога товаров",
+        "source_code": "wildberries",
+        "supports_schedule": True,
+        "supports_manual": True,
+    },
+    "wb_product_groups": {
+        "job_code": "wb_product_groups",
+        "title": "Загрузка связок товаров WB",
         "source_code": "wildberries",
         "supports_schedule": True,
         "supports_manual": True,
@@ -1074,6 +1102,7 @@ async def _wrap_build_wb_communications_aggregates(project_id: int, run_id: int)
 _REGISTRY: Dict[Tuple[str, str], RunCallable] = {
     # marketplace_code (source_code), job_code -> callable(project_id) -> stats_json
     ("wildberries", "products"): _wrap_ingest_products,
+    ("wildberries", "wb_product_groups"): _wrap_wb_product_groups,
     ("wildberries", "warehouses"): _wrap_ingest_warehouses,
     ("wildberries", "stocks"): _wrap_ingest_stocks,
     ("wildberries", "supplier_stocks"): _wrap_ingest_supplier_stocks,

@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { apiDownload, apiGetData, apiPost } from '@/lib/apiClient'
@@ -35,6 +36,12 @@ interface PriceDiscrepancyItem {
     recommended_wb_admin_price: number | null
     delta_recommended: number | null
     expected_showcase_price: number | null
+  }
+  staleness?: {
+    showcase_price_stale: boolean
+    reason: 'awaiting_showcase_refresh' | null
+    wb_price_updated_at: string | null
+    showcase_updated_at: string | null
   }
 }
 
@@ -95,6 +102,54 @@ interface FrontSnapshotOption {
   items_count: number
 }
 
+type PriceApplyMode = 'base' | 'size'
+type PriceApplyStatus = 'idle' | 'loading' | 'ready' | 'sending' | 'awaiting_response' | 'success' | 'error'
+
+interface PriceApplySizeItem {
+  size_id: number
+  tech_size_name: string | null
+  current_price: number | null
+  discounted_price: number | null
+  target_price: number
+}
+
+interface PriceApplyPreview {
+  item: PriceDiscrepancyItem
+  pricing_mode: PriceApplyMode
+  editable_size_price: boolean
+  recommended_price: number
+  default_discount: number
+  sizes: PriceApplySizeItem[]
+}
+
+interface PriceApplyResponse {
+  status: 'accepted'
+  pricing_mode: PriceApplyMode
+  upload_id: number | null
+  already_exists: boolean
+}
+
+interface BulkPriceApplyItem {
+  nm_id: number
+  article: string | null
+  title?: string | null
+  current_price?: number | null
+  recommended_price?: number | null
+  discount?: number | null
+  reason?: string
+  message?: string
+}
+
+interface BulkPriceApplyResponse {
+  status: 'accepted' | 'skipped'
+  upload_id: number | null
+  already_exists: boolean
+  accepted_count: number
+  skipped_count: number
+  ready: BulkPriceApplyItem[]
+  skipped: BulkPriceApplyItem[]
+}
+
 interface FiltersState {
   q: string
   categoryIds: number[]
@@ -132,7 +187,7 @@ function parseFiltersFromSearchParams(searchParams: URLSearchParams): FiltersSta
   const onlyBelowRrp = onlyBelowRrpParam === null ? true : onlyBelowRrpParam === 'true'
   const showAll = searchParams.get('show_all') === 'true'
   const frontSnapshotAt = searchParams.get('front_snapshot_at') || ''
-  const sort = searchParams.get('sort') || 'diff_rub_desc'
+  const sort = searchParams.get('sort') || 'diff_percent_desc'
   const page = Number(searchParams.get('page') || '1')
   const pageSize = Number(searchParams.get('page_size') || '25')
 
@@ -176,6 +231,27 @@ function formatDate(value: string | null | undefined): string {
   } catch {
     return '—'
   }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
+async function loadPriceDiscrepancyResponse(url: string): Promise<PriceDiscrepancyResponse> {
+  const retryDelaysMs = [800, 1600, 2600]
+
+  for (let attempt = 0; attempt <= retryDelaysMs.length; attempt += 1) {
+    try {
+      return await apiGetData<PriceDiscrepancyResponse>(url)
+    } catch (error: any) {
+      if (error?.status !== 0 || attempt === retryDelaysMs.length) {
+        throw error
+      }
+      await delay(retryDelaysMs[attempt])
+    }
+  }
+
+  throw new Error('Не удалось загрузить данные')
 }
 
 interface PhotoPopoverProps {
@@ -292,69 +368,72 @@ function PhotoPopover({ photos, size = 40 }: PhotoPopoverProps) {
         </div>
       )}
 
-      {open && hasPhotos && (
-        <div
-          ref={popoverRef}
-          onMouseEnter={() => setOpen(true)}
-          onMouseLeave={handleClose}
-          style={{
-            position: 'absolute',
-            zIndex: 1000,
-            top: position.top - (anchorRef.current?.getBoundingClientRect().bottom || 0) - window.scrollY,
-            left: 0,
-            background: '#fff',
-            border: '1px solid #ddd',
-            borderRadius: 6,
-            boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
-            padding: 8,
-            minWidth: 260,
-            maxWidth: 480,
-          }}
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-            <strong style={{ fontSize: 12 }}>Фото товара</strong>
-            <button type="button" onClick={() => setOpen(false)} style={{ fontSize: 12 }}>
-              ✕
-            </button>
-          </div>
-          <div style={{ textAlign: 'center', marginBottom: 8 }}>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={photos[selectedIndex]}
-              alt="Фото товара крупно"
-              style={{ maxWidth: '100%', maxHeight: 240, objectFit: 'contain', borderRadius: 4 }}
-              loading="lazy"
-            />
-          </div>
+      {open &&
+        hasPhotos &&
+        createPortal(
           <div
+            ref={popoverRef}
+            onMouseEnter={() => setOpen(true)}
+            onMouseLeave={handleClose}
             style={{
-              display: 'flex',
-              gap: 6,
-              overflowX: 'auto',
-              paddingBottom: 4,
+              position: 'absolute',
+              zIndex: 1000,
+              top: position.top,
+              left: position.left,
+              background: '#fff',
+              border: '1px solid #ddd',
+              borderRadius: 6,
+              boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
+              padding: 8,
+              minWidth: 260,
+              maxWidth: 480,
             }}
           >
-            {photos.map((url, idx) => (
-              // eslint-disable-next-line @next/next/no-img-element
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <strong style={{ fontSize: 12 }}>Фото товара</strong>
+              <button type="button" onClick={() => setOpen(false)} style={{ fontSize: 12 }}>
+                ✕
+              </button>
+            </div>
+            <div style={{ textAlign: 'center', marginBottom: 8 }}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                key={url + idx}
-                src={url}
-                alt={`Миниатюра ${idx + 1}`}
-                style={{
-                  width: 48,
-                  height: 48,
-                  objectFit: 'cover',
-                  borderRadius: 3,
-                  cursor: 'pointer',
-                  border: idx === selectedIndex ? '2px solid #0070f3' : '1px solid #ddd',
-                }}
+                src={photos[selectedIndex]}
+                alt="Фото товара крупно"
+                style={{ maxWidth: '100%', maxHeight: 240, objectFit: 'contain', borderRadius: 4 }}
                 loading="lazy"
-                onClick={() => setSelectedIndex(idx)}
               />
-            ))}
-          </div>
-        </div>
-      )}
+            </div>
+            <div
+              style={{
+                display: 'flex',
+                gap: 6,
+                overflowX: 'auto',
+                paddingBottom: 4,
+              }}
+            >
+              {photos.map((url, idx) => (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  key={url + idx}
+                  src={url}
+                  alt={`Миниатюра ${idx + 1}`}
+                  style={{
+                    width: 48,
+                    height: 48,
+                    objectFit: 'cover',
+                    borderRadius: 3,
+                    cursor: 'pointer',
+                    border: idx === selectedIndex ? '2px solid #0070f3' : '1px solid #ddd',
+                  }}
+                  loading="lazy"
+                  onClick={() => setSelectedIndex(idx)}
+                />
+              ))}
+            </div>
+          </div>,
+          document.body,
+        )}
     </div>
   )
 }
@@ -1028,6 +1107,8 @@ function RrpFilterToolbar({
         <label className={styles.sortControl}>
           <span>Сортировка:</span>
           <select value={filters.sort} onChange={(event) => onChange({ sort: event.target.value, page: 1 }, true)}>
+            <option value="diff_percent_desc">↕ Δ % ↓</option>
+            <option value="diff_percent_asc">↕ Δ % ↑</option>
             <option value="diff_rub_desc">↕ Δ ₽ ↓</option>
             <option value="diff_rub_asc">↕ Δ ₽ ↑</option>
             <option value="rrp_price_desc">РРЦ ↓</option>
@@ -1035,10 +1116,6 @@ function RrpFilterToolbar({
           </select>
         </label>
 
-        <button type="button" className={styles.toolbarButton} title="Настройка колонок пока недоступна">
-          <span>☀</span>
-          Колонки
-        </button>
       </div>
     </div>
   )
@@ -1051,13 +1128,371 @@ interface RrpReportTableProps {
   loading: boolean
   onToggleShowAll: () => void
   onPageChange: (page: number) => void
+  onOpenPriceApply: (item: PriceDiscrepancyItem) => void
+  onOpenBulkPriceApply: (items: PriceDiscrepancyItem[]) => void
 }
 
 function getItemKey(item: PriceDiscrepancyItem, index: number): string {
   return `${item.nm_id ?? 'nm'}-${item.article ?? 'article'}-${index}`
 }
 
-function RrpReportTable({ items, meta, showAll, loading, onToggleShowAll, onPageChange }: RrpReportTableProps) {
+interface PriceApplyModalProps {
+  projectId: string
+  item: PriceDiscrepancyItem | null
+  onClose: () => void
+  onApplied: () => void
+}
+
+interface BulkPriceApplyModalProps {
+  projectId: string
+  items: PriceDiscrepancyItem[]
+  onClose: () => void
+  onApplied: () => void
+}
+
+function getErrorMessage(error: any, fallback: string): string {
+  return error?.detail || error?.message || fallback
+}
+
+function buildImmediatePricePreview(item: PriceDiscrepancyItem): PriceApplyPreview | null {
+  const recommended = item.computed.recommended_wb_admin_price
+  if (recommended === null || recommended === undefined || Number.isNaN(recommended)) {
+    return null
+  }
+  return {
+    item,
+    pricing_mode: 'base',
+    editable_size_price: false,
+    recommended_price: Math.round(recommended),
+    default_discount: Math.round(item.discounts.wb_discount_percent ?? 0),
+    sizes: [],
+  }
+}
+
+function PriceApplyModal({ projectId, item, onClose, onApplied }: PriceApplyModalProps) {
+  const [preview, setPreview] = useState<PriceApplyPreview | null>(null)
+  const [status, setStatus] = useState<PriceApplyStatus>('idle')
+  const [message, setMessage] = useState<string | null>(null)
+  const [basePrice, setBasePrice] = useState('')
+  const [discount, setDiscount] = useState('')
+  const [sizePrices, setSizePrices] = useState<Record<number, string>>({})
+
+  const nmId = item?.nm_id
+
+  useEffect(() => {
+    let cancelled = false
+    setMessage(null)
+    setSizePrices({})
+    const immediatePreview = item ? buildImmediatePricePreview(item) : null
+    if (immediatePreview) {
+      setPreview(immediatePreview)
+      setBasePrice(String(immediatePreview.recommended_price))
+      setDiscount(String(immediatePreview.default_discount ?? 0))
+      setStatus('ready')
+    } else {
+      setPreview(null)
+      setStatus(nmId ? 'loading' : 'idle')
+    }
+
+    async function loadPreview() {
+      if (!nmId) return
+      try {
+        const resp = await apiGetData<PriceApplyPreview>(
+          `/api/v1/projects/${projectId}/wildberries/price-discrepancies/${nmId}/price-apply-preview`,
+        )
+        if (cancelled) return
+        setPreview(resp)
+        setBasePrice(String(resp.recommended_price))
+        setDiscount(String(resp.default_discount ?? 0))
+        setSizePrices(
+          Object.fromEntries(resp.sizes.map((size) => [size.size_id, String(size.target_price)])),
+        )
+        setStatus('ready')
+      } catch (e: any) {
+        if (cancelled) return
+        if (!immediatePreview) {
+          setMessage(getErrorMessage(e, 'Не удалось подготовить установку цены'))
+          setStatus('error')
+        }
+      }
+    }
+
+    loadPreview()
+    return () => {
+      cancelled = true
+    }
+  }, [projectId, nmId, item])
+
+  if (!item || !nmId) return null
+
+  const requestInProgress = status === 'sending' || status === 'awaiting_response'
+  const submitDisabled = status === 'loading' || requestInProgress || status === 'success' || !preview
+
+  const handleSubmit = async () => {
+    if (!preview) return
+    let responseReceived = false
+    setStatus('sending')
+    setMessage('Отправляем цену на WB...')
+    window.setTimeout(() => {
+      if (!responseReceived) {
+        setStatus('awaiting_response')
+        setMessage('Ждем ответ WB...')
+      }
+    }, 300)
+    try {
+      const body =
+        preview.pricing_mode === 'base'
+          ? {
+              pricing_mode: 'base',
+              price: Number(basePrice),
+              discount: Number(discount || 0),
+            }
+          : {
+              pricing_mode: 'size',
+              sizes: preview.sizes.map((size) => ({
+                size_id: size.size_id,
+                price: Number(sizePrices[size.size_id]),
+              })),
+            }
+
+      const { data } = await apiPost<PriceApplyResponse>(
+        `/api/v1/projects/${projectId}/wildberries/price-discrepancies/${nmId}/price-apply`,
+        body,
+      )
+      responseReceived = true
+      if (data.upload_id) {
+        setStatus('success')
+        setMessage('WB принял задачу обновления цены. Отчет будет ждать обновления витрины.')
+        onApplied()
+      } else {
+        setStatus('success')
+        setMessage('WB принял задачу обновления цены. Отчет будет ждать обновления витрины.')
+        onApplied()
+      }
+    } catch (e: any) {
+      responseReceived = true
+      setStatus('error')
+      setMessage(getErrorMessage(e, 'Не удалось отправить цену в WB'))
+    }
+  }
+
+  return (
+    <div className={styles.modalOverlay} role="presentation" onMouseDown={onClose}>
+      <div className={styles.modalDialog} role="dialog" aria-modal="true" aria-label="Установка цены WB" onMouseDown={(event) => event.stopPropagation()}>
+        <div className={styles.modalHeader}>
+          <div>
+            <h2>Установка цены WB</h2>
+            <span>{item.article || item.title || `nmID ${nmId}`}</span>
+          </div>
+          <button type="button" className={styles.modalClose} onClick={onClose} aria-label="Закрыть">
+            ×
+          </button>
+        </div>
+
+        <div className={styles.statusRail}>
+          <span className={status === 'sending' ? styles.statusActive : undefined}>Отправляем цену</span>
+          <span className={status === 'awaiting_response' ? styles.statusActive : undefined}>Ждем ответ WB</span>
+          <span className={status === 'success' ? styles.statusSuccess : status === 'error' ? styles.statusError : undefined}>
+            Результат
+          </span>
+        </div>
+
+        {status === 'loading' && <p className={styles.modalMessage}>Готовим данные товара...</p>}
+        {status === 'success' && (
+          <div className={styles.modalSuccessResult}>
+            <strong>Цена успешно отправлена на WB</strong>
+            <span>{message}</span>
+          </div>
+        )}
+        {message && status !== 'success' && (
+          <p className={`${styles.modalMessage} ${status === 'error' ? styles.modalError : ''}`}>{message}</p>
+        )}
+
+        {preview && (
+          <div className={styles.modalBody}>
+            <div className={styles.modeLine}>
+              <strong>{preview.pricing_mode === 'size' ? 'Размерный режим' : 'Базовый режим'}</strong>
+              <span>{preview.pricing_mode === 'size' ? 'Цена задается отдельно по размерам.' : 'Цена задается для товара.'}</span>
+            </div>
+
+            {preview.pricing_mode === 'base' ? (
+              <div className={styles.priceFormGrid}>
+                <label>
+                  <span>Цена</span>
+                  <input type="number" min="1" value={basePrice} onChange={(event) => setBasePrice(event.target.value)} />
+                </label>
+                <label>
+                  <span>Скидка WB, %</span>
+                  <input type="number" min="0" max="99" value={discount} onChange={(event) => setDiscount(event.target.value)} />
+                </label>
+              </div>
+            ) : (
+              <div className={styles.sizePriceTable}>
+                {preview.sizes.map((size) => (
+                  <label key={size.size_id}>
+                    <span>{size.tech_size_name || `Размер ${size.size_id}`}</span>
+                    <small>Сейчас {formatCurrency(size.current_price)}</small>
+                    <input
+                      type="number"
+                      min="1"
+                      value={sizePrices[size.size_id] ?? ''}
+                      onChange={(event) =>
+                        setSizePrices((prev) => ({ ...prev, [size.size_id]: event.target.value }))
+                      }
+                    />
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className={styles.modalActions}>
+          <button type="button" className={styles.buttonSecondary} onClick={onClose}>
+            Закрыть
+          </button>
+          <button type="button" className={styles.buttonPrimary} onClick={handleSubmit} disabled={submitDisabled}>
+            {status === 'success' ? 'Цена отправлена' : requestInProgress ? 'Отправляем...' : 'Установить цену'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function getBulkPrecheck(item: PriceDiscrepancyItem): { status: 'ready' | 'skip'; label: string } {
+  if (!item.nm_id) {
+    return { status: 'skip', label: 'нет nmID' }
+  }
+  if (item.staleness?.showcase_price_stale) {
+    return { status: 'skip', label: 'ждем витрину' }
+  }
+  const recommended = item.computed.recommended_wb_admin_price
+  if (recommended === null || recommended === undefined || Number.isNaN(recommended)) {
+    return { status: 'skip', label: 'нет рекомендации' }
+  }
+  return { status: 'ready', label: 'готово' }
+}
+
+function BulkPriceApplyModal({ projectId, items, onClose, onApplied }: BulkPriceApplyModalProps) {
+  const [status, setStatus] = useState<'ready' | 'sending' | 'success' | 'error'>('ready')
+  const [message, setMessage] = useState<string | null>(null)
+  const [result, setResult] = useState<BulkPriceApplyResponse | null>(null)
+
+  if (!items.length) return null
+
+  const nmIds = Array.from(
+    new Set(items.map((item) => item.nm_id).filter((nmId): nmId is number => Boolean(nmId))),
+  )
+  const prechecked = items.map((item) => ({ item, precheck: getBulkPrecheck(item) }))
+  const precheckReadyCount = prechecked.filter(({ precheck }) => precheck.status === 'ready').length
+  const requestInProgress = status === 'sending'
+  const submitDisabled = requestInProgress || status === 'success' || !nmIds.length || precheckReadyCount === 0
+
+  const handleSubmit = async () => {
+    setStatus('sending')
+    setMessage('Отправляем выбранные цены на WB одним запросом...')
+    setResult(null)
+    try {
+      const { data } = await apiPost<BulkPriceApplyResponse>(
+        `/api/v1/projects/${projectId}/wildberries/price-discrepancies/price-apply/bulk`,
+        { nm_ids: nmIds },
+      )
+      setResult(data)
+      if (data.accepted_count > 0) {
+        setStatus('success')
+        setMessage('WB принял задачу массового обновления. Отчет будет ждать обновления витрины.')
+        onApplied()
+      } else {
+        setStatus('error')
+        setMessage('Нет товаров, готовых к массовой отправке.')
+      }
+    } catch (e: any) {
+      setStatus('error')
+      setMessage(getErrorMessage(e, 'Не удалось отправить цены в WB'))
+    }
+  }
+
+  return (
+    <div className={styles.modalOverlay} role="presentation" onMouseDown={onClose}>
+      <div
+        className={`${styles.modalDialog} ${styles.bulkModalDialog}`}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Массовая установка цен WB"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className={styles.modalHeader}>
+          <div>
+            <h2>Массовая установка цен WB</h2>
+            <span>Выбрано товаров: {items.length}</span>
+          </div>
+          <button type="button" className={styles.modalClose} onClick={onClose} aria-label="Закрыть">
+            ×
+          </button>
+        </div>
+
+        {status === 'success' && (
+          <div className={styles.modalSuccessResult}>
+            <strong>Цены успешно отправлены на WB</strong>
+            <span>{message}</span>
+          </div>
+        )}
+        {message && status !== 'success' && (
+          <p className={`${styles.modalMessage} ${status === 'error' ? styles.modalError : ''}`}>{message}</p>
+        )}
+
+        <div className={styles.bulkSummary}>
+          <span>К отправке: {result ? result.accepted_count : precheckReadyCount}</span>
+          <span>Пропущено: {result ? result.skipped_count : items.length - precheckReadyCount}</span>
+          <span>Запросов к WB: {result?.accepted_count || precheckReadyCount ? 1 : 0}</span>
+        </div>
+
+        <div className={styles.bulkList}>
+          {prechecked.map(({ item, precheck }) => {
+            const resultSkipped = result?.skipped.find((skipped) => skipped.nm_id === item.nm_id)
+            const resultReady = result?.ready.find((ready) => ready.nm_id === item.nm_id)
+            const label = resultSkipped?.message || (resultReady ? 'отправлено' : precheck.label)
+            const rowReady = Boolean(resultReady) || (!result && precheck.status === 'ready')
+            return (
+              <div key={`${item.nm_id}-${item.article}`} className={styles.bulkListRow}>
+                <div>
+                  <strong>{item.article || `nmID ${item.nm_id}`}</strong>
+                  <span>{item.title || item.nm_id}</span>
+                </div>
+                <div className={styles.bulkListPrices}>
+                  <span>{formatCurrency(item.prices.wb_admin_price)}</span>
+                  <strong>{formatCurrency(item.computed.recommended_wb_admin_price)}</strong>
+                </div>
+                <span className={rowReady ? styles.bulkStatusReady : styles.bulkStatusSkipped}>{label}</span>
+              </div>
+            )
+          })}
+        </div>
+
+        <div className={styles.modalActions}>
+          <button type="button" className={styles.buttonSecondary} onClick={onClose}>
+            Закрыть
+          </button>
+          <button type="button" className={styles.buttonPrimary} onClick={handleSubmit} disabled={submitDisabled}>
+            {status === 'success' ? 'Цены отправлены' : requestInProgress ? 'Отправляем...' : 'Отправить цены на WB'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function RrpReportTable({
+  items,
+  meta,
+  showAll,
+  loading,
+  onToggleShowAll,
+  onPageChange,
+  onOpenPriceApply,
+  onOpenBulkPriceApply,
+}: RrpReportTableProps) {
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set())
   const totalPages = meta ? Math.max(1, Math.ceil(meta.total_count / meta.page_size)) : 1
 
@@ -1074,6 +1509,8 @@ function RrpReportTable({ items, meta, showAll, loading, onToggleShowAll, onPage
   }
 
   const allRowsSelected = items.length > 0 && items.every((item, index) => selectedRows.has(getItemKey(item, index)))
+  const selectedItems = items.filter((item, index) => selectedRows.has(getItemKey(item, index)))
+  const selectedNmItems = selectedItems.filter((item) => item.nm_id)
 
   const toggleAll = () => {
     if (allRowsSelected) {
@@ -1100,9 +1537,19 @@ function RrpReportTable({ items, meta, showAll, loading, onToggleShowAll, onPage
       {selectedRows.size > 0 && (
         <div className={styles.bulkBar}>
           <span>{selectedRows.size} товаров выбрано</span>
-          <button type="button" onClick={() => setSelectedRows(new Set())}>
-            Снять
-          </button>
+          <div className={styles.bulkActions}>
+            <button
+              type="button"
+              className={styles.buttonPrimary}
+              onClick={() => onOpenBulkPriceApply(selectedNmItems)}
+              disabled={!selectedNmItems.length}
+            >
+              Установить рекомендованные цены
+            </button>
+            <button type="button" onClick={() => setSelectedRows(new Set())}>
+              Снять
+            </button>
+          </div>
         </div>
       )}
       <div className={styles.tableWrap}>
@@ -1159,6 +1606,8 @@ function RrpReportTable({ items, meta, showAll, loading, onToggleShowAll, onPage
               const deltaLabelRub = absDiffRub !== null ? `${deltaSign}${absDiffRub.toFixed(0)} ₽` : '—'
               const deltaLabelPercent =
                 absDiffPercent !== null ? `${deltaSign}${absDiffPercent.toFixed(1)}%` : '—'
+              const isShowcaseStale = Boolean(item.staleness?.showcase_price_stale)
+              const staleCellClass = isShowcaseStale ? styles.staleShowcaseCell : undefined
 
               return (
                 <tr key={key} className={!hasShowcase ? styles.mutedRow : undefined}>
@@ -1199,15 +1648,15 @@ function RrpReportTable({ items, meta, showAll, loading, onToggleShowAll, onPage
                   </td>
                   <td className={`${styles.num} ${styles.priceCell}`}>{formatCurrency(item.prices.wb_admin_price)}</td>
                   <td className={`${styles.num} ${styles.priceCell}`}>{formatCurrency(item.prices.rrp_price)}</td>
-                  <td className={`${styles.num} ${styles.priceCell}`}>
+                  <td className={`${styles.num} ${styles.priceCell} ${staleCellClass || ''}`}>
                     {formatCurrency(item.prices.showcase_price)}
                     {expectedShowcase !== null && <span className={styles.priceHint}>≈ {formatCurrency(expectedShowcase)}</span>}
                   </td>
-                  <td className={styles.num}>
+                  <td className={`${styles.num} ${staleCellClass || ''}`}>
                     <div>{item.discounts.wb_discount_percent ?? '—'}%</div>
                     <span className={styles.priceHint}>СПП {item.discounts.spp_percent ?? '—'}%</span>
                   </td>
-                  <td className={styles.num}>
+                  <td className={`${styles.num} ${staleCellClass || ''}`}>
                     {hasShowcase && diffRub !== null ? (
                       <span
                         className={`${styles.deltaBadge} ${isBelow ? styles.deltaDanger : styles.deltaNeutral}`}
@@ -1219,14 +1668,22 @@ function RrpReportTable({ items, meta, showAll, loading, onToggleShowAll, onPage
                       '—'
                     )}
                   </td>
-                  <td className={`${styles.num} ${styles.recommend}`}>
-                    {recommended !== null ? (
-                      <>
-                        <div>{formatCurrency(recommended)}</div>
+                  <td className={`${styles.num} ${styles.recommend} ${staleCellClass || ''}`}>
+                    {isShowcaseStale ? (
+                      <div className={styles.staleShowcaseNotice}>Ждем обновления витрины WB</div>
+                    ) : recommended !== null ? (
+                      <button
+                        type="button"
+                        className={styles.recommendButton}
+                        onClick={() => onOpenPriceApply(item)}
+                        disabled={!item.nm_id}
+                        title="Установить рекомендованную цену на WB"
+                      >
+                        <div className={styles.recommendPrice}>{formatCurrency(recommended)}</div>
                         {deltaRecommended !== null && deltaRecommended !== 0 && (
                           <span>{deltaRecommended > 0 ? `+${deltaRecommended.toFixed(0)} ₽` : `${deltaRecommended.toFixed(0)} ₽`}</span>
                         )}
-                      </>
+                      </button>
                     ) : (
                       '—'
                     )}
@@ -1289,6 +1746,7 @@ export default function WbPriceDiscrepanciesPage() {
   const [meta, setMeta] = useState<PriceDiscrepancyResponse['meta'] | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [loadWarning, setLoadWarning] = useState<string | null>(null)
   const [categories, setCategories] = useState<CategoryOption[]>([])
   const [frontSnapshots, setFrontSnapshots] = useState<FrontSnapshotOption[]>([])
   const [frontSnapshotsLoading, setFrontSnapshotsLoading] = useState(false)
@@ -1298,6 +1756,8 @@ export default function WbPriceDiscrepanciesPage() {
   const [rrpBuildMessage, setRrpBuildMessage] = useState<string | null>(null)
   const [reloadToken, setReloadToken] = useState(0)
   const [isReportsHost, setIsReportsHost] = useState(false)
+  const [priceApplyItem, setPriceApplyItem] = useState<PriceDiscrepancyItem | null>(null)
+  const [bulkPriceApplyItems, setBulkPriceApplyItems] = useState<PriceDiscrepancyItem[]>([])
   const loadRequestSeqRef = useRef(0)
 
   useEffect(() => {
@@ -1353,6 +1813,7 @@ export default function WbPriceDiscrepanciesPage() {
     async function loadData() {
       setLoading(true)
       setError(null)
+      setLoadWarning(null)
       try {
         const buildBaseQuery = () => {
           const qs = new URLSearchParams()
@@ -1382,7 +1843,7 @@ export default function WbPriceDiscrepanciesPage() {
             qs.set('page', String(page))
             qs.set('page_size', String(pageSize))
             const url = `/api/v1/projects/${projectId}/wildberries/price-discrepancies?${qs.toString()}`
-            const pageResp = await apiGetData<PriceDiscrepancyResponse>(url)
+            const pageResp = await loadPriceDiscrepancyResponse(url)
             if (cancelled) return
 
             if (page === 1) {
@@ -1412,7 +1873,7 @@ export default function WbPriceDiscrepanciesPage() {
           qs.set('page', String(filters.page))
           qs.set('page_size', String(filters.pageSize))
           const url = `/api/v1/projects/${projectId}/wildberries/price-discrepancies?${qs.toString()}`
-          resp = await apiGetData<PriceDiscrepancyResponse>(url)
+          resp = await loadPriceDiscrepancyResponse(url)
         }
 
         if (cancelled || requestSeq !== loadRequestSeqRef.current) return
@@ -1420,17 +1881,22 @@ export default function WbPriceDiscrepanciesPage() {
         setMeta(resp.meta)
         setDiagnosticInfo(resp.diagnostic || null)
         setError(null)
+        setLoadWarning(null)
       } catch (e: any) {
         if (cancelled || requestSeq !== loadRequestSeqRef.current) return
         console.error('Failed to load price discrepancies', e)
-        setError(e?.detail || e?.message || 'Не удалось загрузить данные')
-        setData([])
-        setMeta({
-          total_count: 0,
-          page: filters.page,
-          page_size: filters.pageSize,
-          updated_at: new Date().toISOString(),
-        })
+        if (e?.status === 0) {
+          setLoadWarning('Не удалось обновить отчет из-за краткого обрыва соединения. Текущие данные оставлены на экране.')
+        } else {
+          setError(e?.detail || e?.message || 'Не удалось загрузить данные')
+          setData([])
+          setMeta({
+            total_count: 0,
+            page: filters.page,
+            page_size: filters.pageSize,
+            updated_at: new Date().toISOString(),
+          })
+        }
       } finally {
         if (!cancelled && requestSeq === loadRequestSeqRef.current) {
           setLoading(false)
@@ -1613,6 +2079,7 @@ export default function WbPriceDiscrepanciesPage() {
       />
 
       {loading && <p className={styles.loadingText}>Загрузка данных…</p>}
+      {loadWarning && <div className={styles.infoBar}>{loadWarning}</div>}
       {error && (
         <div className={styles.errorCard}>
           <p>
@@ -1630,8 +2097,26 @@ export default function WbPriceDiscrepanciesPage() {
           onPageChange={(page) => {
             updateQuery({ page }, false)
           }}
+          onOpenPriceApply={setPriceApplyItem}
+          onOpenBulkPriceApply={setBulkPriceApplyItems}
         />
       )}
+      <PriceApplyModal
+        projectId={projectId}
+        item={priceApplyItem}
+        onClose={() => setPriceApplyItem(null)}
+        onApplied={() => {
+          setReloadToken((x) => x + 1)
+        }}
+      />
+      <BulkPriceApplyModal
+        projectId={projectId}
+        items={bulkPriceApplyItems}
+        onClose={() => setBulkPriceApplyItems([])}
+        onApplied={() => {
+          setReloadToken((x) => x + 1)
+        }}
+      />
     </div>
   )
 }

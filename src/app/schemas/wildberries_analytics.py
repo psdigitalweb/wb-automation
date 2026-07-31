@@ -13,6 +13,13 @@ class ContentAnalyticsSummaryItem(BaseModel):
     orders: int
     conversion: Optional[float] = None  # orders / add_to_cart
     revenue: float
+    impressions: int = 0
+    card_clicks: int = 0
+    funnel_ctr_percent: Optional[float] = None
+    active_days_with_impressions: int = 0
+    quality_excluded_rows: int = 0
+    ctr_sample_tier: str = "insufficient"
+    ctr_quality_flags: List[str] = Field(default_factory=list)
 
 
 class ContentAnalyticsSummaryResponse(BaseModel):
@@ -93,6 +100,13 @@ class FunnelSignalsItem(BaseModel):
     order_rate: Optional[float] = None
     cart_to_order: Optional[float] = None
     avg_check: Optional[float] = None
+    impressions: int = 0
+    card_clicks: int = 0
+    funnel_ctr_percent: Optional[float] = None
+    active_days_with_impressions: int = 0
+    quality_excluded_rows: int = 0
+    ctr_sample_tier: str = "insufficient"
+    ctr_quality_flags: List[str] = Field(default_factory=list)
     signal_code: str
     signal: str
     signal_label: str
@@ -125,3 +139,67 @@ class WBProductLookupItem(BaseModel):
 
 class WBProductLookupResponse(BaseModel):
     items: List[WBProductLookupItem] = Field(default_factory=list)
+
+
+class SalesTrendPoint(BaseModel):
+    date: str
+    orders: int
+    revenue: float
+    impressions: int = 0
+    card_clicks: int = 0
+    ctr_percent: Optional[float] = None
+    moving_average_orders: float
+    moving_average_revenue: float
+    moving_average_impressions: float = 0
+    moving_average_card_clicks: float = 0
+    moving_average_ctr_percent: Optional[float] = None
+
+
+class SalesTrendSeries(BaseModel):
+    nm_id: int
+    vendor_code: Optional[str] = None
+    title: Optional[str] = None
+    points: List[SalesTrendPoint] = Field(default_factory=list)
+
+
+class SalesTrendsResponse(BaseModel):
+    period_from: str
+    period_to: str
+    window_days: int
+    series: List[SalesTrendSeries] = Field(default_factory=list)
+
+
+
+class OrderGeographySummary(BaseModel):
+    orders: int
+    gross_sales: float
+    countries: int
+    regions: int
+    cities: int
+    ppvz_count: int
+    top_region: Optional[str] = None
+
+
+class OrderGeographyItem(BaseModel):
+    country: Optional[str] = None
+    region: Optional[str] = None
+    city: Optional[str] = None
+    ppvz_office_id: Optional[str] = None
+    ppvz_office_name: Optional[str] = None
+    office_name: Optional[str] = None
+    orders: int
+    share: float
+    gross_sales: float
+    unique_nm_ids: int
+    top_nm_id: Optional[int] = None
+    top_nm_orders: int = 0
+    first_order_date: Optional[str] = None
+    last_order_date: Optional[str] = None
+
+
+class OrderGeographyResponse(BaseModel):
+    summary: OrderGeographySummary
+    items: List[OrderGeographyItem]
+    group_by: str
+    limit: int
+    total_groups: int

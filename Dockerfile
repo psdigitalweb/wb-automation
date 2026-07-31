@@ -1,5 +1,7 @@
 FROM python:3.12-slim
 
+ARG TORCH_VERSION=2.13.0
+
 WORKDIR /app
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -20,6 +22,12 @@ COPY requirements.txt .
 # Установка зависимостей с оптимизацией для Windows/Docker
 # Обновляем pip сначала
 RUN pip install --upgrade pip setuptools wheel
+
+# Production runs semantic models on CPU. Installing torch from the CPU index
+# first prevents sentence-transformers from pulling multi-gigabyte CUDA wheels.
+RUN pip install --no-cache-dir \
+    --index-url https://download.pytorch.org/whl/cpu \
+    "torch==${TORCH_VERSION}+cpu"
 
 # Устанавливаем зависимости с таймаутами и подробным выводом
 RUN pip install --no-cache-dir \

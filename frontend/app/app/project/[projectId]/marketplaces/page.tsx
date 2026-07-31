@@ -28,7 +28,17 @@ interface WBMarketplaceStatus {
   is_configured: boolean
   credentials: { api_token: boolean }
   settings: { brand_id?: number | null }
+  storefront_configured: boolean
+  storefront_brand_ids: number[]
+  legacy_brand_id?: number | null
   updated_at: string
+}
+
+interface WBTokenValidationResult {
+  valid: boolean
+  has_token: boolean
+  message?: string | null
+  checked_at: string
 }
 
 interface SystemMarketplacePublicStatus {
@@ -70,6 +80,8 @@ export default function ProjectMarketplacesPage() {
   const [wbToken, setWbToken] = useState('')
   const [wbLoading, setWbLoading] = useState(false)
   const [wbError, setWbError] = useState<string | null>(null)
+  const [wbTokenChecking, setWbTokenChecking] = useState(false)
+  const [wbTokenCheckResult, setWbTokenCheckResult] = useState<WBTokenValidationResult | null>(null)
 
   // System marketplace settings (global status)
   const [systemMarketplaceStatuses, setSystemMarketplaceStatuses] = useState<Record<string, SystemMarketplacePublicStatus>>({})
@@ -307,6 +319,23 @@ export default function ProjectMarketplacesPage() {
     }
   }
 
+  const handleWBTokenCheck = async () => {
+    try {
+      setWbTokenChecking(true)
+      setWbError(null)
+      setWbTokenCheckResult(null)
+      const { data } = await apiPost<WBTokenValidationResult>(
+        `/api/v1/projects/${projectId}/marketplaces/wildberries/token/validate`,
+        {}
+      )
+      setWbTokenCheckResult(data)
+    } catch (error: any) {
+      setWbError(error.detail || 'Не удалось проверить WB токен')
+    } finally {
+      setWbTokenChecking(false)
+    }
+  }
+
   const handleConfigure = (marketplaceCode: string) => {
     router.push(`/app/project/${projectId}/marketplaces/${marketplaceCode}/settings`)
   }
@@ -350,6 +379,7 @@ export default function ProjectMarketplacesPage() {
                 // Use wbStatus if available, fallback to projectMp for backward compatibility
                 const wbEnabled = isWB ? (wbStatus?.is_enabled ?? projectMp?.is_enabled ?? false) : false
                 const wbConnected = wbStatus?.is_configured ?? false
+                const wbStorefrontConfigured = wbStatus?.storefront_configured ?? false
                 
                 // If globally hidden and not connected in project, skip rendering
                 // But if already connected, show it with disabled state
@@ -382,6 +412,9 @@ export default function ProjectMarketplacesPage() {
                 } else if (isWB && wbConnected) {
                   statusText = 'Подключено'
                   statusTone = 'success'
+                  if (!wbStorefrontConfigured) {
+                    statusHint = 'Бренды витрины WB не настроены. API-данные по токену доступны.'
+                  }
                 } else if (isWB && wbEnabled) {
                   statusText = 'Включено'
                   statusTone = 'warning'
@@ -430,15 +463,16 @@ export default function ProjectMarketplacesPage() {
                                 setWbShowForm(!wbShowForm)
                               }}
                             >
-                              {wbShowForm ? 'Скрыть' : 'Настроить'}
+                              {wbShowForm ? 'Скрыть токен' : 'Токен'}
                             </button>
                             <button
                               type="button"
                               className={styles.secondaryButton}
-                              onClick={() => handleConfigure('wildberries')}
-                              title="Настройки маркетплейса: витринные цены, пагинация и др."
+                              onClick={handleWBTokenCheck}
+                              disabled={wbTokenChecking || !wbStatus?.credentials?.api_token}
+                              title={wbStatus?.credentials?.api_token ? 'Проверить сохранённый WB токен через API Wildberries' : 'Сначала сохраните WB токен'}
                             >
-                              Настройки
+                              {wbTokenChecking ? 'Проверяем...' : 'Проверить токен'}
                             </button>
                           </>
                         )}
@@ -452,6 +486,13 @@ export default function ProjectMarketplacesPage() {
                           </button>
                         )}
                     </div>
+                    {isWB && wbTokenCheckResult ? (
+                      <div className={wbTokenCheckResult.valid ? styles.successBox : styles.errorBox}>
+                        {wbTokenCheckResult.valid
+                          ? 'WB токен прошёл проверку.'
+                          : wbTokenCheckResult.message || 'WB токен не прошёл проверку.'}
+                      </div>
+                    ) : null}
                     {isWB && wbShowForm && (
                       <div className={styles.inlineForm}>
                         <h3>Настройка Wildberries</h3>
@@ -477,7 +518,7 @@ export default function ProjectMarketplacesPage() {
                             </label>
                             
                             <p>
-                              Бренды настраиваются в <strong>Настройки</strong> маркетплейса (кнопка «Настройки»).
+                              Подключение WB использует только токен. Бренды витрины для frontend prices и СПП настраиваются отдельно в параметрах маркетплейса.
                             </p>
                             <div className={styles.actions}>
                               <button

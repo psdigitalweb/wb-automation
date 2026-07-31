@@ -109,7 +109,13 @@ def _chunked(iterable: Iterable[Dict[str, Any]], size: int) -> Iterator[List[Dic
         yield batch
 
 
-def upsert_products(rows: List[Dict[str, Any]], project_id: int) -> Dict[str, int]:
+def upsert_products(
+    rows: List[Dict[str, Any]],
+    project_id: int,
+    *,
+    ingest_run_id: Optional[int] = None,
+    photo_attempts: Optional[Dict[int, Dict[str, Any]]] = None,
+) -> Dict[str, int]:
     """Insert or update product rows by `nm_id` in batches of 200.
 
     Args:
@@ -123,7 +129,62 @@ def upsert_products(rows: List[Dict[str, Any]], project_id: int) -> Dict[str, in
         Dict with approximate counts: {"inserted": X, "updated": Y}.
     """
     if not rows:
-        return {"inserted": 0, "updated": 0}
+        return {
+            "inserted": 0,
+            "updated": 0,
+            "changed": 0,
+            "unchanged": 0,
+            "versions_created": 0,
+            "main_photos_stored": 0,
+            "main_photos_reused": 0,
+            "main_photos_skipped_inactive": 0,
+            "main_photo_archive_failed": 0,
+        }
+
+    from app.services.wb_product_content.history import (
+        history_enabled_for_project,
+        persist_product_content,
+    )
+
+    if history_enabled_for_project(project_id):
+        stats = {
+            "inserted": 0,
+            "updated": 0,
+            "changed": 0,
+            "unchanged": 0,
+            "versions_created": 0,
+            "main_photos_stored": 0,
+            "main_photos_reused": 0,
+            "main_photos_skipped_inactive": 0,
+            "main_photo_archive_failed": 0,
+        }
+        attempts = photo_attempts or {}
+        for row in rows:
+            result = persist_product_content(
+                row=row,
+                project_id=project_id,
+                ingest_run_id=ingest_run_id,
+                photo_attempt=attempts.get(int(row["nm_id"])),
+            )
+            if result["initial"]:
+                stats["inserted"] += 1
+            else:
+                stats["updated"] += 1
+            if result["changed"]:
+                stats["changed"] += 1
+                stats["versions_created"] += 1
+            else:
+                stats["unchanged"] += 1
+            photo_status = result.get("photo_status")
+            if photo_status == "stored":
+                stats["main_photos_stored"] += 1
+                if result.get("photo_reused"):
+                    stats["main_photos_reused"] += 1
+            elif photo_status == "skipped_inactive":
+                stats["main_photos_skipped_inactive"] += 1
+            elif photo_status == "failed":
+                stats["main_photo_archive_failed"] += 1
+        return stats
 
     insert_sql = text(
         """
@@ -220,7 +281,7 @@ def upsert_products(rows: List[Dict[str, Any]], project_id: int) -> Dict[str, in
     return {"inserted": total_inserted, "updated": total_updated}
 
 
-def get_chrt_ids(limit: Optional[int] = None) -> List[int]:
+def get_chrt_ids(project_id: int, limit: Optional[int] = None) -> List[int]:
     """Return unique chrtIds (WB size IDs) from products.
 
     chrtId обычно хранится в массиве sizes либо в raw->'sizes', например:
@@ -244,9 +305,10 @@ def get_chrt_ids(limit: Optional[int] = None) -> List[int]:
         ) AS elem
         WHERE elem ? 'chrtID'
           AND (elem->>'chrtID') ~ '^[0-9]+'
+          AND products.project_id = :project_id
     """
 
-    params: Dict[str, Any] = {}
+    params: Dict[str, Any] = {"project_id": int(project_id)}
     if limit is not None and limit > 0:
         sql += " LIMIT :limit"
         params["limit"] = limit

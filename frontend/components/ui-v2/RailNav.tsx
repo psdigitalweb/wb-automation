@@ -10,10 +10,20 @@ type RailNavProps = {
   openPrimary: string
   projectId: string | null
   items: Array<RailItemConfig | { divider: true }>
+  collapsed: boolean
   onPrimaryOpen: (id: string) => void
+  onCollapsedChange: (collapsed: boolean) => void
 }
 
-export default function RailNav({ activePrimary, openPrimary, projectId, items, onPrimaryOpen }: RailNavProps) {
+export default function RailNav({
+  activePrimary,
+  openPrimary,
+  projectId,
+  items,
+  collapsed,
+  onPrimaryOpen,
+  onCollapsedChange,
+}: RailNavProps) {
   return (
     <aside className="ec-rail" aria-label="Основная навигация">
       <div className="ec-rail-logo">
@@ -44,14 +54,22 @@ export default function RailNav({ activePrimary, openPrimary, projectId, items, 
             >
               <span className="ec-rail-icon-wrap">
                 <Icon name={item.icon} size={18} />
-                {item.indicator ? <span className={`ec-rail-indicator is-${item.indicator}`} /> : null}
-                {item.badge ? <span className="ec-rail-badge-dot" /> : null}
               </span>
               <span className="ec-rail-label">{item.label}</span>
             </Link>
           )
         })}
       </nav>
+      <button
+        type="button"
+        className="ec-rail-collapse"
+        onClick={() => onCollapsedChange(!collapsed)}
+        title={collapsed ? 'Развернуть меню' : 'Свернуть меню'}
+        aria-label={collapsed ? 'Развернуть меню' : 'Свернуть меню'}
+        aria-pressed={collapsed}
+      >
+        <Icon name="chevronRight" size={16} />
+      </button>
     </aside>
   )
 }
