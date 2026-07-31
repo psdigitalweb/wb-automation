@@ -24,6 +24,7 @@ from app.db_products import ensure_schema, upsert_products
 from app.deps import get_current_active_user, get_project_membership
 from app.utils.get_project_marketplace_token import get_wb_credentials_for_project
 from app.db import engine
+from app.services.marketplace_product_dual_write import mirror_wb_products_best_effort
 from sqlalchemy import text
 
 router = APIRouter(prefix="/api/v1/ingest", tags=["ingest"])
@@ -365,6 +366,16 @@ async def ingest(
                     project_id,
                     ingest_run_id=run_id,
                     photo_attempts=photo_attempts,
+                )
+                mirror_result = mirror_wb_products_best_effort(
+                    project_id=project_id,
+                    rows=rows,
+                )
+                print(
+                    "ingest: marketplace_product_mirror "
+                    f"status={mirror_result['status']} "
+                    f"rows_requested={mirror_result['rows_requested']} "
+                    f"rows_upserted={mirror_result['rows_upserted']}"
                 )
                 changed_total += int(res.get("changed", 0))
                 unchanged_total += int(res.get("unchanged", 0))

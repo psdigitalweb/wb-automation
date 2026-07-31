@@ -83,6 +83,10 @@ WB_FUNNEL_CTR_HIGH_SAMPLE_IMPRESSIONS = _get_env_int("WB_FUNNEL_CTR_HIGH_SAMPLE_
 WB_CONTENT_HISTORY_ENABLED = os.getenv("WB_CONTENT_HISTORY_ENABLED", "false").lower() in ("true", "1", "yes")
 WB_MAIN_PHOTO_ARCHIVE_ENABLED = os.getenv("WB_MAIN_PHOTO_ARCHIVE_ENABLED", "false").lower() in ("true", "1", "yes")
 WB_SHOWCASE_PRESENCE_ENABLED = os.getenv("WB_SHOWCASE_PRESENCE_ENABLED", "false").lower() in ("true", "1", "yes")
+MARKETPLACE_PRODUCTS_DUAL_WRITE_ENABLED = os.getenv(
+    "MARKETPLACE_PRODUCTS_DUAL_WRITE_ENABLED",
+    "false",
+).lower() in ("true", "1", "yes")
 WB_CONTENT_HISTORY_PROJECT_ALLOWLIST = {
     int(value.strip())
     for value in os.getenv("WB_CONTENT_HISTORY_PROJECT_ALLOWLIST", "").split(",")

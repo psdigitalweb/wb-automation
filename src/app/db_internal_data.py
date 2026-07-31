@@ -240,6 +240,102 @@ def _get_next_snapshot_version(conn, project_id: int) -> int:
     return max_version + 1
 
 
+class InternalIdentifierConflictError(ValueError):
+    """Raised when one marketplace identifier points to multiple catalog products."""
+
+
+def _optional_identifier_text(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
+
+
+def _build_identifier_rows(
+    *,
+    project_id: int,
+    snapshot_id: int,
+    rows: Iterable[Dict[str, Any]],
+    internal_product_ids: Dict[str, int],
+) -> List[Dict[str, Any]]:
+    """Normalize identifiers and reject ambiguous mappings inside one snapshot.
+
+    A fresh snapshot cannot conflict with a previous snapshot because both
+    identifier uniqueness rules are snapshot-scoped. Any conflict here is
+    therefore an ambiguity in the imported source itself and must fail the
+    transaction instead of silently reassigning a marketplace product.
+    """
+    result: List[Dict[str, Any]] = []
+    exact_rows: set[Tuple[int, str, Optional[str], Optional[str]]] = set()
+    item_identifiers: Dict[Tuple[str, str], Tuple[str, Optional[str], Optional[str]]] = {}
+    sku_identifiers: Dict[Tuple[str, str], Tuple[str, Optional[str], Optional[str]]] = {}
+
+    for row in rows:
+        raw_internal_sku = row.get("internal_sku")
+        internal_sku = _optional_identifier_text(raw_internal_sku)
+        if not internal_sku:
+            continue
+        internal_product_id = internal_product_ids.get(str(raw_internal_sku)) or internal_product_ids.get(
+            internal_sku
+        )
+        if not internal_product_id:
+            raise RuntimeError(f"Internal product ID was not persisted for {internal_sku!r}")
+
+        for identifier in row.get("identifiers") or []:
+            marketplace_code = (_optional_identifier_text(identifier.get("marketplace_code")) or "").lower()
+            marketplace_sku = _optional_identifier_text(identifier.get("marketplace_sku"))
+            marketplace_item_id = _optional_identifier_text(identifier.get("marketplace_item_id"))
+
+            if not marketplace_code:
+                raise InternalIdentifierConflictError(
+                    f"Internal product {internal_sku!r} has an identifier without marketplace_code"
+                )
+            if marketplace_sku is None and marketplace_item_id is None:
+                raise InternalIdentifierConflictError(
+                    f"Internal product {internal_sku!r} has an empty {marketplace_code!r} identifier"
+                )
+
+            signature = (internal_sku, marketplace_sku, marketplace_item_id)
+            for key, identifiers_by_key, label in (
+                ((marketplace_code, marketplace_item_id), item_identifiers, "marketplace_item_id"),
+                ((marketplace_code, marketplace_sku), sku_identifiers, "marketplace_sku"),
+            ):
+                identifier_value = key[1]
+                if identifier_value is None:
+                    continue
+                existing_signature = identifiers_by_key.get((key[0], identifier_value))
+                if existing_signature is not None and existing_signature != signature:
+                    raise InternalIdentifierConflictError(
+                        f"Duplicate {label} {identifier_value!r} for marketplace "
+                        f"{marketplace_code!r}: conflicting identifiers for internal products "
+                        f"{existing_signature[0]!r} and {internal_sku!r}"
+                    )
+                identifiers_by_key[(key[0], identifier_value)] = signature
+
+            exact_key = (
+                internal_product_id,
+                marketplace_code,
+                marketplace_sku,
+                marketplace_item_id,
+            )
+            if exact_key in exact_rows:
+                continue
+            exact_rows.add(exact_key)
+            result.append(
+                {
+                    "project_id": project_id,
+                    "snapshot_id": snapshot_id,
+                    "internal_product_id": internal_product_id,
+                    "marketplace_code": marketplace_code,
+                    "marketplace_sku": marketplace_sku,
+                    "marketplace_item_id": marketplace_item_id,
+                    "extra_identifiers": _serialize_jsonb(identifier.get("extra_identifiers")),
+                }
+            )
+
+    return result
+
+
 def create_snapshot_with_rows(
     project_id: int,
     settings_row: Dict[str, Any],
@@ -270,6 +366,8 @@ def create_snapshot_with_rows(
         status: 'success', 'partial', or 'error'
         error_summary: Brief error summary (for status='error')
     """
+    materialized_rows = list(rows)
+
     with engine.begin() as conn:
         version = _get_next_snapshot_version(conn, project_id)
         
@@ -340,7 +438,7 @@ def create_snapshot_with_rows(
         prices_rows: List[Dict[str, Any]] = []
         costs_rows: List[Dict[str, Any]] = []
 
-        for row in rows:
+        for row in materialized_rows:
             internal_sku = row.get("internal_sku")
             if not internal_sku:
                 continue
@@ -443,25 +541,11 @@ def create_snapshot_with_rows(
         else:
             id_map = {}
 
-        for row in rows:
+        for row in materialized_rows:
             internal_sku = row.get("internal_sku")
             internal_product_id = id_map.get(internal_sku)
             if not internal_product_id:
                 continue
-
-            identifiers = row.get("identifiers") or []
-            for ident in identifiers:
-                identifiers_rows.append(
-                    {
-                        "project_id": project_id,
-                        "snapshot_id": snapshot_id,
-                        "internal_product_id": internal_product_id,
-                        "marketplace_code": ident.get("marketplace_code") or "",
-                        "marketplace_sku": ident.get("marketplace_sku"),
-                        "marketplace_item_id": ident.get("marketplace_item_id"),
-                        "extra_identifiers": _serialize_jsonb(ident.get("extra_identifiers")),
-                    }
-                )
 
             price = row.get("price") or {}
             if price:
@@ -490,12 +574,17 @@ def create_snapshot_with_rows(
                     }
                 )
 
+        identifiers_rows = _build_identifier_rows(
+            project_id=project_id,
+            snapshot_id=snapshot_id,
+            rows=materialized_rows,
+            internal_product_ids=id_map,
+        )
         if identifiers_rows:
-            # For identifiers, we need to handle multiple unique constraints
-            # Main constraint: (project_id, marketplace_code)
-            # Partial indexes: (snapshot_id, marketplace_code, marketplace_item_id) WHERE item_id IS NOT NULL
-            #                   (snapshot_id, marketplace_code, marketplace_sku) WHERE sku IS NOT NULL
-            # We'll use ON CONFLICT on the main constraint
+            # The snapshot is new and the complete import is one transaction.
+            # Source-level duplicates are rejected above; a plain INSERT keeps
+            # both partial unique indexes authoritative and avoids an invalid
+            # or overly broad conflict target.
             conn.execute(
                 text(
                     """
@@ -517,13 +606,6 @@ def create_snapshot_with_rows(
                         :marketplace_item_id,
                         CAST(:extra_identifiers AS jsonb)
                     )
-                    ON CONFLICT (project_id, marketplace_code)
-                    DO UPDATE SET
-                        snapshot_id = EXCLUDED.snapshot_id,
-                        internal_product_id = EXCLUDED.internal_product_id,
-                        marketplace_sku = EXCLUDED.marketplace_sku,
-                        marketplace_item_id = EXCLUDED.marketplace_item_id,
-                        extra_identifiers = EXCLUDED.extra_identifiers
                     """
                 ),
                 identifiers_rows,
