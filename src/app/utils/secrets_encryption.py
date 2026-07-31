@@ -7,7 +7,7 @@ If key is not set, uses a persistent dev key stored in a file (development only)
 import os
 import base64
 from typing import Optional
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken, MultiFernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
@@ -15,6 +15,8 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 _CACHED_KEY: Optional[bytes] = None
 _KEY_FILE_ENV = "PROJECT_SECRETS_KEY_FILE"
 _DEFAULT_KEY_FILE = "/app/.project_secrets_key"
+_PREVIOUS_KEY_ENV = "PROJECT_SECRETS_PREVIOUS_KEY"
+_PREVIOUS_KEY_FILE_ENV = "PROJECT_SECRETS_PREVIOUS_KEY_FILE"
 
 
 def _key_file_path() -> str:
@@ -28,50 +30,14 @@ def has_project_secrets_key() -> bool:
     return os.path.exists(_key_file_path())
 
 
-def _get_encryption_key() -> bytes:
-    """Get or generate encryption key from environment variable.
-    
-    Returns:
-        bytes: Fernet encryption key (32 bytes, base64-encoded)
-    
-    Raises:
-        ValueError: If PROJECT_SECRETS_KEY is invalid
-    """
-    key_str = os.getenv("PROJECT_SECRETS_KEY")
-    
-    if not key_str:
-        # Development fallback: persist a generated Fernet key to a file mounted with the app.
-        # This makes encrypt/decrypt stable across container restarts without leaking tokens in plaintext.
-        global _CACHED_KEY
-        if _CACHED_KEY is not None:
-            return _CACHED_KEY
-
-        path = _key_file_path()
-        try:
-            if os.path.exists(path):
-                with open(path, "rb") as f:
-                    key = f.read().strip()
-            else:
-                key = Fernet.generate_key()
-                # Best effort write; if it fails we'll still keep it in-memory for this process.
-                with open(path, "wb") as f:
-                    f.write(key)
-            _CACHED_KEY = key
-            return key
-        except Exception:
-            # Last resort: generate in-memory (will break decrypt after restart).
-            key = Fernet.generate_key()
-            _CACHED_KEY = key
-            return key
-    
+def _derive_environment_key(key_str: str) -> bytes:
+    """Resolve a Fernet key from an env value, preserving legacy password support."""
     # Try to use key directly (if it's a valid Fernet key)
     try:
-        # Fernet keys are base64-encoded 32-byte keys
-        # Try to decode to validate
-        base64.b64decode(key_str)
-        if len(base64.b64decode(key_str)) == 32:
-            return key_str.encode()
-    except Exception:
+        key = key_str.encode()
+        Fernet(key)
+        return key
+    except (TypeError, ValueError):
         pass
     
     # If not a valid Fernet key, derive from password using PBKDF2
@@ -86,6 +52,67 @@ def _get_encryption_key() -> bytes:
     )
     key = base64.urlsafe_b64encode(kdf.derive(password))
     return key
+
+
+def _get_encryption_key() -> bytes:
+    """Get or generate the primary encryption key."""
+    key_str = os.getenv("PROJECT_SECRETS_KEY")
+
+    if key_str:
+        return _derive_environment_key(key_str)
+
+    # Development fallback: persist a generated Fernet key to a file mounted with the app.
+    # This makes encrypt/decrypt stable across container restarts without leaking tokens in plaintext.
+    global _CACHED_KEY
+    if _CACHED_KEY is not None:
+        return _CACHED_KEY
+
+    path = _key_file_path()
+    try:
+        if os.path.exists(path):
+            with open(path, "rb") as f:
+                key = f.read().strip()
+        else:
+            key = Fernet.generate_key()
+            # Best effort write; if it fails we'll still keep it in-memory for this process.
+            with open(path, "wb") as f:
+                f.write(key)
+        _CACHED_KEY = key
+        return key
+    except Exception:
+        # Last resort: generate in-memory (will break decrypt after restart).
+        key = Fernet.generate_key()
+        _CACHED_KEY = key
+        return key
+
+
+def _get_previous_encryption_key() -> Optional[bytes]:
+    """Return the optional previous key used only during a controlled rotation."""
+    key_str = os.getenv(_PREVIOUS_KEY_ENV)
+    if key_str:
+        return _derive_environment_key(key_str)
+
+    path = os.getenv(_PREVIOUS_KEY_FILE_ENV)
+    if not path:
+        return None
+    with open(path, "rb") as f:
+        return f.read().strip()
+
+
+def get_project_secrets_fernets() -> list[Fernet]:
+    """Return the primary Fernet followed by an optional previous-key fallback."""
+    keys = [_get_encryption_key()]
+    previous_key = _get_previous_encryption_key()
+    if previous_key is not None and previous_key != keys[0]:
+        keys.append(previous_key)
+    return [Fernet(key) for key in keys]
+
+
+def _get_fernet() -> Fernet | MultiFernet:
+    fernets = get_project_secrets_fernets()
+    if len(fernets) == 1:
+        return fernets[0]
+    return MultiFernet(fernets)
 
 
 def encrypt_token(token: str) -> str:
@@ -103,9 +130,7 @@ def encrypt_token(token: str) -> str:
     if not token:
         raise ValueError("Token cannot be empty")
     
-    key = _get_encryption_key()
-    fernet = Fernet(key)
-    encrypted = fernet.encrypt(token.encode())
+    encrypted = _get_fernet().encrypt(token.encode())
     return encrypted.decode()  # Base64 string
 
 
@@ -120,13 +145,26 @@ def decrypt_token(encrypted_token: str) -> Optional[str]:
     """
     if not encrypted_token:
         return None
-    
+
     try:
-        key = _get_encryption_key()
-        fernet = Fernet(key)
-        decrypted = fernet.decrypt(encrypted_token.encode())
+        decrypted = _get_fernet().decrypt(encrypted_token.encode())
         return decrypted.decode()
     except Exception as e:
         print(f"decrypt_token: failed to decrypt token: {type(e).__name__}: {e}")
         return None
+
+
+def rotate_token(encrypted_token: str) -> str:
+    """Re-encrypt a token with the primary key using the previous key as fallback."""
+    if not encrypted_token:
+        raise ValueError("Encrypted token cannot be empty")
+
+    fernets = get_project_secrets_fernets()
+    if len(fernets) < 2:
+        raise ValueError("A distinct previous project secrets key is required for rotation")
+
+    try:
+        return MultiFernet(fernets).rotate(encrypted_token.encode()).decode()
+    except InvalidToken as exc:
+        raise ValueError("Encrypted token cannot be decrypted with the configured key ring") from exc
 

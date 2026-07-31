@@ -42,6 +42,8 @@ services:
       # Must be writable and persistent (mounted volume below)
       - INTERNAL_DATA_DIR=/data/internal_data
       - WB_CONTENT_MEDIA_DIR=/data/wb-content-history
+      - PROJECT_SECRETS_KEY_FILE=/run/secrets/project_secrets_key
+      - PROJECT_PROXY_SECRET_KEY_FILE=/run/secrets/project_proxy_secret_key
       # Bootstrap admin user on startup (only if users table is empty)
       # Set BOOTSTRAP_ADMIN=1 in .env to enable, along with BOOTSTRAP_ADMIN_USERNAME, BOOTSTRAP_ADMIN_PASSWORD, BOOTSTRAP_ADMIN_EMAIL
       # Default: disabled (0) for security
@@ -53,6 +55,8 @@ services:
       # Persistent storage for Internal Data uploads (required on server)
       - internal_data:/data/internal_data
       - wb_content_history:/data/wb-content-history
+      - ${PROJECT_SECRETS_KEY_HOST_PATH:-../../.project_secrets_key}:/run/secrets/project_secrets_key:ro
+      - ${PROJECT_PROXY_SECRET_KEY_HOST_PATH:-../../.project_proxy_secret_key}:/run/secrets/project_proxy_secret_key:ro
     # Entrypoint waits for PostgreSQL, runs migrations (with advisory lock protection), then starts uvicorn
     entrypoint: ["python", "/app/scripts/docker-entrypoint.py"]
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --app-dir /app/src
@@ -78,9 +82,13 @@ services:
       environment:
         - PYTHONPATH=/app/src
         - WB_CONTENT_MEDIA_DIR=/data/wb-content-history
+        - PROJECT_SECRETS_KEY_FILE=/run/secrets/project_secrets_key
+        - PROJECT_PROXY_SECRET_KEY_FILE=/run/secrets/project_proxy_secret_key
       volumes:
         - internal_data:/data/internal_data
         - wb_content_history:/data/wb-content-history
+        - ${PROJECT_SECRETS_KEY_HOST_PATH:-../../.project_secrets_key}:/run/secrets/project_secrets_key:ro
+        - ${PROJECT_PROXY_SECRET_KEY_HOST_PATH:-../../.project_proxy_secret_key}:/run/secrets/project_proxy_secret_key:ro
       command: celery -A app.celery_app worker -l info
       depends_on:
         - redis
@@ -96,6 +104,11 @@ services:
       env_file: ../../.env
       environment:
         - PYTHONPATH=/app/src
+        - PROJECT_SECRETS_KEY_FILE=/run/secrets/project_secrets_key
+        - PROJECT_PROXY_SECRET_KEY_FILE=/run/secrets/project_proxy_secret_key
+      volumes:
+        - ${PROJECT_SECRETS_KEY_HOST_PATH:-../../.project_secrets_key}:/run/secrets/project_secrets_key:ro
+        - ${PROJECT_PROXY_SECRET_KEY_HOST_PATH:-../../.project_proxy_secret_key}:/run/secrets/project_proxy_secret_key:ro
       command: celery -A app.celery_app beat -l info
       depends_on:
         - redis
