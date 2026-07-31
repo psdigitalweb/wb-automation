@@ -61,15 +61,21 @@ def _text(command: Sequence[str], *, check: bool = True) -> str:
     return result.stdout.decode("utf-8", errors="replace").strip()
 
 
-def _compose_prefix(compose_file: Path, project_name: str) -> list[str]:
-    return [
+def _compose_prefix(
+    compose_file: Path,
+    project_name: str,
+    env_file: Path | None = None,
+) -> list[str]:
+    command = [
         "docker",
         "compose",
         "--project-name",
         project_name,
-        "--file",
-        str(compose_file),
     ]
+    if env_file is not None:
+        command.extend(["--env-file", str(env_file)])
+    command.extend(["--file", str(compose_file)])
+    return command
 
 
 def _ensure_external_output_dir(output_dir: Path) -> Path:
@@ -191,6 +197,9 @@ def _archive_volume(
 ) -> tuple[str, str]:
     volume_name = _resolve_compose_volume(project_name, logical_name)
     filename = f"volume-{logical_name}.tar.gz"
+    owner_fix = ""
+    if hasattr(os, "getuid") and hasattr(os, "getgid"):
+        owner_fix = f" && chown {os.getuid()}:{os.getgid()} /backup/{filename}"
     _run(
         [
             "docker",
@@ -203,7 +212,7 @@ def _archive_volume(
             archive_image,
             "sh",
             "-c",
-            f"cd /source && tar -czf /backup/{filename} .",
+            f"cd /source && tar -czf /backup/{filename} .{owner_fix}",
         ]
     )
     return volume_name, filename
@@ -236,7 +245,13 @@ def create_backup(args: argparse.Namespace) -> Path:
     if not compose_file.is_file():
         raise FileNotFoundError(f"Compose file not found: {compose_file}")
     output_dir = _ensure_external_output_dir(Path(args.output_dir))
-    compose = _compose_prefix(compose_file, args.project_name)
+    env_file = Path(args.env_file).expanduser().resolve() if args.env_file else None
+    if env_file is not None and not env_file.is_file():
+        raise FileNotFoundError(f"Compose env file not found: {env_file}")
+    repo_root = Path(args.repo_root).expanduser().resolve()
+    if not (repo_root / ".git").exists():
+        raise FileNotFoundError(f"Git repository not found: {repo_root}")
+    compose = _compose_prefix(compose_file, args.project_name, env_file)
     if not _service_container(compose, "postgres"):
         raise RuntimeError("PostgreSQL service is not running")
 
@@ -290,11 +305,14 @@ def create_backup(args: argparse.Namespace) -> Path:
                     "archive": filename,
                 }
 
-        git_commit = _text(["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"])
+        git_commit = _text(["git", "-C", str(repo_root), "rev-parse", "HEAD"])
+        git_status = _text(["git", "-C", str(repo_root), "status", "--porcelain"])
         metadata = {
             "format_version": 1,
             "created_at_utc": datetime.now(timezone.utc).isoformat(),
             "git_commit": git_commit,
+            "git_dirty": bool(git_status),
+            "git_status_entries": len(git_status.splitlines()) if git_status else 0,
             "compose_project": args.project_name,
             "compose_file": compose_file.name,
             "postgres_image": images.get("postgres", {}).get("configured", "postgres:16"),
@@ -333,6 +351,8 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", required=True, help="Existing secure directory outside the repository")
     parser.add_argument("--compose-file", default=str(DEFAULT_COMPOSE_FILE))
+    parser.add_argument("--env-file", help="Compose interpolation env file; contents are never copied")
+    parser.add_argument("--repo-root", default=str(REPO_ROOT), help="Deployed Git checkout recorded in metadata")
     parser.add_argument("--project-name", default="ecomcore")
     parser.add_argument("--archive-image", default="alpine:3.20")
     parser.add_argument(

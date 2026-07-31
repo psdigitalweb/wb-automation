@@ -7,13 +7,37 @@ from pathlib import Path
 
 import pytest
 
-from scripts.production_backup import REPO_ROOT, _ensure_external_output_dir, _sha256
+from scripts.production_backup import (
+    REPO_ROOT,
+    _compose_prefix,
+    _ensure_external_output_dir,
+    _sha256,
+)
 from scripts.verify_production_backup import _verify_checksums, _verify_tar_archive
 
 
 def test_backup_output_must_be_outside_repository() -> None:
     with pytest.raises(ValueError, match="outside the Git repository"):
         _ensure_external_output_dir(REPO_ROOT / "artifacts" / "backup")
+
+
+def test_compose_prefix_uses_explicit_env_file() -> None:
+    command = _compose_prefix(
+        Path("/srv/ecomcore/docker-compose.prod.yml"),
+        "ecomcore",
+        Path("/srv/ecomcore/.env"),
+    )
+
+    assert command == [
+        "docker",
+        "compose",
+        "--project-name",
+        "ecomcore",
+        "--env-file",
+        "/srv/ecomcore/.env",
+        "--file",
+        "/srv/ecomcore/docker-compose.prod.yml",
+    ]
 
 
 def test_checksum_verification_detects_changed_artifact(tmp_path: Path) -> None:

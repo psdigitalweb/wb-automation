@@ -37,6 +37,8 @@ Run from the repository root on the production host:
 python scripts/production_backup.py \
   --output-dir /srv/ecomcore-backups \
   --compose-file infra/docker/docker-compose.prod.yml \
+  --env-file .env \
+  --repo-root . \
   --project-name ecomcore
 ```
 
