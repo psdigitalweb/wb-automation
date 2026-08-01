@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
-import { apiGet, apiGetData, getWBFinanceReportsLatest } from '../../../../../lib/apiClient'
+import { apiGet, getWBFinanceReportsLatest } from '../../../../../lib/apiClient'
 import type { ApiError, WBFinanceReportLatest } from '../../../../../lib/apiClient'
 import { usePageTitle } from '../../../../../hooks/usePageTitle'
 import styles from './dashboard.module.css'
@@ -58,12 +58,6 @@ interface Project {
   description: string | null
 }
 
-type PriceDiscrepancyResponse = {
-  meta?: {
-    total_count?: number
-  }
-}
-
 function formatDateTime(value: string | null | undefined): string {
   if (!value) return 'Нет снимка'
   return new Date(value).toLocaleString('ru-RU', {
@@ -107,7 +101,6 @@ export default function ProjectDashboard() {
   const [project, setProject] = useState<Project | null>(null)
   const [marketplaces, setMarketplaces] = useState<ProjectMarketplace[]>([])
   const [kpis, setKpis] = useState<Kpis | null>(null)
-  const [priceDiscrepanciesCount, setPriceDiscrepanciesCount] = useState<number | null>(null)
   const [latestWbReport, setLatestWbReport] = useState<WBFinanceReportLatest | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<ApiError | string | null>(null)
@@ -124,7 +117,6 @@ export default function ProjectDashboard() {
     async function loadDashboard() {
       setLoading(true)
       setError(null)
-      setPriceDiscrepanciesCount(null)
       setLatestWbReport(null)
 
       try {
@@ -145,15 +137,9 @@ export default function ProjectDashboard() {
         )
 
         if (hasWb) {
-          const [discrepancies, latestReport] = await Promise.all([
-            apiGetData<PriceDiscrepancyResponse>(
-              `/api/v1/projects/${projectId}/wildberries/price-discrepancies?only_below_rrp=true&page_size=1`,
-            ).catch(() => null),
-            getWBFinanceReportsLatest(projectId),
-          ])
+          const latestReport = await getWBFinanceReportsLatest(projectId)
 
           if (!alive) return
-          setPriceDiscrepanciesCount(discrepancies?.meta?.total_count ?? 0)
           setLatestWbReport(latestReport)
         }
       } catch (error) {
@@ -241,7 +227,6 @@ export default function ProjectDashboard() {
             <div>
               <div className={styles.eyebrow}>Пульс проекта</div>
               <h2>Wildberries</h2>
-              <p>Операционные счётчики по последним доступным снимкам. Это не 7-дневные продажи.</p>
             </div>
             <Link className={styles.secondaryLink} href={`/app/project/${projectId}/wildberries`}>
               Открыть WB
@@ -285,20 +270,6 @@ export default function ProjectDashboard() {
                 </div>
               </article>
             ) : null}
-
-            <article className={styles.metricCard}>
-              <div className={styles.metricLabel}>Расхождения цен</div>
-              <div className={styles.metricValue}>
-                {priceDiscrepanciesCount === null ? '—' : formatNumber(priceDiscrepanciesCount)}
-              </div>
-              <div className={styles.metricHint}>Товаров ниже РРЦ, без периода</div>
-              <Link
-                className={styles.cardLink}
-                href={`/app/project/${projectId}/wildberries/price-discrepancies?only_below_rrp=true`}
-              >
-                Открыть отчёт
-              </Link>
-            </article>
 
             {latestWbReport && latestWbReportTotal !== null && latestWbReportTotal !== undefined ? (
               <article className={styles.metricCard}>

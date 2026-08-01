@@ -9,12 +9,17 @@ export type IconName =
   | 'coins'
   | 'database'
   | 'finance'
+  | 'funnel'
   | 'gear'
   | 'home'
+  | 'imageOff'
   | 'inbox'
   | 'layout'
   | 'logout'
+  | 'mapPin'
+  | 'network'
   | 'package'
+  | 'percent'
   | 'puzzle'
   | 'settings'
   | 'spark'
@@ -30,6 +35,7 @@ export type RailItemConfig = {
   match: (pathname: string) => boolean
   hasSubNav?: boolean
   requiresProject?: boolean
+  disabled?: boolean
   marketplaceCode?: 'wildberries' | 'ozon'
 }
 
@@ -95,11 +101,12 @@ export const railItems: Array<RailItemConfig | { divider: true }> = [
   { divider: true },
   {
     id: 'compare',
-    label: 'Сравн.',
+    label: 'Цены',
     icon: 'arrowsDiff',
     href: (projectId) => (projectId ? `/app/project/${projectId}/wildberries/price-discrepancies` : '/app/projects'),
     match: () => false,
     requiresProject: true,
+    disabled: true,
   },
   {
     id: 'inbox',
@@ -108,6 +115,7 @@ export const railItems: Array<RailItemConfig | { divider: true }> = [
     href: (projectId) => (projectId ? `/app/project/${projectId}/wildberries/funnel-signals` : '/app/projects'),
     match: () => false,
     requiresProject: true,
+    disabled: true,
   },
   {
     id: 'expenses',
@@ -133,82 +141,13 @@ export const railItems: Array<RailItemConfig | { divider: true }> = [
 export const subNavGroupsByRail: Record<string, SubNavGroup[]> = {
   wb: [
     {
-      id: 'reports',
-      label: 'Отчеты',
-      items: [
-        {
-          id: 'sales-trends',
-          label: 'Динамика продаж',
-          icon: 'chart',
-          href: (projectId) => `/app/project/${projectId}/wildberries/sales-trends`,
-          match: (rest) => rest.startsWith('wildberries/sales-trends'),
-        },
-        {
-          id: 'price-discrepancies',
-          label: 'Расхождение цен',
-          icon: 'chart',
-          href: (projectId) => `/app/project/${projectId}/wildberries/price-discrepancies`,
-          match: (rest) => rest.startsWith('wildberries/price-discrepancies'),
-        },
-        {
-          id: 'without-photos',
-          label: 'Без фото',
-          icon: 'box',
-          href: (projectId) => `/app/project/${projectId}/wildberries/stock-without-photos`,
-          match: (rest) => rest.startsWith('wildberries/stock-without-photos'),
-        },
-        {
-          id: 'unit-pnl',
-          label: 'Unit PNL',
-          icon: 'coins',
-          href: (projectId) => `/app/project/${projectId}/wildberries/finances/unit-pnl`,
-          match: (rest) => rest.startsWith('wildberries/finances/unit-pnl'),
-        },
-        {
-          id: 'funnel',
-          label: 'Воронка',
-          icon: 'chart',
-          href: (projectId) => `/app/project/${projectId}/wildberries/funnel-signals`,
-          match: (rest) => rest.startsWith('wildberries/funnel-signals'),
-        },
-        {
-          id: 'reviews',
-          label: 'Отзывы',
-          icon: 'inbox',
-          href: (projectId) => `/app/project/${projectId}/wildberries/reviews`,
-          match: (rest) => rest.startsWith('wildberries/reviews'),
-        },
-        {
-          id: 'geo-sales',
-          label: 'Гео продаж',
-          icon: 'chart',
-          href: (projectId) => `/app/project/${projectId}/wildberries/order-geography`,
-          match: (rest) => rest.startsWith('wildberries/order-geography'),
-        },
-        {
-          id: 'spp-dynamics',
-          label: 'Динамика СПП',
-          icon: 'chart',
-          href: (projectId) => `/app/project/${projectId}/wildberries/spp-dynamics`,
-          match: (rest) => rest.startsWith('wildberries/spp-dynamics'),
-        },
-        {
-          id: 'product-groups',
-          label: 'Аналитика связок',
-          icon: 'chart',
-          href: (projectId) => `/app/project/${projectId}/wildberries/product-groups`,
-          match: (rest) => rest.startsWith('wildberries/product-groups'),
-        },
-      ],
-    },
-    {
       id: 'data',
       label: 'Данные',
       items: [
         {
           id: 'catalog',
           label: 'Каталог',
-          icon: 'box',
+          icon: 'package',
           href: (projectId) => `/app/project/${projectId}/wildberries/catalog`,
           match: (rest) => rest.startsWith('wildberries/catalog'),
         },
@@ -227,6 +166,75 @@ export const subNavGroupsByRail: Record<string, SubNavGroup[]> = {
           href: () => '#',
           match: () => false,
           disabled: true,
+        },
+      ],
+    },
+    {
+      id: 'reports',
+      label: 'Отчеты',
+      items: [
+        {
+          id: 'funnel',
+          label: 'Воронка',
+          icon: 'funnel',
+          href: (projectId) => `/app/project/${projectId}/wildberries/funnel-signals`,
+          match: (rest) => rest.startsWith('wildberries/funnel-signals'),
+        },
+        {
+          id: 'spp-dynamics',
+          label: 'Динамика СПП',
+          icon: 'percent',
+          href: (projectId) => `/app/project/${projectId}/wildberries/spp-dynamics`,
+          match: (rest) => rest.startsWith('wildberries/spp-dynamics'),
+        },
+        {
+          id: 'price-discrepancies',
+          label: 'Аналитика цен',
+          icon: 'arrowsDiff',
+          href: (projectId) => `/app/project/${projectId}/wildberries/price-discrepancies`,
+          match: (rest) => rest.startsWith('wildberries/price-discrepancies'),
+        },
+        {
+          id: 'product-groups',
+          label: 'Аналитика связок',
+          icon: 'network',
+          href: (projectId) => `/app/project/${projectId}/wildberries/product-groups`,
+          match: (rest) => rest.startsWith('wildberries/product-groups'),
+        },
+        {
+          id: 'unit-pnl',
+          label: 'Unit PNL',
+          icon: 'finance',
+          href: (projectId) => `/app/project/${projectId}/wildberries/finances/unit-pnl`,
+          match: (rest) => rest.startsWith('wildberries/finances/unit-pnl'),
+        },
+        {
+          id: 'sales-trends',
+          label: 'Динамика продаж',
+          icon: 'chart',
+          href: (projectId) => `/app/project/${projectId}/wildberries/sales-trends`,
+          match: (rest) => rest.startsWith('wildberries/sales-trends'),
+        },
+        {
+          id: 'geo-sales',
+          label: 'Гео продаж',
+          icon: 'mapPin',
+          href: (projectId) => `/app/project/${projectId}/wildberries/order-geography`,
+          match: (rest) => rest.startsWith('wildberries/order-geography'),
+        },
+        {
+          id: 'without-photos',
+          label: 'Остаток без фото',
+          icon: 'imageOff',
+          href: (projectId) => `/app/project/${projectId}/wildberries/stock-without-photos`,
+          match: (rest) => rest.startsWith('wildberries/stock-without-photos'),
+        },
+        {
+          id: 'reviews',
+          label: 'Отзывы',
+          icon: 'inbox',
+          href: (projectId) => `/app/project/${projectId}/wildberries/reviews`,
+          match: (rest) => rest.startsWith('wildberries/reviews'),
         },
       ],
     },

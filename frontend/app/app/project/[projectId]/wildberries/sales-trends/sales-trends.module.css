@@ -3,8 +3,9 @@
 .header h1 { margin: 4px 0 6px; font-size: 24px; line-height: 1.2; }
 .header p { margin: 0; color: var(--color-text-2, #64748b); font-size: 13px; }
 .eyebrow { color: var(--color-text-3, #64748b); font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; }
-.filters { display: grid; grid-template-columns: minmax(300px, 2fr) repeat(3, minmax(135px, .72fr)) auto; gap: 12px; align-items: end; padding: 16px; background: var(--color-surface, #fff); border: .5px solid var(--color-border, #d8dee8); border-radius: 10px; box-shadow: var(--shadow-sm, 0 1px 2px #0000000d); }
+.filters { display: grid; grid-template-columns: minmax(300px, 2fr) repeat(3, minmax(135px, .72fr)) auto; gap: 12px; align-items: start; padding: 16px; background: var(--color-surface, #fff); border: .5px solid var(--color-border, #d8dee8); border-radius: 10px; box-shadow: var(--shadow-sm, 0 1px 2px #0000000d); }
 .filters label, .productField > label { display: grid; gap: 6px; color: var(--color-text-2, #475569); font-size: 12px; font-weight: 500; }
+.productField > label { margin-bottom: 6px; }
 .filters input, .filters select { width: 100%; height: 34px; padding: 0 10px; color: var(--color-text, #1f2937); background: var(--color-surface, #fff); border: .5px solid var(--color-border, #cbd5e1); border-radius: 6px; font: inherit; font-size: 13px; outline: none; }
 .filters input:focus, .filters select:focus { border-color: var(--color-accent, #17623c); box-shadow: var(--shadow-focus, 0 0 0 3px #17623c22); }
 .productField { min-width: 0; }
@@ -19,7 +20,7 @@
 .chip::before { width: 7px; height: 7px; background: var(--series-color); border-radius: 50%; content: ''; }
 .chip button { padding: 0 2px; color: #64748b; background: transparent; border: 0; cursor: pointer; font-size: 15px; line-height: 1; }
 .hint { color: var(--color-text-3, #64748b); font-size: 11px; }
-.primaryButton { height: 34px; padding: 0 16px; color: #fff; background: var(--color-accent, #17623c); border: 0; border-radius: 6px; box-shadow: var(--shadow-xs, 0 1px 1px #0002); cursor: pointer; font-size: 13px; font-weight: 600; white-space: nowrap; }
+.primaryButton { box-sizing: border-box; height: 34px; margin-top: 21px; padding: 0 16px; color: #fff; background: var(--color-accent, #17623c); border: 0; border-radius: 6px; box-shadow: var(--shadow-xs, 0 1px 1px #0002); cursor: pointer; font-size: 13px; font-weight: 600; white-space: nowrap; }
 .primaryButton:hover { background: var(--color-accent-hover, #124d30); }
 .primaryButton:disabled { cursor: wait; opacity: .65; }
 .error { margin-top: 12px; padding: 10px 12px; color: #9f1239; background: #fff1f2; border: .5px solid #fecdd3; border-radius: 8px; font-size: 13px; }
@@ -48,5 +49,6 @@
 .tableCard td:first-child { display: grid; gap: 2px; }
 .tableCard td span { max-width: 280px; overflow: hidden; color: var(--color-text-3, #64748b); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .mono { font-family: var(--font-mono, monospace); }
-@media (max-width: 1100px) { .filters { grid-template-columns: repeat(3, 1fr); } .productField { grid-column: 1 / -1; } .primaryButton { width: 100%; } }
-@media (max-width: 760px) { .page { padding: 20px 16px 36px; } .filters { grid-template-columns: 1fr 1fr; } .filters label:nth-of-type(3), .primaryButton { grid-column: 1 / -1; } .chartHeader { align-items: flex-start; flex-direction: column; } .chartControls { width: 100%; justify-content: space-between; } }
+@media (max-width: 1100px) { .filters { grid-template-columns: repeat(4, minmax(0, 1fr)); } .productField { grid-column: 1 / -1; } .primaryButton { width: 100%; } }
+@media (max-width: 760px) { .page { padding: 20px 16px 36px; } .filters { grid-template-columns: repeat(2, minmax(0, 1fr)); } .chartHeader { align-items: flex-start; flex-direction: column; } .chartControls { width: 100%; justify-content: space-between; } }
+@media (max-width: 520px) { .filters { grid-template-columns: 1fr; } .productField { grid-column: auto; } .primaryButton { margin-top: 0; } }

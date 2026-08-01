@@ -34,7 +34,7 @@ export default function RailNav({
       <nav className="ec-rail-list">
         {items.map((item, index) => {
           if ('divider' in item) return <div key={`divider-${index}`} className="ec-rail-divider" />
-          const disabled = item.requiresProject && !projectId
+          const disabled = Boolean(item.disabled || (item.requiresProject && !projectId))
           const href = item.href(projectId)
           const opensSubNav = Boolean(item.hasSubNav && projectId && !disabled)
           const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
@@ -42,10 +42,25 @@ export default function RailNav({
             event.preventDefault()
             onPrimaryOpen(item.id)
           }
+          if (disabled) {
+            return (
+              <span
+                key={item.id}
+                className="ec-rail-item is-disabled"
+                title={item.label}
+                aria-disabled="true"
+              >
+                <span className="ec-rail-icon-wrap">
+                  <Icon name={item.icon} size={18} />
+                </span>
+                <span className="ec-rail-label">{item.label}</span>
+              </span>
+            )
+          }
           return (
             <Link
               key={item.id}
-              className={`ec-rail-item ${activePrimary === item.id ? 'is-active' : ''} ${disabled ? 'is-disabled' : ''}`}
+              className={`ec-rail-item ${activePrimary === item.id ? 'is-active' : ''}`}
               href={href}
               onClick={handleClick}
               title={item.label}

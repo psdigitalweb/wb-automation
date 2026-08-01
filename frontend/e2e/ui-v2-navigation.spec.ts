@@ -219,6 +219,10 @@ test.describe('UI v2 navigation contract', () => {
     await expect(page.locator('.ec-rail-item', { hasText: 'Модули' })).toHaveClass(/is-active/)
     await expect(page.locator('.ec-subnav-item.is-active', { hasText: 'SEO' })).toBeVisible()
     await expect(page.locator('.ec-rail-item', { hasText: 'Ozon' })).toHaveCount(0)
+    await expect(page.locator('.ec-rail-item', { hasText: 'Цены' })).toHaveAttribute('aria-disabled', 'true')
+    await expect(page.locator('.ec-rail-item', { hasText: 'Сигналы' })).toHaveAttribute('aria-disabled', 'true')
+    await expect(page.getByRole('link', { name: 'Цены' })).toHaveCount(0)
+    await expect(page.getByRole('link', { name: 'Сигналы' })).toHaveCount(0)
 
     await page.locator('.ec-subnav-item', { hasText: 'Гипотезы' }).click()
     await expect(page).toHaveURL(/\/app\/project\/1\/wildberries\/hypothesis-lab\/experiments$/)
@@ -244,7 +248,7 @@ test.describe('UI v2 navigation contract', () => {
     await expect(page.locator('.ec-rail-item.is-active')).toHaveText(/WB/)
 
     const wbRoutes = [
-      ['/app/project/1/wildberries/price-discrepancies?ui=v2', /Расхождение цен/],
+      ['/app/project/1/wildberries/price-discrepancies?ui=v2', /Аналитика цен/],
       ['/app/project/1/wildberries/stock-without-photos?ui=v2', /Без фото/],
       ['/app/project/1/wildberries/finances/unit-pnl?ui=v2', /Unit PNL/],
       ['/app/project/1/wildberries/funnel-signals?ui=v2', /Воронка/],
@@ -320,12 +324,12 @@ test.describe('UI v2 navigation contract', () => {
     await expect(dashboard.getByRole('heading', { name: 'Intro-Version' })).toBeVisible()
     await expect(dashboard.getByText('Пульс проекта')).toBeVisible()
     await expect(dashboard.getByRole('heading', { name: 'Wildberries' })).toBeVisible()
-    await expect(dashboard.getByText('Операционные счётчики по последним доступным снимкам')).toBeVisible()
+    await expect(dashboard.getByText('Операционные счётчики по последним доступным снимкам')).toHaveCount(0)
     await expect(dashboard.getByText('Каталог WB')).toBeVisible()
     await expect(dashboard.getByText('790')).toBeVisible()
     await expect(dashboard.getByText('На витрине из 847 (93%)')).toBeVisible()
     await expect(dashboard.getByText('Остатки FBS / FBO')).toBeVisible()
-    await expect(dashboard.getByText('Расхождения цен')).toBeVisible()
+    await expect(dashboard.getByText('Расхождения цен')).toHaveCount(0)
 
     await expect(dashboard.getByText('Требует внимания')).toHaveCount(0)
     await expect(dashboard.getByText('Сигналы')).toHaveCount(0)
