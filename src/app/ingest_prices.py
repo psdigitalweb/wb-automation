@@ -35,13 +35,13 @@ async def ingest_prices(project_id: int, run_id: int | None = None) -> Dict[str,
     Args:
         project_id: Project ID to associate price snapshots with (required).
     """
-    from app.utils.get_project_marketplace_token import get_wb_credentials_for_project
+    from app.utils.get_project_marketplace_token import get_wb_api_token_for_project
     
     # Get credentials from project_marketplaces (preferred) or fallback to env
     try:
-        credentials = get_wb_credentials_for_project(project_id)
-        if credentials:
-            token = credentials.get("token", "")
+        project_token = get_wb_api_token_for_project(project_id)
+        if project_token:
+            token = project_token
         else:
             # Not enabled or no connection - use env fallback
             token = os.getenv("WB_TOKEN", "") or ""
@@ -117,11 +117,17 @@ async def ingest_prices(project_id: int, run_id: int | None = None) -> Dict[str,
         list_goods = await client.fetch_prices(limit=limit, offset=offset)
         
         if not list_goods:
-            if page_count == 1 and client.last_response_status in (401, 403):
-                reason = "wb_token_unauthorized" if client.last_response_status == 401 else "wb_token_forbidden"
+            if client.last_response_status != 200 or client.last_error_text:
+                status = client.last_response_status
+                reason_by_status = {
+                    401: "wb_token_unauthorized",
+                    403: "wb_token_forbidden",
+                    429: "wb_rate_limited",
+                }
+                reason = reason_by_status.get(status, "wb_prices_api_error")
                 print(
-                    "ingest_prices: failed to fetch first page, "
-                    f"status={client.last_response_status}, reason={reason}"
+                    "ingest_prices: failed to fetch page, "
+                    f"status={status}, reason={reason}, offset={offset}"
                 )
                 return {
                     "ok": False,
@@ -129,8 +135,10 @@ async def ingest_prices(project_id: int, run_id: int | None = None) -> Dict[str,
                     "project_id": project_id,
                     "domain": "prices",
                     "reason": reason,
-                    "http_status": client.last_response_status,
-                    "error": "WB prices API rejected the token",
+                    "http_status": status,
+                    "error": "WB prices API request failed",
+                    "pages": page_count,
+                    "inserted": total_inserted,
                 }
             print(f"ingest_prices: no goods returned at offset {offset}, pagination complete")
             break
@@ -261,8 +269,8 @@ async def start_ingest_prices(
     """
     # Check credentials before starting background task
     try:
-        credentials = get_wb_credentials_for_project(project_id)
-        if credentials is None:
+        project_token = get_wb_api_token_for_project(project_id)
+        if project_token is None:
             # Not enabled or no connection - allow env fallback
             pass
     except ValueError as e:

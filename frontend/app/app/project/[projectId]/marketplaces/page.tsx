@@ -458,6 +458,13 @@ export default function ProjectMarketplacesPage() {
                             <button
                               type="button"
                               className={styles.secondaryButton}
+                              onClick={() => handleConfigure(mp.code)}
+                            >
+                              Настройки
+                            </button>
+                            <button
+                              type="button"
+                              className={styles.secondaryButton}
                               onClick={() => {
                                 console.log('[WB_DEBUG] Configure button clicked', { wbShowForm, wbEnabled, wbConnected })
                                 setWbShowForm(!wbShowForm)

@@ -1,0 +1,24 @@
+.coverage {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  align-items: center;
+  min-height: 28px;
+  padding: 6px 10px;
+  border: 0.5px solid var(--color-border, rgba(31, 41, 55, 0.15));
+  border-radius: var(--radius-sm, 6px);
+  background: var(--color-surface-2, #f7f8f9);
+  color: var(--color-text-2, #59606b);
+  font-size: var(--text-sm, 12px);
+}
+
+.coverage strong {
+  color: var(--color-danger, #b42318);
+  font-weight: 600;
+}
+
+.warning,
+.empty {
+  background: var(--color-warning-bg, #fff8e7);
+  border-color: color-mix(in srgb, var(--color-warning, #b7791f) 28%, transparent);
+}

@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
 import {
@@ -12,6 +12,8 @@ import {
 } from '@/lib/apiClient'
 import { usePageTitle } from '@/hooks/usePageTitle'
 import styles from './order-geography.module.css'
+import { useConstrainedReportPeriod } from '@/hooks/useReportFilterOptions'
+import { ReportDataCoverage } from '@/components/ui-v2/ReportDataCoverage'
 
 const GROUP_OPTIONS: { value: OrderGeographyGroupBy; label: string }[] = [
   { value: 'region', label: 'Регион' },
@@ -112,8 +114,12 @@ export default function OrderGeographyPage() {
   const [data, setData] = useState<OrderGeographyResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const initialLoadKeyRef = useRef<string | null>(null)
+  const { options: reportOptions, loading: reportOptionsLoading } = useConstrainedReportPeriod(
+    projectId, 'order-geography', periodFrom, periodTo, setPeriodFrom, setPeriodTo,
+  )
 
-  const load = async () => {
+  const load = useCallback(async () => {
     if (!periodFrom || !periodTo) {
       setError('Укажите период')
       return
@@ -143,12 +149,15 @@ export default function OrderGeographyPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [country, groupBy, limit, nmId, officeName, periodFrom, periodTo, projectId, vendorCode])
 
   useEffect(() => {
-    load()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId])
+    if (reportOptionsLoading || !periodFrom || !periodTo) return
+    const loadKey = `${projectId}:${periodFrom}:${periodTo}`
+    if (initialLoadKeyRef.current === loadKey) return
+    initialLoadKeyRef.current = loadKey
+    void load()
+  }, [load, periodFrom, periodTo, projectId, reportOptionsLoading])
 
   const topItems = data?.items.slice(0, 20) ?? []
   const tableItems = data?.items ?? []
@@ -174,11 +183,11 @@ export default function OrderGeographyPage() {
       <section className={styles.filterToolbar} aria-label="Фильтры">
         <label className={styles.field}>
           <span>Период с</span>
-          <input type="date" value={periodFrom} onChange={(e) => setPeriodFrom(e.target.value)} />
+          <input type="date" value={periodFrom} min={reportOptions?.date_filter.min_date ?? undefined} max={periodTo || reportOptions?.date_filter.max_date || undefined} onChange={(e) => setPeriodFrom(e.target.value)} />
         </label>
         <label className={styles.field}>
           <span>по</span>
-          <input type="date" value={periodTo} onChange={(e) => setPeriodTo(e.target.value)} />
+          <input type="date" value={periodTo} min={periodFrom || reportOptions?.date_filter.min_date || undefined} max={reportOptions?.date_filter.max_date ?? undefined} onChange={(e) => setPeriodTo(e.target.value)} />
         </label>
         <label className={styles.field}>
           <span>Группировка</span>
@@ -223,6 +232,7 @@ export default function OrderGeographyPage() {
           {error && <span className={styles.errorText}>{error}</span>}
         </div>
       </section>
+      <ReportDataCoverage options={reportOptions} periodFrom={periodFrom} periodTo={periodTo} />
 
       <section className={styles.metricGrid} aria-label="Сводка">
         <Metric label="Заказы" value={formatInt(data?.summary.orders)} />

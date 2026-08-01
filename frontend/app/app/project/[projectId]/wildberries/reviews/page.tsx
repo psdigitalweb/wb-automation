@@ -3,7 +3,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useParams } from 'next/navigation'
 import {
-  getFunnelSignalsCategories,
   getReviewsList,
   getReviewsSummary,
   type ReviewDetailItem,
@@ -17,6 +16,8 @@ import { Button } from '@/components/ui-v2/primitives/Button'
 import { Card } from '@/components/ui-v2/primitives/Card'
 import { PageHeader } from '@/components/ui-v2/primitives/PageHeader'
 import styles from './reviews.module.css'
+import { useConstrainedReportPeriod } from '@/hooks/useReportFilterOptions'
+import { ReportDataCoverage } from '@/components/ui-v2/ReportDataCoverage'
 
 const REVIEWS_PAGE_SIZE = 20
 
@@ -275,15 +276,36 @@ export default function ReviewsPage() {
   const [expandedNmId, setExpandedNmId] = useState<number | null>(null)
   const [reviewsByNmId, setReviewsByNmId] = useState<Record<number, ReviewsListState>>({})
   const [appliedPeriod, setAppliedPeriod] = useState<{ periodFrom?: string; periodTo?: string }>({})
+  const { options: reportOptions, loading: reportOptionsLoading } = useConstrainedReportPeriod(
+    projectId, 'reviews', periodFrom, periodTo, setPeriodFrom, setPeriodTo,
+  )
 
   usePageTitle('Отзывы WB', projectId || null)
 
   useEffect(() => {
-    if (!projectId) return
-    getFunnelSignalsCategories(projectId)
-      .then(setCategories)
-      .catch(() => setCategories([]))
-  }, [projectId])
+    if (!projectId || reportOptionsLoading) return
+    if (reportOptions?.date_filter.enabled && (!periodFrom || !periodTo)) return
+    let active = true
+    getReviewsSummary(projectId, {
+      period_from: periodFrom || undefined,
+      period_to: periodTo || undefined,
+      only_with_reviews_in_period: Boolean(periodFrom && periodTo),
+    })
+      .then((result) => {
+        if (!active) return
+        const next = Array.from(
+          new Set(result.items.map((item) => item.wb_category).filter((value): value is string => Boolean(value))),
+        ).sort((left, right) => left.localeCompare(right, 'ru'))
+        setCategories(next)
+        setWbCategory((current) => (current && !next.includes(current) ? '' : current))
+      })
+      .catch(() => {
+        if (active) setCategories([])
+      })
+    return () => {
+      active = false
+    }
+  }, [periodFrom, periodTo, projectId, reportOptions, reportOptionsLoading])
 
   const load = useCallback(() => {
     if (!projectId) return
@@ -425,11 +447,12 @@ export default function ReviewsPage() {
   )
 
   useEffect(() => {
-    if (!projectId) return
+    if (!projectId || reportOptionsLoading) return
+    if (reportOptions?.date_filter.enabled && (!periodFrom || !periodTo)) return
     if (initialLoadProjectRef.current === projectId) return
     initialLoadProjectRef.current = projectId
     load()
-  }, [projectId, load])
+  }, [projectId, load, periodFrom, periodTo, reportOptions, reportOptionsLoading])
 
   const items = data?.items ?? []
   const showNewReviews = periodFrom.trim() !== '' && periodTo.trim() !== ''
@@ -450,6 +473,8 @@ export default function ReviewsPage() {
               <input
                 type="date"
                 value={periodFrom}
+                min={reportOptions?.date_filter.min_date ?? undefined}
+                max={periodTo || reportOptions?.date_filter.max_date || undefined}
                 onChange={(e) => setPeriodFrom(e.target.value)}
                 className="unitpnl-control h-10 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm leading-5 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
@@ -459,6 +484,8 @@ export default function ReviewsPage() {
               <input
                 type="date"
                 value={periodTo}
+                min={periodFrom || reportOptions?.date_filter.min_date || undefined}
+                max={reportOptions?.date_filter.max_date ?? undefined}
                 onChange={(e) => setPeriodTo(e.target.value)}
                 className="unitpnl-control h-10 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm leading-5 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
@@ -863,6 +890,7 @@ export default function ReviewsPage() {
             </tbody>
           </table>
           </div>
+          <ReportDataCoverage options={reportOptions} periodFrom={periodFrom} periodTo={periodTo} />
         </Card>
       )}
     </div>

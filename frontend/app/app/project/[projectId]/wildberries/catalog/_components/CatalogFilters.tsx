@@ -20,6 +20,8 @@ type Props = {
   onChange: (values: CatalogFilterValues) => void
   onActivityChange: (activity: WBCatalogActivity) => void
   onApply: () => void
+  minDate?: string | null
+  maxDate?: string | null
 }
 
 const sortOptions: Array<{
@@ -43,6 +45,8 @@ export function CatalogFilters({
   onChange,
   onActivityChange,
   onApply,
+  minDate,
+  maxDate,
 }: Props) {
   const sortValue = `${values.sort}:${values.order}` as const
 
@@ -69,6 +73,8 @@ export function CatalogFilters({
         <input
           type="date"
           value={values.periodFrom}
+          min={minDate ?? undefined}
+          max={values.periodTo || maxDate || undefined}
           onChange={(event) =>
             onChange({ ...values, periodFrom: event.target.value })
           }
@@ -80,6 +86,8 @@ export function CatalogFilters({
         <input
           type="date"
           value={values.periodTo}
+          min={values.periodFrom || minDate || undefined}
+          max={maxDate ?? undefined}
           onChange={(event) =>
             onChange({ ...values, periodTo: event.target.value })
           }

@@ -50,18 +50,21 @@ def _dbg(*, hypothesisId: str, location: str, message: str, data: dict) -> None:
 
 
 BRAND_ID_PLACEHOLDER = "{brand_id}"
+SELLER_ID_PLACEHOLDER = "{seller_id}"
 
 
 def resolve_base_url(template: str, brand_id: int) -> str:
-    """Replace {brand_id} in template with numeric brand_id. Fail if placeholder missing."""
+    """Resolve a legacy brand or current seller storefront URL template."""
     if not template or not template.strip():
         raise ValueError("base_url template is empty")
+    template = template.strip()
+    if SELLER_ID_PLACEHOLDER in template:
+        return template.replace(SELLER_ID_PLACEHOLDER, str(brand_id))
     if BRAND_ID_PLACEHOLDER not in template:
         raise ValueError(
-            "base_url template must contain placeholder {brand_id}. "
-            "Example: https://catalog.wb.ru/brands/v4/catalog?brand={brand_id}&page=1"
+            "base_url template must contain placeholder {seller_id} or {brand_id}."
         )
-    return template.strip().replace(BRAND_ID_PLACEHOLDER, str(brand_id))
+    return template.replace(BRAND_ID_PLACEHOLDER, str(brand_id))
 
 
 class FrontendBrandPricesRequest(BaseModel):
@@ -349,6 +352,7 @@ def get_brand_base_url_from_settings() -> Optional[str]:
 
 async def ingest_frontend_brand_prices(
     brand_id: int,
+    query_type: str = "brand",
     base_url: Optional[str] = None,
     max_pages: int = 0,
     sleep_ms: int = 800,
@@ -369,6 +373,8 @@ async def ingest_frontend_brand_prices(
     max_runtime_seconds: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Fetch and insert frontend catalog price snapshots from WB public API."""
+    if query_type not in {"brand", "seller"}:
+        raise ValueError("query_type must be 'brand' or 'seller'")
     proxy_used = bool(proxy_url and str(proxy_url).strip())
     proxy_scheme_val = (str(proxy_scheme).strip().lower() if proxy_scheme and str(proxy_scheme).strip() else None)
     if proxy_used and not proxy_scheme_val:
@@ -507,7 +513,7 @@ async def ingest_frontend_brand_prices(
         (snapshot_at, source, query_type, query_value, page, nm_id, vendor_code, name, 
          price_basic, price_product, sale_percent, discount_calc_percent, raw, ingest_run_id)
         VALUES 
-        (:snapshot_at, 'catalog_wb', 'brand', :query_value, :page, :nm_id, :vendor_code, :name,
+        (:snapshot_at, 'catalog_wb', :query_type, :query_value, :page, :nm_id, :vendor_code, :name,
          :price_basic, :price_product, :sale_percent, :discount_calc_percent, CAST(:raw AS jsonb), :ingest_run_id)
     """)
     
@@ -1004,6 +1010,7 @@ async def ingest_frontend_brand_prices(
             # Insert row even if price_basic/price_product are None
             row = {
                 "snapshot_at": run_at,
+                "query_type": query_type,
                 "query_value": str(brand_id),
                 "page": page,
                 "nm_id": nm_id_int,

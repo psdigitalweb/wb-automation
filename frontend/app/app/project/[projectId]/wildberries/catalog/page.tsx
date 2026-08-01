@@ -3,6 +3,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { usePageTitle } from '@/hooks/usePageTitle'
+import { useReportFilterOptions } from '@/hooks/useReportFilterOptions'
+import { normalizeReportPeriod } from '@/lib/reportFilterOptions'
+import { ReportDataCoverage } from '@/components/ui-v2/ReportDataCoverage'
 import {
   getWBCatalog,
   type WBCatalogParams,
@@ -54,6 +57,7 @@ export default function WBCatalogPage() {
   const searchParams = useSearchParams()
   const projectId = typeof params?.projectId === 'string' ? params.projectId : ''
   usePageTitle('Каталог товаров WB', projectId || null)
+  const { options: reportOptions } = useReportFilterOptions(projectId, 'catalog')
 
   const initial = useMemo(
     () => initialFilters(new URLSearchParams(searchParams.toString())),
@@ -96,6 +100,28 @@ export default function WBCatalogPage() {
     },
     [projectId, router],
   )
+
+  useEffect(() => {
+    if (!reportOptions) return
+    const normalized = normalizeReportPeriod(
+      reportOptions,
+      appliedFilters.periodFrom,
+      appliedFilters.periodTo,
+    )
+    if (
+      normalized.from === appliedFilters.periodFrom &&
+      normalized.to === appliedFilters.periodTo
+    ) return
+    const next = {
+      ...appliedFilters,
+      periodFrom: normalized.from,
+      periodTo: normalized.to,
+    }
+    setAppliedFilters(next)
+    setDraftFilters(next)
+    setPage(1)
+    replaceUrl(next, 1, pageSize)
+  }, [appliedFilters, pageSize, replaceUrl, reportOptions])
 
   useEffect(() => {
     if (!projectId) return
@@ -227,6 +253,13 @@ export default function WBCatalogPage() {
         onChange={setDraftFilters}
         onActivityChange={changeActivity}
         onApply={applyFilters}
+        minDate={reportOptions?.date_filter.min_date}
+        maxDate={reportOptions?.date_filter.max_date}
+      />
+      <ReportDataCoverage
+        options={reportOptions}
+        periodFrom={appliedFilters.periodFrom}
+        periodTo={appliedFilters.periodTo}
       />
 
       {loading && !data && (

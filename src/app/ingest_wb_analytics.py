@@ -51,6 +51,10 @@ STRATEGY_LEGACY = "legacy_history"
 STRATEGY_PRODUCTS_THROTTLED = "products_throttled"
 
 
+def _analytics_http_error_reason(status_code: int | None) -> str:
+    return "wb_analytics_rate_limited" if status_code == 429 else "wb_analytics_bad_request"
+
+
 def _cursor_for_json(c: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """Return a JSON-serializable copy of cursor (date -> ISO string) for set_run_progress."""
     if not c or not isinstance(c, dict):
@@ -501,7 +505,7 @@ async def ingest_wb_card_stats_daily(
             except WBAnalyticsBadRequestError as e:
                 return {
                     "ok": False,
-                    "reason": "wb_analytics_bad_request",
+                    "reason": _analytics_http_error_reason(e.status_code),
                     "project_id": project_id,
                     "status_code": e.status_code,
                     "error": e.detail,
@@ -545,7 +549,7 @@ async def ingest_wb_card_stats_daily(
                 except WBAnalyticsBadRequestError as e:
                     return {
                         "ok": False,
-                        "reason": "wb_analytics_bad_request",
+                        "reason": _analytics_http_error_reason(e.status_code),
                         "project_id": project_id,
                         "status_code": e.status_code,
                         "error": e.detail,
@@ -1083,7 +1087,7 @@ async def ingest_wb_card_stats_daily(
                         )
                         return {
                             "ok": False,
-                            "reason": "wb_analytics_bad_request",
+                            "reason": _analytics_http_error_reason(e.status_code),
                             "project_id": project_id,
                             "status_code": e.status_code,
                             "error": e.detail,
@@ -1350,7 +1354,7 @@ async def ingest_wb_card_stats_daily(
                     )
                     return {
                         "ok": False,
-                        "reason": "wb_analytics_bad_request",
+                        "reason": _analytics_http_error_reason(e.status_code),
                         "project_id": project_id,
                         "status_code": e.status_code,
                         "error": e.detail,

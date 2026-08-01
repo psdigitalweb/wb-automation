@@ -14,6 +14,7 @@ from app.db_wb_catalog import (
 )
 from app.deps import get_project_membership
 from app.schemas.wb_catalog import WBCatalogProductResponse, WBCatalogResponse
+from app.utils.report_period import enforce_report_period
 
 
 router = APIRouter(prefix="/api/v1", tags=["wildberries-catalog"])
@@ -23,7 +24,9 @@ def _resolve_period(
     project_id: int,
     period_from: Optional[date],
     period_to: Optional[date],
+    report_code: str = "catalog",
 ) -> tuple[date, date]:
+    period_was_explicit = period_from is not None and period_to is not None
     if (period_from is None) != (period_to is None):
         raise HTTPException(
             status_code=400,
@@ -38,6 +41,12 @@ def _resolve_period(
         )
     if (period_to - period_from).days > 730:
         raise HTTPException(status_code=400, detail="period must not exceed 731 days")
+    try:
+        enforce_report_period(project_id, report_code, period_from, period_to)
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, dict) else {}
+        if period_was_explicit or detail.get("reason") != "no_primary_data":
+            raise
     return period_from, period_to
 
 
@@ -100,7 +109,7 @@ async def get_wb_catalog_product_endpoint(
     ctr_mode: Literal["raw", "quality_filtered"] = Query("quality_filtered"),
     _membership=Depends(get_project_membership),
 ):
-    resolved_from, resolved_to = _resolve_period(project_id, period_from, period_to)
+    resolved_from, resolved_to = _resolve_period(project_id, period_from, period_to, "catalog-product")
     payload = get_wb_catalog_product(
         project_id=project_id,
         nm_id=nm_id,

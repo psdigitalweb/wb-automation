@@ -61,6 +61,7 @@ from app.schemas.wildberries_search_report import (
 )
 from app.utils.get_project_marketplace_token import get_wb_analytics_token_for_project
 from app.wb.analytics_client import WBAnalyticsClient, WBAnalyticsBadRequestError, WBAnalyticsUnauthorizedError
+from app.utils.report_period import enforce_report_period
 
 router = APIRouter(prefix="/api/v1", tags=["wildberries-analytics"])
 
@@ -82,6 +83,7 @@ async def get_sales_trends_endpoint(
         raise HTTPException(status_code=400, detail="period_from must be before or equal to period_to")
     if (period_to - period_from).days > 730:
         raise HTTPException(status_code=400, detail="period must not exceed 731 days")
+    enforce_report_period(project_id, "sales-trends", period_from, period_to)
     unique_nm_ids = list(dict.fromkeys(nm_ids))
     if len(unique_nm_ids) > 10:
         raise HTTPException(status_code=400, detail="no more than 10 nm_ids are allowed")
@@ -123,6 +125,7 @@ async def get_order_geography_endpoint(
         raise HTTPException(status_code=400, detail="period_from must be before or equal to period_to")
     if group_by not in {"country", "region", "city", "ppvz", "office"}:
         raise HTTPException(status_code=400, detail="group_by must be one of: country, region, city, ppvz, office")
+    enforce_report_period(project_id, "order-geography", period_from, period_to)
 
     payload = get_order_geography(
         project_id=project_id,
@@ -167,6 +170,7 @@ async def get_content_analytics_summary_endpoint(
     _member=Depends(get_project_membership),
 ):
     """Aggregated funnel by nm_id: opens, add to cart, cart rate, orders, conversion, revenue."""
+    enforce_report_period(project_id, "content-analytics", period_from, period_to)
     rows = get_content_analytics_summary(
         project_id=project_id,
         period_from=period_from,
@@ -203,6 +207,8 @@ async def get_reviews_summary_endpoint(
             status_code=400,
             detail="Specify both period_from and period_to, or leave both empty",
         )
+    if period_from is not None and period_to is not None:
+        enforce_report_period(project_id, "reviews", period_from, period_to)
     rows = get_reviews_summary(
         project_id=project_id,
         period_from=period_from,
@@ -240,6 +246,8 @@ async def get_reviews_list_endpoint(
             status_code=400,
             detail="Specify both period_from and period_to, or leave both empty",
         )
+    if period_from is not None and period_to is not None:
+        enforce_report_period(project_id, "reviews", period_from, period_to)
     payload = list_reviews_by_nm_id(
         project_id=project_id,
         nm_id=nm_id,
@@ -285,6 +293,7 @@ async def get_funnel_signals_endpoint(
     """Funnel signals by nm_id. Paginated. Sort by sort param (default potential_rub desc).
     Always loads all project SKUs for period; benchmarks are computed per WB category with project fallback when category has < 10 SKUs.
     """
+    enforce_report_period(project_id, "funnel-signals", period_from, period_to)
     raw = get_funnel_signals_raw(
         project_id=project_id,
         period_from=period_from,
@@ -428,6 +437,7 @@ async def get_funnel_signals_categories_stats_endpoint(
 
     Category filter itself is NOT applied here to keep full distribution in dropdown.
     """
+    enforce_report_period(project_id, "funnel-signals", period_from, period_to)
     raw = get_funnel_signals_raw(
         project_id=project_id,
         period_from=period_from,

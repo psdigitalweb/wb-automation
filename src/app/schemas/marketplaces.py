@@ -100,6 +100,8 @@ class WBMarketplaceStatusV2(BaseModel):
     settings: WBSettingsStatus
     storefront_configured: bool = Field(False, description="True if at least one storefront brand is configured")
     storefront_brand_ids: List[int] = Field(default_factory=list, description="Enabled storefront brand IDs")
+    storefront_seller_url: Optional[str] = Field(None, description="Canonical public WB seller URL")
+    storefront_seller_id: Optional[int] = Field(None, description="Seller ID extracted from storefront URL")
     legacy_brand_id: Optional[int] = Field(None, description="Legacy brand_id from settings_json")
     updated_at: datetime
 
@@ -118,13 +120,43 @@ class WBMarketplaceUpdate(BaseModel):
     is_enabled: bool = Field(..., description="Enable or disable Wildberries")
     api_token: Optional[str] = Field(None, description="API token (optional, only update if provided)")
     brand_id: Optional[int] = Field(None, description="Brand ID (optional, must be > 0 if provided)")
-    
+
     @field_validator('brand_id')
     @classmethod
     def validate_brand_id(cls, v):
         if v is not None and v <= 0:
             raise ValueError('brand_id must be greater than 0')
         return v
+
+
+class WBStorefrontUpdate(BaseModel):
+    """Configure the public Wildberries storefront by seller page URL."""
+
+    seller_url: str = Field(..., min_length=1, max_length=500)
+
+
+class WBStorefrontProductSample(BaseModel):
+    nm_id: int
+    title: Optional[str] = None
+    brand: Optional[str] = None
+
+
+class WBStorefrontResolveResponse(BaseModel):
+    verified: bool
+    seller_url: str
+    seller_id: int
+    seller_name: Optional[str] = None
+    proxy_configured: bool = False
+    http_status: Optional[int] = None
+    storefront_products_count: int = 0
+    cabinet_products_count: int = 0
+    matched_products_count: int = 0
+    coverage_percent: float = 0
+    sample_products: List[WBStorefrontProductSample] = Field(default_factory=list)
+    error_code: Optional[str] = None
+    message: Optional[str] = None
+    verification_source: Optional[str] = None
+    verified_at: Optional[str] = None
 
 
 class WBTariffsIngestRequest(BaseModel):

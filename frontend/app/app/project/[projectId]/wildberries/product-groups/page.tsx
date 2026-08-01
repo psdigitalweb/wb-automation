@@ -14,6 +14,8 @@ import {
 } from '@/lib/wbProductGroupsApi'
 import ComparisonChart from './_components/ComparisonChart'
 import styles from './product-groups.module.css'
+import { useConstrainedReportPeriod } from '@/hooks/useReportFilterOptions'
+import { ReportDataCoverage } from '@/components/ui-v2/ReportDataCoverage'
 
 type SortKey =
   | 'nm_id'
@@ -100,6 +102,9 @@ export default function WBProductGroupsPage() {
   const [loadingGroups, setLoadingGroups] = useState(true)
   const [loadingComparison, setLoadingComparison] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const { options: reportOptions } = useConstrainedReportPeriod(
+    projectId, 'product-groups', dateFrom, dateTo, setDateFrom, setDateTo,
+  )
 
   const loadGroups = useCallback(
     async (query = '', page = 1, selectedCategory = '', onlyInStock = false) => {
@@ -283,14 +288,15 @@ export default function WBProductGroupsPage() {
         <div className={styles.period}>
           <label>
             С
-            <input type="date" value={dateFrom} max={dateTo} onChange={(event) => setDateFrom(event.target.value)} />
+            <input type="date" value={dateFrom} min={reportOptions?.date_filter.min_date ?? undefined} max={dateTo || reportOptions?.date_filter.max_date || undefined} onChange={(event) => setDateFrom(event.target.value)} />
           </label>
           <label>
             По
-            <input type="date" value={dateTo} min={dateFrom} onChange={(event) => setDateTo(event.target.value)} />
+            <input type="date" value={dateTo} min={dateFrom || reportOptions?.date_filter.min_date || undefined} max={reportOptions?.date_filter.max_date ?? undefined} onChange={(event) => setDateTo(event.target.value)} />
           </label>
         </div>
       </header>
+      <ReportDataCoverage options={reportOptions} periodFrom={dateFrom} periodTo={dateTo} />
 
       {error ? <div className={styles.error}>{error}</div> : null}
 

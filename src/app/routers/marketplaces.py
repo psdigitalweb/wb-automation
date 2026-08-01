@@ -37,6 +37,8 @@ from app.schemas.marketplaces import (
     WBCredentialsStatus,
     WBSettingsStatus,
     WBMarketplaceUpdate,
+    WBStorefrontUpdate,
+    WBStorefrontResolveResponse,
     WBFinancesIngestRequest,
     WBFinancesIngestResponse,
     WBFinancesEventsBuildRequest,
@@ -56,7 +58,7 @@ from app.schemas.marketplaces import (
     WBUnitPnlDetailsResponse,
 )
 from app.utils.wb_token_validator import validate_wb_token
-from app.utils.get_project_marketplace_token import get_wb_token_for_project
+from app.utils.get_project_marketplace_token import get_wb_api_token_for_project, get_wb_token_for_project
 from app.deps import (
     get_current_active_user,
     get_project_membership,
@@ -67,10 +69,15 @@ from app.deps import (
 from app.settings import ALLOW_UNAUTH_LOCAL
 from app.db_marketplace_tariffs import get_latest_snapshot
 from app.services.wb_storefront_brands import (
+    WB_SELLER_CATALOG_URL_TEMPLATE,
     extract_frontend_brand_ids,
+    extract_frontend_seller_id,
+    extract_frontend_seller_url,
     extract_legacy_brand_id,
     normalize_settings_json,
+    normalize_wb_seller_url,
 )
+from app.services.wb_storefront_resolver import resolve_wb_storefront
 
 router = APIRouter(prefix="/api/v1", tags=["marketplaces"])
 
@@ -313,10 +320,14 @@ async def get_wb_marketplace_status_v2_endpoint(
 
     brand_id = None
     storefront_brand_ids: list[int] = []
+    storefront_seller_url = None
+    storefront_seller_id = None
     updated_at = datetime.now()
     if pm:
         settings = pm.get("settings_json")
         brand_id, storefront_brand_ids = _wb_storefront_status_from_settings(settings)
+        storefront_seller_url = extract_frontend_seller_url(settings)
+        storefront_seller_id = extract_frontend_seller_id(settings)
         pm_updated_at = pm.get("updated_at")
         if isinstance(pm_updated_at, datetime):
             updated_at = pm_updated_at
@@ -330,6 +341,8 @@ async def get_wb_marketplace_status_v2_endpoint(
         settings=WBSettingsStatus(brand_id=brand_id),
         storefront_configured=bool(storefront_brand_ids),
         storefront_brand_ids=storefront_brand_ids,
+        storefront_seller_url=storefront_seller_url,
+        storefront_seller_id=storefront_seller_id,
         legacy_brand_id=brand_id,
         updated_at=updated_at,
     )
@@ -421,6 +434,8 @@ async def update_wb_marketplace_endpoint(
 
     settings = updated_pm.get("settings_json")
     brand_id, storefront_brand_ids = _wb_storefront_status_from_settings(settings)
+    storefront_seller_url = extract_frontend_seller_url(settings)
+    storefront_seller_id = extract_frontend_seller_id(settings)
 
     updated_at = updated_pm.get("updated_at")
     if not isinstance(updated_at, datetime):
@@ -435,9 +450,100 @@ async def update_wb_marketplace_endpoint(
         settings=WBSettingsStatus(brand_id=brand_id),
         storefront_configured=bool(storefront_brand_ids),
         storefront_brand_ids=storefront_brand_ids,
+        storefront_seller_url=storefront_seller_url,
+        storefront_seller_id=storefront_seller_id,
         legacy_brand_id=brand_id,
         updated_at=updated_at,
     )
+
+
+@router.put(
+    "/projects/{project_id}/marketplaces/wildberries/storefront",
+    response_model=WBMarketplaceStatusV2,
+)
+async def update_wb_storefront_endpoint(
+    update_data: WBStorefrontUpdate,
+    project_id: int = Path(..., description="Project ID"),
+    current_user: dict = Depends(get_current_active_user),
+    membership: dict = Depends(require_project_admin),
+):
+    """Configure public storefront ingestion from a WB seller page URL."""
+    try:
+        seller_url, seller_id = normalize_wb_seller_url(update_data.seller_url)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    wb_marketplace = get_marketplace_by_code("wildberries")
+    if not wb_marketplace:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Wildberries marketplace not found")
+
+    pm = get_project_marketplace(project_id, wb_marketplace["id"])
+    if not pm:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Сначала подключите кабинет Wildberries к проекту",
+        )
+
+    settings = normalize_settings_json(pm.get("settings_json"))
+    frontend_prices = settings.get("frontend_prices")
+    if not isinstance(frontend_prices, dict):
+        frontend_prices = {}
+    frontend_prices = {
+        **frontend_prices,
+        "source_type": "seller",
+        "seller_url": seller_url,
+        "seller_id": seller_id,
+        "base_url_template": WB_SELLER_CATALOG_URL_TEMPLATE,
+        # Compatibility for reports/snapshots that still call this scope brand_id.
+        "brands": [{"brand_id": seller_id, "enabled": True}],
+    }
+    updated_pm = update_project_marketplace_settings(
+        project_id=project_id,
+        marketplace_id=wb_marketplace["id"],
+        settings_json={"frontend_prices": frontend_prices},
+    )
+
+
+    if not updated_pm:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Не удалось сохранить витрину")
+
+    updated_at = updated_pm.get("updated_at")
+    if not isinstance(updated_at, datetime):
+        updated_at = datetime.now()
+    has_token = bool(updated_pm.get("api_token_encrypted"))
+    is_enabled = bool(updated_pm.get("is_enabled"))
+    return WBMarketplaceStatusV2(
+        is_enabled=is_enabled,
+        is_configured=bool(is_enabled and has_token),
+        credentials=WBCredentialsStatus(api_token=has_token),
+        settings=WBSettingsStatus(brand_id=extract_legacy_brand_id(updated_pm.get("settings_json"))),
+        storefront_configured=True,
+        storefront_brand_ids=[seller_id],
+        storefront_seller_url=seller_url,
+        storefront_seller_id=seller_id,
+        legacy_brand_id=extract_legacy_brand_id(updated_pm.get("settings_json")),
+        updated_at=updated_at,
+    )
+
+
+@router.post(
+    "/projects/{project_id}/marketplaces/wildberries/storefront/resolve",
+    response_model=WBStorefrontResolveResponse,
+)
+async def resolve_wb_storefront_endpoint(
+    update_data: WBStorefrontUpdate,
+    project_id: int = Path(..., description="Project ID"),
+    current_user: dict = Depends(get_current_active_user),
+    membership: dict = Depends(require_project_admin),
+):
+    """Verify a seller storefront without changing project settings or snapshots."""
+    try:
+        return await resolve_wb_storefront(
+            project_id=int(project_id),
+            seller_url=update_data.seller_url,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 @router.post(
@@ -905,12 +1011,10 @@ async def start_wb_finances_ingest(
 ):
     """Start WB finances ingestion for a project and date range."""
     from app.tasks.wb_finances import ingest_wb_finance_reports_by_period_task
-    from app.utils.get_project_marketplace_token import get_wb_credentials_for_project
-
     # Check if WB is connected and has token
     try:
-        credentials = get_wb_credentials_for_project(project_id)
-        if not credentials or not credentials.get("token"):
+        token = get_wb_api_token_for_project(project_id)
+        if not token:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="WB not connected or token missing. Please configure Wildberries in project marketplaces first.",
@@ -1103,6 +1207,10 @@ async def list_wb_sku_pnl(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid date format. Use YYYY-MM-DD",
         )
+
+    from app.utils.report_period import enforce_report_period
+
+    enforce_report_period(project_id, "finances-sku-pnl", period_from_obj, period_to_obj)
 
     with engine.connect() as conn:
         rows, total_count = list_snapshot_rows(

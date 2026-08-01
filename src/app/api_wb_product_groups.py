@@ -15,16 +15,18 @@ from app.db_wb_product_groups import (
     list_product_groups,
 )
 from app.deps import get_project_membership
+from app.utils.report_period import enforce_report_period
 
 
 router = APIRouter(prefix="/api/v1/projects", tags=["wb-product-groups"])
 
 
-def _validate_period(date_from: date, date_to: date) -> None:
+def _validate_period(project_id: int, date_from: date, date_to: date) -> None:
     if date_from > date_to:
         raise HTTPException(status_code=400, detail="date_from must be before or equal to date_to")
     if date_to - date_from > timedelta(days=366):
         raise HTTPException(status_code=400, detail="period must not exceed 367 days")
+    enforce_report_period(project_id, "product-groups", date_from, date_to)
 
 
 @router.get("/{project_id}/wildberries/product-groups")
@@ -90,7 +92,7 @@ async def get_product_group_comparison_endpoint(
     date_to: date = Query(...),
     _member=Depends(get_project_membership),
 ):
-    _validate_period(date_from, date_to)
+    _validate_period(project_id, date_from, date_to)
     members = get_group_comparison(
         project_id=project_id,
         wb_group_id=wb_group_id,
@@ -117,7 +119,7 @@ async def get_product_group_series_endpoint(
     date_to: date = Query(...),
     _member=Depends(get_project_membership),
 ):
-    _validate_period(date_from, date_to)
+    _validate_period(project_id, date_from, date_to)
     unique_nm_ids = list(dict.fromkeys(int(value) for value in nm_ids))
     if not unique_nm_ids:
         raise HTTPException(status_code=400, detail="At least one nm_id is required")

@@ -7,10 +7,20 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 
 
+class WBCatalogSize(BaseModel):
+    chrt_id: Optional[int] = None
+    tech_size: Optional[str] = None
+    wb_size: Optional[str] = None
+    skus: List[str] = Field(default_factory=list)
+
+
 class WBCatalogItem(BaseModel):
     nm_id: int
     vendor_code: Optional[str] = None
     title: Optional[str] = None
+    brand: Optional[str] = None
+    subject_name: Optional[str] = None
+    sizes: List[WBCatalogSize] = Field(default_factory=list)
     main_photo_url: Optional[str] = None
     is_active: bool = False
 

@@ -11,6 +11,8 @@ import {
   type FunnelSignalsResponse,
 } from '@/lib/apiClient'
 import { usePageTitle } from '@/hooks/usePageTitle'
+import { useConstrainedReportPeriod } from '@/hooks/useReportFilterOptions'
+import { ReportDataCoverage } from '@/components/ui-v2/ReportDataCoverage'
 import styles from './funnel-signals.module.css'
 
 /* ----- Photo popover: same as price-discrepancies (hover zoom, size 36) ----- */
@@ -400,6 +402,9 @@ export default function FunnelSignalsPage() {
   const [meta, setMeta] = useState<Pick<FunnelSignalsResponse, 'page' | 'page_size' | 'total' | 'pages'> | null>(null)
   const [data, setData] = useState<FunnelSignalsItem[] | null>(null)
   const [drawerRow, setDrawerRow] = useState<FunnelSignalsItem | null>(null)
+  const { options: reportOptions } = useConstrainedReportPeriod(
+    projectId, 'funnel-signals', periodFrom, periodTo, setPeriodFrom, setPeriodTo,
+  )
 
   usePageTitle('Воронка: Сигналы', projectId || null)
 
@@ -490,12 +495,6 @@ export default function FunnelSignalsPage() {
     load(1)
     loadCategories()
   }, [load, loadCategories])
-
-  useEffect(() => {
-    const def = defaultPeriod()
-    setPeriodFrom(def.period_from)
-    setPeriodTo(def.period_to)
-  }, [])
 
   useEffect(() => {
     if (!projectId || !periodFrom || !periodTo) return
@@ -741,6 +740,8 @@ export default function FunnelSignalsPage() {
               <input
                 type="date"
                 value={periodFrom}
+                min={reportOptions?.date_filter.min_date ?? undefined}
+                max={periodTo || reportOptions?.date_filter.max_date || undefined}
                 onChange={(e) => setPeriodFrom(e.target.value)}
                 className={styles.control}
               />
@@ -750,6 +751,8 @@ export default function FunnelSignalsPage() {
               <input
                 type="date"
                 value={periodTo}
+                min={periodFrom || reportOptions?.date_filter.min_date || undefined}
+                max={reportOptions?.date_filter.max_date ?? undefined}
                 onChange={(e) => setPeriodTo(e.target.value)}
                 className={styles.control}
               />
@@ -839,6 +842,7 @@ export default function FunnelSignalsPage() {
               </button>
             </div>
           </div>
+          <ReportDataCoverage options={reportOptions} periodFrom={periodFrom} periodTo={periodTo} />
         </div>
       </div>
 

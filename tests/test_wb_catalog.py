@@ -26,6 +26,9 @@ class _FakeResult:
     def mappings(self):
         return self
 
+    def scalars(self):
+        return self
+
     def all(self):
         return self._rows
 
@@ -48,6 +51,12 @@ class _FakeConnection:
                         "nm_id": 123,
                         "vendor_code": "SKU-123",
                         "title": "Тестовый товар",
+                        "brand": "",
+                        "subject_name": "Жакеты",
+                        "sizes": [
+                            {"chrtID": 7, "techSize": "M", "wbSize": "46", "skus": ["123"]},
+                            {"chrtID": 8, "techSize": "L", "wbSize": "48", "skus": ["456"]},
+                        ],
                         "main_photo_url": "https://example.test/photo.webp",
                         "is_active": True,
                         "showcase_price": Decimal("1490"),
@@ -126,6 +135,12 @@ def test_catalog_query_serializes_metrics_and_applies_project_filters(monkeypatc
     assert item["nm_id"] == 123
     assert item["is_active"] is True
     assert item["showcase_price"] == 1490.0
+    assert item["brand"] == ""
+    assert item["subject_name"] == "Жакеты"
+    assert item["sizes"] == [
+        {"chrt_id": 7, "tech_size": "M", "wb_size": "46", "skus": ["123"]},
+        {"chrt_id": 8, "tech_size": "L", "wb_size": "48", "skus": ["456"]},
+    ]
     assert item["seller_discount_percent"] == 12.0
     assert item["rrp_price"] == 1990.0
     assert item["ctr_percent"] == pytest.approx(14.618)
@@ -170,7 +185,30 @@ def test_catalog_exact_product_filter_does_not_use_fuzzy_search():
     assert params == {"exact_nm_id": 123}
 
 
+def test_catalog_default_period_uses_latest_continuous_fact_segment(monkeypatch):
+    class DatesConnection:
+        def execute(self, statement, params):
+            return _FakeResult(
+                rows=[date(2026, 7, 20), date(2026, 7, 21), date(2026, 7, 25), date(2026, 7, 26)]
+            )
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class DatesEngine:
+        def connect(self):
+            return DatesConnection()
+
+    monkeypatch.setattr(db_wb_catalog, "engine", DatesEngine())
+
+    assert db_wb_catalog.get_catalog_default_period(3) == (date(2026, 7, 25), date(2026, 7, 26))
+
+
 def test_catalog_product_endpoint_returns_404_when_product_is_missing(monkeypatch):
+    monkeypatch.setattr(wb_catalog_router, "enforce_report_period", lambda *_args: None)
     monkeypatch.setattr(
         wb_catalog_router,
         "get_wb_catalog_product",
@@ -194,6 +232,7 @@ def test_catalog_product_endpoint_returns_404_when_product_is_missing(monkeypatc
 
 def test_catalog_endpoint_uses_available_default_period(monkeypatch):
     captured = {}
+    monkeypatch.setattr(wb_catalog_router, "enforce_report_period", lambda *_args: None)
 
     monkeypatch.setattr(
         wb_catalog_router,

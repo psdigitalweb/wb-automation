@@ -31,7 +31,7 @@ from sqlalchemy import text
 from app.db import engine
 from app.services.product_identity import resolve_marketplace_product_id
 from app.deps import allow_client_portal_read, get_current_active_user, get_project_membership, require_project_admin
-from app.services.wb_storefront_brands import get_project_frontend_brand_id_strings
+from app.services.wb_storefront_brands import get_project_storefront_snapshot_scope
 from app.utils.get_project_marketplace_token import get_wb_token_for_project
 from app.wb.client import WBClient
 
@@ -164,6 +164,7 @@ def _build_discrepancies_sql(
     order_clause = _sort_to_order_clause(filters.sort)
 
     where_clauses: List[str] = ["1=1"]
+    storefront_scope = get_project_storefront_snapshot_scope(project_id)
     params: Dict[str, Any] = {
         "project_id": project_id,
         "limit": filters.page_size,
@@ -171,7 +172,8 @@ def _build_discrepancies_sql(
         "qpat": None,
         "category_ids": filters.category_ids or None,
         "front_snapshot_at": filters.front_snapshot_at,
-        "brand_ids": get_project_frontend_brand_id_strings(project_id),
+        "brand_ids": storefront_scope.query_values,
+        "storefront_query_type": storefront_scope.query_type,
         "nm_ids": filters.nm_ids or None,
     }
 
@@ -240,7 +242,7 @@ def _build_discrepancies_sql(
     front_run AS (
         SELECT COALESCE(CAST(:front_snapshot_at AS timestamptz), MAX(f.snapshot_at)) AS run_at
         FROM frontend_catalog_price_snapshots f
-        WHERE f.query_type = 'brand'
+        WHERE f.query_type = :storefront_query_type
           AND f.query_value = ANY(:brand_ids)
     ),
     -- Latest RRP per vendor_code_norm
@@ -274,7 +276,7 @@ def _build_discrepancies_sql(
             f.snapshot_at          AS showcase_updated_at
         FROM frontend_catalog_price_snapshots f
         JOIN front_run r ON f.snapshot_at = r.run_at
-        WHERE f.query_type = 'brand'
+        WHERE f.query_type = :storefront_query_type
           AND f.query_value = ANY(:brand_ids)
         ORDER BY f.nm_id, f.snapshot_at DESC
     ),
@@ -752,7 +754,8 @@ def _insert_manual_price_snapshot(
 
 def _get_latest_front_snapshot_at(project_id: int) -> Optional[datetime]:
     """Return the latest WB frontend (showcase) snapshot_at for project storefront brands."""
-    brand_ids = get_project_frontend_brand_id_strings(project_id)
+    storefront_scope = get_project_storefront_snapshot_scope(project_id)
+    brand_ids = storefront_scope.query_values
     if not brand_ids:
         return None
     with engine.connect() as conn:
@@ -761,11 +764,11 @@ def _get_latest_front_snapshot_at(project_id: int) -> Optional[datetime]:
                 """
                 SELECT MAX(f.snapshot_at)
                 FROM frontend_catalog_price_snapshots f
-                WHERE f.query_type = 'brand'
+                WHERE f.query_type = :storefront_query_type
                   AND f.query_value = ANY(:brand_ids)
                 """
             ),
-            {"brand_ids": brand_ids},
+            {"brand_ids": brand_ids, "storefront_query_type": storefront_scope.query_type},
         ).scalar()
     if isinstance(front_max, datetime):
         if front_max.tzinfo is None:
@@ -798,17 +801,18 @@ def _get_updated_at(project_id: int, front_snapshot_at: Optional[datetime] = Non
             {"project_id": project_id},
         ).scalar()
         if front_snapshot_at is None:
-            brand_ids = get_project_frontend_brand_id_strings(project_id)
+            storefront_scope = get_project_storefront_snapshot_scope(project_id)
+            brand_ids = storefront_scope.query_values
             front_max = conn.execute(
                 text(
                     """
                     SELECT MAX(f.snapshot_at)
                     FROM frontend_catalog_price_snapshots f
-                    WHERE f.query_type = 'brand'
+                    WHERE f.query_type = :storefront_query_type
                       AND f.query_value = ANY(:brand_ids)
                     """
                 ),
-                {"brand_ids": brand_ids},
+                {"brand_ids": brand_ids, "storefront_query_type": storefront_scope.query_type},
             ).scalar()
         else:
             front_max = front_snapshot_at
@@ -1242,9 +1246,12 @@ async def get_wb_price_discrepancies(
                 frontend_count = conn.execute(
                     text("""
                         SELECT COUNT(*) FROM frontend_catalog_price_snapshots
-                        WHERE query_type = 'brand' AND query_value = ANY(:brand_ids)
+                        WHERE query_type = :storefront_query_type AND query_value = ANY(:brand_ids)
                     """),
-                    {"brand_ids": params["brand_ids"]},
+                    {
+                        "brand_ids": params["brand_ids"],
+                        "storefront_query_type": params["storefront_query_type"],
+                    },
                 ).scalar() or 0
             
             # Check Internal Data availability
@@ -1363,7 +1370,7 @@ async def get_wb_price_discrepancies(
                         front_run AS (
                             SELECT MAX(f.snapshot_at) AS run_at
                             FROM frontend_catalog_price_snapshots f
-                            WHERE f.query_type = 'brand' AND f.query_value = ANY(:brand_ids)
+                            WHERE f.query_type = :storefront_query_type AND f.query_value = ANY(:brand_ids)
                         ),
                         rrp_latest AS (
                             SELECT s.vendor_code_norm, MAX(s.rrp_price) AS rrp_price
@@ -1376,7 +1383,7 @@ async def get_wb_price_discrepancies(
                             SELECT DISTINCT ON (f.nm_id) f.nm_id::bigint AS nm_id, f.price_product AS showcase_price
                             FROM frontend_catalog_price_snapshots f
                             JOIN front_run r ON f.snapshot_at = r.run_at
-                            WHERE f.query_type = 'brand' AND f.query_value = ANY(:brand_ids)
+                            WHERE f.query_type = :storefront_query_type AND f.query_value = ANY(:brand_ids)
                             ORDER BY f.nm_id, f.snapshot_at DESC
                         )
                         SELECT 
@@ -1389,7 +1396,11 @@ async def get_wb_price_discrepancies(
                         LEFT JOIN front_latest ON front_latest.nm_id = p.nm_id
                         WHERE p.project_id = :project_id AND p.vendor_code_norm IS NOT NULL
                     """),
-                    {"project_id": project_id, "brand_ids": params["brand_ids"]},
+                    {
+                        "project_id": project_id,
+                        "brand_ids": params["brand_ids"],
+                        "storefront_query_type": params["storefront_query_type"],
+                    },
                 ).mappings().first()
                 
                 with open(r'd:\Work\EcomCore\.cursor\debug.log', 'a', encoding='utf-8') as f:
@@ -1485,9 +1496,12 @@ async def get_wb_price_discrepancies(
                     frontend_count = conn.execute(
                         text("""
                             SELECT COUNT(*) FROM frontend_catalog_price_snapshots
-                            WHERE query_type = 'brand' AND query_value = ANY(:brand_ids)
+                            WHERE query_type = :storefront_query_type AND query_value = ANY(:brand_ids)
                         """),
-                        {"brand_ids": brand_ids},
+                        {
+                            "brand_ids": brand_ids,
+                            "storefront_query_type": params["storefront_query_type"],
+                        },
                     ).scalar() or 0
                 
                 stock_count = conn.execute(
@@ -1643,7 +1657,7 @@ async def get_wb_price_discrepancies(
                         front_run AS (
                             SELECT MAX(f.snapshot_at) AS run_at
                             FROM frontend_catalog_price_snapshots f
-                            WHERE f.query_type = 'brand' AND f.query_value = ANY(:brand_ids)
+                            WHERE f.query_type = :storefront_query_type AND f.query_value = ANY(:brand_ids)
                         ),
                         rrp_latest AS (
                             SELECT s.vendor_code_norm, MAX(s.rrp_price) AS rrp_price
@@ -1656,7 +1670,7 @@ async def get_wb_price_discrepancies(
                             SELECT DISTINCT ON (f.nm_id) f.nm_id::bigint AS nm_id, f.price_product AS showcase_price
                             FROM frontend_catalog_price_snapshots f
                             JOIN front_run r ON f.snapshot_at = r.run_at
-                            WHERE f.query_type = 'brand' AND f.query_value = ANY(:brand_ids)
+                            WHERE f.query_type = :storefront_query_type AND f.query_value = ANY(:brand_ids)
                             ORDER BY f.nm_id, f.snapshot_at DESC
                         )
                         SELECT COUNT(*) AS count
@@ -1668,7 +1682,11 @@ async def get_wb_price_discrepancies(
                           AND rrp_latest.rrp_price IS NOT NULL
                           AND front_latest.showcase_price IS NOT NULL
                     """),
-                        {"project_id": project_id, "brand_ids": brand_ids},
+                        {
+                            "project_id": project_id,
+                            "brand_ids": brand_ids,
+                            "storefront_query_type": params["storefront_query_type"],
+                        },
                     ).scalar() or 0
                 
                 diagnostic_info = {
@@ -1733,13 +1751,14 @@ async def get_wb_price_discrepancies(
                                 """
                                 SELECT COUNT(DISTINCT f.nm_id)::bigint
                                 FROM frontend_catalog_price_snapshots f
-                                WHERE f.query_type = 'brand'
+                                WHERE f.query_type = :storefront_query_type
                                   AND f.query_value = ANY(:brand_ids)
                                   AND f.snapshot_at = :front_snapshot_at
                                 """
                             ),
                             {
                                 "brand_ids": brand_ids,
+                                "storefront_query_type": params["storefront_query_type"],
                                 "front_snapshot_at": front_snapshot_at,
                             },
                         ).scalar()
@@ -2007,17 +2026,22 @@ async def get_wb_front_price_discrepancies_snapshots(
             f.snapshot_at AS snapshot_at,
             COUNT(DISTINCT f.nm_id)::bigint AS items_count
         FROM frontend_catalog_price_snapshots f
-        WHERE f.query_type = 'brand'
+        WHERE f.query_type = :storefront_query_type
           AND f.query_value = ANY(:brand_ids)
         GROUP BY f.snapshot_at
         ORDER BY f.snapshot_at DESC
         LIMIT :limit
         """
     )
+    storefront_scope = get_project_storefront_snapshot_scope(project_id)
     with engine.connect() as conn:
         rows = conn.execute(
             sql,
-            {"brand_ids": get_project_frontend_brand_id_strings(project_id), "limit": limit},
+            {
+                "brand_ids": storefront_scope.query_values,
+                "storefront_query_type": storefront_scope.query_type,
+                "limit": limit,
+            },
         ).mappings().all()
 
     items = []

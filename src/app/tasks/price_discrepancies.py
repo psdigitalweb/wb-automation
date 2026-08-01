@@ -15,7 +15,7 @@ from sqlalchemy import text
 
 from app.celery_app import celery_app
 from app.db import engine
-from app.services.wb_storefront_brands import get_project_frontend_brand_id_strings
+from app.services.wb_storefront_brands import get_project_storefront_snapshot_scope
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +60,8 @@ def diagnose_data_availability(project_id: int) -> Dict[str, Any]:
             """),
             {"project_id": project_id},
         ).mappings().first()
-        brand_ids = get_project_frontend_brand_id_strings(project_id)
+        storefront_scope = get_project_storefront_snapshot_scope(project_id)
+        brand_ids = storefront_scope.query_values
         
         if not marketplace_result:
             diagnostics["errors"].append(
@@ -151,10 +152,13 @@ def diagnose_data_availability(project_id: int) -> Dict[str, Any]:
                         MAX(snapshot_at) AS latest_snapshot_at,
                         MIN(snapshot_at) AS earliest_snapshot_at
                     FROM frontend_catalog_price_snapshots
-                    WHERE query_type = 'brand'
+                    WHERE query_type = :storefront_query_type
                       AND query_value = ANY(:brand_ids)
                 """),
-                {"brand_ids": [str(brand_id) for brand_id in brand_ids]},
+                {
+                    "brand_ids": brand_ids,
+                    "storefront_query_type": storefront_scope.query_type,
+                },
             ).mappings().first()
             
             frontend_count = frontend_stats["total_count"] or 0
@@ -278,7 +282,7 @@ def diagnose_data_availability(project_id: int) -> Dict[str, Any]:
                 front_run AS (
                     SELECT MAX(f.snapshot_at) AS run_at
                     FROM frontend_catalog_price_snapshots f
-                    WHERE f.query_type = 'brand'
+                    WHERE f.query_type = :storefront_query_type
                       AND f.query_value = ANY(:brand_ids)
                 ),
                 rrp_latest AS (
@@ -295,7 +299,7 @@ def diagnose_data_availability(project_id: int) -> Dict[str, Any]:
                         f.price_product AS showcase_price
                     FROM frontend_catalog_price_snapshots f
                     JOIN front_run r ON f.snapshot_at = r.run_at
-                    WHERE f.query_type = 'brand'
+                    WHERE f.query_type = :storefront_query_type
                       AND f.query_value = ANY(:brand_ids)
                     ORDER BY f.nm_id, f.snapshot_at DESC
                 )
@@ -312,7 +316,11 @@ def diagnose_data_availability(project_id: int) -> Dict[str, Any]:
             
             sample_result = conn.execute(
                 sample_query,
-                {"project_id": project_id, "brand_ids": [str(brand_id) for brand_id in brand_ids]},
+                {
+                    "project_id": project_id,
+                    "brand_ids": brand_ids,
+                    "storefront_query_type": storefront_scope.query_type,
+                },
             ).scalar()
             diagnostics["checks"]["sample_report_query"] = {
                 "rows_with_both_rrp_and_showcase": sample_result or 0,

@@ -43,6 +43,31 @@ def _iso(value: Any) -> Optional[str]:
     return str(value)
 
 
+def _catalog_sizes(value: Any) -> List[Dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    result: List[Dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        chrt_id = item.get("chrtID") or item.get("chrt_id")
+        try:
+            normalized_chrt_id = int(chrt_id) if chrt_id is not None else None
+        except (TypeError, ValueError):
+            normalized_chrt_id = None
+        raw_skus = item.get("skus")
+        skus = [str(sku) for sku in raw_skus if sku is not None] if isinstance(raw_skus, list) else []
+        result.append(
+            {
+                "chrt_id": normalized_chrt_id,
+                "tech_size": item.get("techSize") or item.get("tech_size"),
+                "wb_size": item.get("wbSize") or item.get("wb_size"),
+                "skus": skus,
+            }
+        )
+    return result
+
+
 def _sort_clause(sort: str, order: str) -> str:
     expression = _SORT_EXPRESSIONS.get(sort, _SORT_EXPRESSIONS["order_sum"])
     direction = "ASC" if order == "asc" else "DESC"
@@ -51,18 +76,26 @@ def _sort_clause(sort: str, order: str) -> str:
 
 def get_catalog_default_period(project_id: int) -> Tuple[date, date]:
     with engine.connect() as conn:
-        latest = conn.execute(
+        available_dates = conn.execute(
             text(
                 """
-                SELECT MAX(stat_date)
+                SELECT DISTINCT stat_date
                 FROM wb_card_stats_daily
                 WHERE project_id = :project_id
+                ORDER BY stat_date
                 """
             ),
             {"project_id": int(project_id)},
-        ).scalar_one_or_none()
-    period_to = latest if isinstance(latest, date) else date.today() - timedelta(days=1)
-    return period_to - timedelta(days=29), period_to
+        ).scalars().all()
+    dates = {value for value in available_dates if isinstance(value, date)}
+    if not dates:
+        period_to = date.today() - timedelta(days=1)
+        return period_to - timedelta(days=29), period_to
+    period_to = max(dates)
+    period_from = period_to
+    while period_from - timedelta(days=1) in dates and (period_to - period_from).days < 29:
+        period_from -= timedelta(days=1)
+    return period_from, period_to
 
 
 def _catalog_filters(
@@ -151,6 +184,9 @@ def list_wb_catalog(
                 p.vendor_code,
                 p.vendor_code_norm,
                 p.title,
+                p.brand,
+                p.subject_name,
+                p.sizes,
                 p.pics,
                 COALESCE(sp.is_active, FALSE) AS is_active
             FROM product_source p
@@ -236,6 +272,9 @@ def list_wb_catalog(
             pb.nm_id,
             pb.vendor_code,
             pb.title,
+            pb.brand,
+            pb.subject_name,
+            pb.sizes,
             CASE
                 WHEN jsonb_typeof(pb.pics) = 'array' AND jsonb_array_length(pb.pics) > 0
                 THEN COALESCE(
@@ -324,6 +363,9 @@ def list_wb_catalog(
                 "nm_id": int(row["nm_id"]),
                 "vendor_code": row.get("vendor_code"),
                 "title": row.get("title"),
+                "brand": row.get("brand"),
+                "subject_name": row.get("subject_name"),
+                "sizes": _catalog_sizes(row.get("sizes")),
                 "main_photo_url": row.get("main_photo_url"),
                 "is_active": bool(row.get("is_active")),
                 "showcase_price": float(row["showcase_price"]) if row.get("showcase_price") is not None else None,

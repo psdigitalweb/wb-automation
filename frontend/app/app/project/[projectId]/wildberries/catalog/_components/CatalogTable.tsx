@@ -91,13 +91,14 @@ export function CatalogTable({
                     {item.title || 'Без названия'}
                   </Link>
                   <div className={styles.secondaryLine}>
-                    <span title={item.vendor_code ?? ''}>
-                      {item.vendor_code || 'Без артикула'}
-                    </span>
+                    <span>{item.brand?.trim() || 'Без бренда'}</span>
                     <span className={styles.separator}>·</span>
-                    <span className={styles.rating}>
-                      {item.rating == null ? '★ —' : `★ ${item.rating.toFixed(1)}`}
-                    </span>
+                    <span>{item.subject_name || 'Без категории'}</span>
+                  </div>
+                  <div className={styles.secondaryLine}>
+                    <span title={item.vendor_code ?? ''}>{item.vendor_code || 'Без артикула'}</span>
+                    <span className={styles.separator}>·</span>
+                    <span>{item.sizes.length ? `${item.sizes.length} разм.` : 'Без размеров'}</span>
                   </div>
                   <div className={styles.secondaryLine}>
                     <a
@@ -107,6 +108,10 @@ export function CatalogTable({
                     >
                       {item.nm_id}
                     </a>
+                    <span className={styles.separator}>·</span>
+                    <span className={styles.rating}>
+                      {item.rating == null ? '★ —' : `★ ${item.rating.toFixed(1)}`}
+                    </span>
                     <span className={styles.separator}>·</span>
                     <span
                       className={`${styles.activityDot} ${

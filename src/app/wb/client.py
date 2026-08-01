@@ -13,6 +13,7 @@ class WBClient:
         self.base_url = "https://content-api.wildberries.ru"
         self.marketplace_base_url = "https://marketplace-api.wildberries.ru"
         self.statistics_base_url = "https://statistics-api.wildberries.ru"
+        self.analytics_base_url = "https://seller-analytics-api.wildberries.ru"
         self.prices_base_url = "https://discounts-prices-api.wildberries.ru"
         self.timeout = 30
         self.max_retries = 3
@@ -406,6 +407,8 @@ class WBClient:
 
     async def fetch_warehouses(self) -> List[Dict[str, Any]]:
         """Fetch warehouses/offices list from WB API."""
+        self.last_response_status = None
+        self.last_error_text = None
         if (self.token or "").upper() == "MOCK":
             print("fetch_warehouses: MOCK mode, returning empty list")
             return []
@@ -421,6 +424,7 @@ class WBClient:
             try:
                 r = await self._request_with_retry(client, "GET", url, headers=self.headers)
                 if r:
+                    self.last_response_status = r.status_code
                     print(f"fetch_warehouses: HTTP status={r.status_code}")
                     response_text = r.text[:500] if r.text else "(empty)"
                     print(f"fetch_warehouses: response preview (first 500 chars): {response_text}")
@@ -448,20 +452,26 @@ class WBClient:
                             print("fetch_warehouses: WB API returned unexpected format")
                             return []
                         except Exception as e:
+                            self.last_error_text = f"Invalid JSON response: {type(e).__name__}"
                             print(f"fetch_warehouses: JSON parse error: {e}")
                             return []
                     elif r.status_code == 401:
+                        self.last_error_text = response_text
                         print("fetch_warehouses: HTTP 401 Unauthorized - check token validity and permissions")
                         return []
                     elif r.status_code == 403:
+                        self.last_error_text = response_text
                         print("fetch_warehouses: HTTP 403 Forbidden - token may lack required scopes/permissions (need 'Маркетплейс' category)")
                         return []
                     else:
+                        self.last_error_text = response_text
                         print(f"fetch_warehouses: HTTP {r.status_code} error")
                         return []
                 else:
+                    self.last_error_text = "WB API did not return a response"
                     print("fetch_warehouses: request returned None (no response)")
             except Exception as e:
+                self.last_error_text = f"{type(e).__name__}: {e}"
                 print(f"fetch_warehouses: exception during request: {type(e).__name__}: {e}")
         
         return []
@@ -474,7 +484,11 @@ class WBClient:
         - warehouseId (path)
         - body: {"chrtIds": [ ... ]}
         """
+        self.last_response_status = None
+        self.last_error_text = None
+
         if (self.token or "").upper() == "MOCK":
+            self.last_response_status = 200
             print("fetch_stocks: MOCK mode, returning empty list")
             return []
 
@@ -497,9 +511,11 @@ class WBClient:
                     client, "POST", url, headers=self.headers, json=body
                 )
                 if not r:
+                    self.last_error_text = "WB API did not return a response"
                     print("fetch_stocks: request returned None (no response)")
                     return []
 
+                self.last_response_status = r.status_code
                 print(f"fetch_stocks: HTTP status={r.status_code}")
                 response_text = r.text[:500] if r.text else "(empty)"
                 print(
@@ -549,27 +565,33 @@ class WBClient:
                         print("fetch_stocks: WB API returned unexpected format")
                         return []
                     except Exception as e:
+                        self.last_error_text = f"Invalid JSON response: {type(e).__name__}"
                         print(f"fetch_stocks: JSON parse error: {e}")
                         return []
                 elif r.status_code == 401:
+                    self.last_error_text = response_text
                     print(
                         "fetch_stocks: HTTP 401 Unauthorized - check token validity and permissions"
                     )
                     return []
                 elif r.status_code == 403:
+                    self.last_error_text = response_text
                     print(
                         "fetch_stocks: HTTP 403 Forbidden - token may lack required scopes/permissions (need 'Маркетплейс' category)"
                     )
                     return []
                 elif r.status_code == 400:
+                    self.last_error_text = response_text
                     print(
                         f"fetch_stocks: HTTP 400 Bad Request - check chrtIds/body for warehouse {warehouse_id}"
                     )
                     return []
                 else:
+                    self.last_error_text = response_text
                     print(f"fetch_stocks: HTTP {r.status_code} error")
                     return []
             except Exception as e:
+                self.last_error_text = f"{type(e).__name__}: {e}"
                 print(f"fetch_stocks: exception during request: {type(e).__name__}: {e}")
                 return []
 
@@ -592,93 +614,103 @@ class WBClient:
         return await self.fetch_supplier_stocks(date_from)
 
     async def fetch_supplier_stocks(self, date_from: str) -> List[Dict[str, Any]]:
-        """Fetch supplier stock balances from WB Statistics API (Reports).
-        
-        Endpoint: GET https://statistics-api.wildberries.ru/api/v1/supplier/stocks
-        Requires: dateFrom parameter (RFC3339 format, e.g., "2019-06-20T00:00:00Z")
-        
-        Rate limit: 1 request per minute per account.
-        Response limit: ~60,000 rows per request.
-        Pagination: use lastChangeDate from last row as next dateFrom.
-        
-        Args:
-            date_from: RFC3339 formatted date string (e.g., "2019-06-20T00:00:00Z")
-        
-        Returns:
-            List of stock records. Empty list if no data or error.
-        """
+        """Fetch size-level FBO balances from the WB Statistics API."""
         if (self.token or "").upper() == "MOCK":
-            print("fetch_supplier_stocks: MOCK mode, returning empty list")
+            self.last_response_status = 200
+            self.last_error_text = None
             return []
-        
+
+        self.last_response_status = None
+        self.last_error_text = None
         url = f"{self.statistics_base_url}/api/v1/supplier/stocks"
         params = {"dateFrom": date_from}
-        
-        # Statistics API uses Authorization header with Bearer token
-        # According to WB swagger docs (12-reports.yaml), security scheme is HeaderApiKey
-        # but in practice it's still Authorization: Bearer <token>
         headers = {"Authorization": f"Bearer {self.token}" if self.token else ""}
-        
-        print(f"fetch_supplier_stocks: URL={url}")
-        print(f"fetch_supplier_stocks: method=GET, dateFrom={date_from}")
-        print(f"fetch_supplier_stocks: headers={{'Authorization': 'Bearer <token_present>' if self.token else 'None'}}")
-        
+
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            try:
-                r = await self._request_with_retry(
-                    client, "GET", url, headers=headers, params=params
-                )
-                if not r:
-                    print("fetch_supplier_stocks: request returned None (no response)")
-                    return []
-                
-                print(f"fetch_supplier_stocks: HTTP status={r.status_code}")
-                response_text = r.text[:500] if r.text else "(empty)"
-                print(f"fetch_supplier_stocks: response preview (first 500 chars): {response_text}")
-                
-                if r.status_code == 200:
-                    try:
-                        data = r.json()
-                        print(f"fetch_supplier_stocks: response type={type(data)}, keys={list(data.keys()) if isinstance(data, dict) else 'list'}")
-                        
-                        # WB Statistics API returns list directly
-                        if isinstance(data, list):
-                            if len(data) == 0:
-                                print("fetch_supplier_stocks: WB API returned empty list (pagination complete)")
-                            else:
-                                print(f"fetch_supplier_stocks: WB API returned {len(data)} stock records")
-                            return data
-                        elif isinstance(data, dict) and "data" in data:
-                            result = data["data"]
-                            if len(result) == 0:
-                                print("fetch_supplier_stocks: WB API returned empty list in data field")
-                            else:
-                                print(f"fetch_supplier_stocks: WB API returned {len(result)} stock records")
-                            return result
-                        elif isinstance(data, dict):
-                            print("fetch_supplier_stocks: WB API returned single dict, wrapping in list")
-                            return [data]
-                        
-                        print("fetch_supplier_stocks: WB API returned unexpected format")
-                        return []
-                    except Exception as e:
-                        print(f"fetch_supplier_stocks: JSON parse error: {e}")
-                        return []
-                elif r.status_code == 401:
-                    print("fetch_supplier_stocks: HTTP 401 Unauthorized - check token validity and permissions (need 'Статистика' category)")
-                    return []
-                elif r.status_code == 403:
-                    print("fetch_supplier_stocks: HTTP 403 Forbidden - token may lack required scopes/permissions (need 'Статистика' category)")
-                    return []
-                elif r.status_code == 429:
-                    print("fetch_supplier_stocks: HTTP 429 Too Many Requests - rate limit exceeded (1 req/min), need backoff")
-                    return []
-                elif r.status_code >= 500:
-                    print(f"fetch_supplier_stocks: HTTP {r.status_code} server error - will retry")
-                    return []
-                else:
-                    print(f"fetch_supplier_stocks: HTTP {r.status_code} error")
-                    return []
-            except Exception as e:
-                print(f"fetch_supplier_stocks: exception during request: {type(e).__name__}: {e}")
-                return []
+            response = await self._request_with_retry(
+                client,
+                "GET",
+                url,
+                headers=headers,
+                params=params,
+            )
+
+        if response is None:
+            self.last_error_text = "WB Statistics API did not return a response"
+            return []
+
+        self.last_response_status = response.status_code
+        response_text = response.text[:1000] if response.text else ""
+        if response.status_code != 200:
+            self.last_error_text = response_text or f"HTTP {response.status_code}"
+            return []
+
+        try:
+            payload = response.json()
+        except Exception as exc:
+            self.last_error_text = f"Invalid JSON response: {type(exc).__name__}"
+            return []
+
+        if isinstance(payload, list):
+            return payload
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if isinstance(data, list):
+            return data
+        self.last_error_text = "WB Statistics API response is not a list"
+        return []
+
+    async def fetch_fbo_stocks_page(
+        self,
+        *,
+        limit: int = 250_000,
+        offset: int = 0,
+        nm_ids: Optional[List[int]] = None,
+        chrt_ids: Optional[List[int]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Fetch one page of current FBO stocks from the WB Analytics API."""
+        if (self.token or "").upper() == "MOCK":
+            self.last_response_status = 200
+            self.last_error_text = None
+            return []
+
+        self.last_response_status = None
+        self.last_error_text = None
+        url = f"{self.analytics_base_url}/api/analytics/v1/stocks-report/wb-warehouses"
+        payload = {
+            "nmIds": nm_ids or [],
+            "chrtIds": chrt_ids or [],
+            "limit": int(limit),
+            "offset": int(offset),
+        }
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await self._request_with_retry(
+                client,
+                "POST",
+                url,
+                headers=self.headers,
+                json=payload,
+            )
+
+        if response is None:
+            self.last_error_text = "WB Analytics API did not return a response"
+            return []
+
+        self.last_response_status = response.status_code
+        response_text = response.text[:1000] if response.text else ""
+        if response.status_code != 200:
+            self.last_error_text = response_text or f"HTTP {response.status_code}"
+            return []
+
+        try:
+            response_payload = response.json()
+        except Exception as exc:
+            self.last_error_text = f"Invalid JSON response: {type(exc).__name__}"
+            return []
+
+        data = response_payload.get("data") if isinstance(response_payload, dict) else None
+        items = data.get("items") if isinstance(data, dict) else None
+        if not isinstance(items, list):
+            self.last_error_text = "WB Analytics API response does not contain data.items"
+            return []
+        return items

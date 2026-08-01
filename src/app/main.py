@@ -36,6 +36,7 @@ from app.routers.wildberries_analytics import router as wildberries_analytics_ro
 from app.routers.wildberries_funnel_import import router as wildberries_funnel_import_router
 from app.routers.wb_product_content_history import router as wb_product_content_history_router
 from app.routers.wb_catalog import router as wb_catalog_router
+from app.routers.report_filter_options import router as report_filter_options_router
 from app.routers.wb_review_opinion import router as wb_review_opinion_router
 from app.routers.wb_competitor_reviews import router as wb_competitor_reviews_router
 from app.routers.seo_query_import import router as seo_query_import_router
@@ -119,6 +120,7 @@ app.include_router(wildberries_analytics_router)
 app.include_router(wildberries_funnel_import_router)
 app.include_router(wb_product_content_history_router)
 app.include_router(wb_catalog_router)
+app.include_router(report_filter_options_router)
 app.include_router(wb_review_opinion_router)
 app.include_router(wb_competitor_reviews_router)
 app.include_router(seo_query_import_router)

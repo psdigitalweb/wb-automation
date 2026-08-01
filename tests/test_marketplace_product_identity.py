@@ -333,7 +333,7 @@ def test_wb_ingest_mirrors_only_after_legacy_upsert(monkeypatch):
         return {"status": "ok", "rows_requested": 1, "rows_upserted": 1}
 
     monkeypatch.setattr(ingest_products, "ensure_schema", lambda: None)
-    monkeypatch.setattr(ingest_products, "get_wb_credentials_for_project", lambda _project_id: {"token": "test"})
+    monkeypatch.setattr(ingest_products, "get_wb_api_token_for_project", lambda _project_id: "test")
     monkeypatch.setattr(ingest_products.httpx, "AsyncClient", lambda **_kwargs: _AsyncClient())
     monkeypatch.setattr(ingest_products, "fetch_page", fake_fetch_page)
     monkeypatch.setattr(ingest_products, "_get_existing_nm_ids", lambda *_args: set())

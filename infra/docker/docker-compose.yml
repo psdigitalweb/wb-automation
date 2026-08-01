@@ -38,6 +38,8 @@ services:
     env_file: ../../.env
     environment:
       - PYTHONPATH=/app/src
+      - PROJECT_SECRETS_KEY_FILE=/run/secrets/project_secrets_key
+      - PROJECT_PROXY_SECRET_KEY_FILE=/run/secrets/project_proxy_secret_key
       # Where uploaded Internal Data files are stored inside container
       # Must be writable and persistent (mounted volume below)
       - INTERNAL_DATA_DIR=/data/internal_data
@@ -53,6 +55,9 @@ services:
     volumes:
       # Persistent storage for Internal Data uploads (required on server)
       - internal_data:/data/internal_data
+      # API, worker, and beat must use the same persistent marketplace-token key.
+      - ${PROJECT_SECRETS_KEY_HOST_PATH:-../../.project_secrets_key}:/run/secrets/project_secrets_key:ro
+      - ${PROJECT_PROXY_SECRET_KEY_HOST_PATH:-../../.project_proxy_secret_key}:/run/secrets/project_proxy_secret_key:ro
     # Entrypoint waits for PostgreSQL, runs migrations (with advisory lock protection), then starts uvicorn
     entrypoint: ["python", "/app/scripts/docker-entrypoint.py"]
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --app-dir /app/src
@@ -77,9 +82,13 @@ services:
       env_file: ../../.env
       environment:
         - PYTHONPATH=/app/src
+        - PROJECT_SECRETS_KEY_FILE=/run/secrets/project_secrets_key
+        - PROJECT_PROXY_SECRET_KEY_FILE=/run/secrets/project_proxy_secret_key
       volumes:
         # Windows Docker Desktop fix: use relative path from compose file location
         - ../../:/app:cached
+        - ${PROJECT_SECRETS_KEY_HOST_PATH:-../../.project_secrets_key}:/run/secrets/project_secrets_key:ro
+        - ${PROJECT_PROXY_SECRET_KEY_HOST_PATH:-../../.project_proxy_secret_key}:/run/secrets/project_proxy_secret_key:ro
       command: celery -A app.celery_app worker -l info
       depends_on:
         - redis
@@ -95,9 +104,13 @@ services:
       env_file: ../../.env
       environment:
         - PYTHONPATH=/app/src
+        - PROJECT_SECRETS_KEY_FILE=/run/secrets/project_secrets_key
+        - PROJECT_PROXY_SECRET_KEY_FILE=/run/secrets/project_proxy_secret_key
       volumes:
         # Windows Docker Desktop fix: use relative path from compose file location
         - ../../:/app:cached
+        - ${PROJECT_SECRETS_KEY_HOST_PATH:-../../.project_secrets_key}:/run/secrets/project_secrets_key:ro
+        - ${PROJECT_PROXY_SECRET_KEY_HOST_PATH:-../../.project_proxy_secret_key}:/run/secrets/project_proxy_secret_key:ro
       command: celery -A app.celery_app beat -l info
       depends_on:
         - redis

@@ -20,7 +20,7 @@ from sqlalchemy import text
 
 from app.db import engine
 from app.deps import get_current_active_user, get_project_membership
-from app.services.wb_storefront_brands import get_project_frontend_brand_id_strings
+from app.services.wb_storefront_brands import get_project_storefront_snapshot_scope
 from app.utils.ttl_cache import (
     delete as cache_delete,
     get_json as cache_get_json,
@@ -153,7 +153,7 @@ async def get_project_articles_base(
         front_run AS (
             SELECT MAX(f.snapshot_at) AS run_at
             FROM frontend_catalog_price_snapshots f
-            WHERE f.query_type = 'brand'
+            WHERE f.query_type = :storefront_query_type
               AND f.query_value = ANY(:brand_ids)
         ),
         wb_price_keys AS (
@@ -166,7 +166,7 @@ async def get_project_articles_base(
             SELECT f.nm_id::bigint AS nm_id
             FROM frontend_catalog_price_snapshots f
             JOIN front_run r ON f.snapshot_at = r.run_at
-            WHERE f.query_type = 'brand'
+            WHERE f.query_type = :storefront_query_type
               AND f.query_value = ANY(:brand_ids)
             GROUP BY f.nm_id
         ),
@@ -313,7 +313,7 @@ async def get_project_articles_base(
             FROM frontend_catalog_price_snapshots f
             JOIN keys k ON k.nm_id = f.nm_id
             JOIN front_run r ON f.snapshot_at = r.run_at
-            WHERE f.query_type = 'brand'
+            WHERE f.query_type = :storefront_query_type
               AND f.query_value = ANY(:brand_ids)
             ORDER BY f.nm_id, f.snapshot_at DESC
         )
@@ -347,10 +347,12 @@ async def get_project_articles_base(
         """
     )
 
-    brand_ids = get_project_frontend_brand_id_strings(project_id)
+    storefront_scope = get_project_storefront_snapshot_scope(project_id)
+    brand_ids = storefront_scope.query_values
     params = {
         "project_id": project_id,
         "brand_ids": brand_ids,
+        "storefront_query_type": storefront_scope.query_type,
         "qpat": qpat,
         "qnum": qnum,
         "only_wb": only_in_stock_wb,
@@ -468,7 +470,7 @@ async def get_articles_base_summary(
         frontend_prices_at AS (
             SELECT MAX(f.snapshot_at) AS frontend_prices_at
             FROM frontend_catalog_price_snapshots f
-            WHERE f.query_type = 'brand'
+            WHERE f.query_type = :storefront_query_type
               AND f.query_value = ANY(:brand_ids)
         ),
         rrp_run AS (
@@ -534,7 +536,7 @@ async def get_articles_base_summary(
         front_run AS (
             SELECT MAX(f.snapshot_at) AS run_at
             FROM frontend_catalog_price_snapshots f
-            WHERE f.query_type = 'brand'
+            WHERE f.query_type = :storefront_query_type
               AND f.query_value = ANY(:brand_ids)
         ),
         front_latest AS (
@@ -543,7 +545,7 @@ async def get_articles_base_summary(
                 f.price_product AS front_price
             FROM frontend_catalog_price_snapshots f
             JOIN front_run r ON f.snapshot_at = r.run_at
-            WHERE f.query_type = 'brand'
+            WHERE f.query_type = :storefront_query_type
               AND f.query_value = ANY(:brand_ids)
             ORDER BY f.nm_id, f.snapshot_at DESC
         ),
@@ -586,11 +588,13 @@ async def get_articles_base_summary(
     )
 
     with engine.connect() as conn:
+        storefront_scope = get_project_storefront_snapshot_scope(project_id)
         row = conn.execute(
             sql,
             {
                 "project_id": project_id,
-                "brand_ids": get_project_frontend_brand_id_strings(project_id),
+                "brand_ids": storefront_scope.query_values,
+                "storefront_query_type": storefront_scope.query_type,
             },
         ).mappings().first()
         if not row:
@@ -699,7 +703,7 @@ async def get_articles_base_coverage(
     front_run AS (
         SELECT MAX(f.snapshot_at) AS run_at
         FROM frontend_catalog_price_snapshots f
-        WHERE f.query_type = 'brand'
+        WHERE f.query_type = :storefront_query_type
           AND f.query_value = ANY(:brand_ids)
     ),
     front_latest AS (
@@ -707,7 +711,7 @@ async def get_articles_base_coverage(
             f.nm_id::bigint AS nm_id
         FROM frontend_catalog_price_snapshots f
         JOIN front_run r ON f.snapshot_at = r.run_at
-        WHERE f.query_type = 'brand'
+        WHERE f.query_type = :storefront_query_type
           AND f.query_value = ANY(:brand_ids)
         ORDER BY f.nm_id, f.snapshot_at DESC
     )
@@ -739,10 +743,12 @@ async def get_articles_base_coverage(
     )
     """
 
+    storefront_scope = get_project_storefront_snapshot_scope(project_id)
     params = {
         "project_id": project_id,
         "limit": limit,
-        "brand_ids": get_project_frontend_brand_id_strings(project_id),
+        "brand_ids": storefront_scope.query_values,
+        "storefront_query_type": storefront_scope.query_type,
     }
 
     def q(sql_body: str):

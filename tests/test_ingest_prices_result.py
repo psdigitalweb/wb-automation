@@ -24,3 +24,13 @@ def test_wrap_ingest_prices_preserves_failure_result(monkeypatch):
     assert result["reason"] == "wb_token_unauthorized"
     assert result["http_status"] == 401
     assert "finished_at" in result
+
+
+def test_frontend_prices_recognizes_rate_limited_admin_price_refresh():
+    result = {
+        "status": "failed",
+        "detail": "wb_rate_limited",
+        "stats": {"reason": "wb_rate_limited"},
+    }
+
+    assert registry._prices_refresh_failure_reason(result) == "wb_rate_limited"

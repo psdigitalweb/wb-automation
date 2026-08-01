@@ -14,7 +14,7 @@ from app.wb.client import WBClient
 from app import db_products
 from app.deps import get_current_active_user, get_project_membership
 from app.services.product_identity import resolve_marketplace_product_ids
-from app.utils.get_project_marketplace_token import get_wb_credentials_for_project
+from app.utils.get_project_marketplace_token import get_wb_api_token_for_project
 
 router = APIRouter(prefix="/api/v1/ingest", tags=["ingest"])
 # Отдельный роутер для витринных эндпоинтов по остаткам
@@ -92,7 +92,7 @@ async def ingest_stocks(project_id: int, run_id: int | None = None) -> Dict[str,
         project_id: Project ID to associate stock snapshots with (required).
 
     Алгоритм:
-    1. Получаем список складов из wb_warehouses (если нет — дергаем ingest_warehouses).
+    1. Получаем список FBS-складов напрямую из WB API с токеном проекта.
     2. Получаем список chrtIds из products (через db_products.get_chrt_ids).
     3. Для каждого склада и батча chrtIds вызываем WB API:
        POST /api/v3/stocks/{warehouseId} с body {"chrtIds": [...]}
@@ -100,9 +100,9 @@ async def ingest_stocks(project_id: int, run_id: int | None = None) -> Dict[str,
     """
     # Get credentials from project_marketplaces (preferred) or fallback to env
     try:
-        credentials = get_wb_credentials_for_project(project_id)
-        if credentials:
-            token = credentials.get("token", "")
+        project_token = get_wb_api_token_for_project(project_id)
+        if project_token:
+            token = project_token
         else:
             # Not enabled or no connection - use env fallback
             token = os.getenv("WB_TOKEN", "") or ""
@@ -113,27 +113,55 @@ async def ingest_stocks(project_id: int, run_id: int | None = None) -> Dict[str,
     if not token or token.upper() == "MOCK":
         print("ingest_stocks: skipped (MOCK mode or no token)")
         return {"ok": True, "scope": "project", "project_id": project_id, "domain": "stocks", "skipped": True}
-    # 1. Получаем склады из wb_warehouses
-    select_warehouses_sql = text(
-        "SELECT wb_id, name FROM wb_warehouses ORDER BY wb_id"
-    )
-
-    with engine.connect() as conn:
-        result = conn.execute(select_warehouses_sql).mappings().all()
-        warehouses = [dict(row) for row in result]
+    # 1. Склады продавца принадлежат конкретному кабинету. Глобальная таблица
+    # wb_warehouses может содержать склады другого проекта, поэтому для FBS
+    # всегда читаем актуальный список с токеном текущего проекта.
+    client = WBClient(token=token)
+    warehouse_rows = await client.fetch_warehouses()
+    if client.last_response_status != 200:
+        print(
+            "ingest_stocks: failed to fetch project FBS warehouses, "
+            f"project_id={project_id}, status={client.last_response_status}"
+        )
+        return {
+            "ok": False,
+            "scope": "project",
+            "project_id": project_id,
+            "domain": "stocks",
+            "reason": "failed_to_fetch_fbs_warehouses",
+            "http_status": client.last_response_status,
+        }
+    warehouses: List[Dict[str, Any]] = []
+    seen_warehouse_ids: set[int] = set()
+    for warehouse in warehouse_rows:
+        warehouse_id = warehouse.get("id") or warehouse.get("warehouseId") or warehouse.get("wb_id")
+        if warehouse_id is None:
+            continue
+        normalized_id = int(warehouse_id)
+        if normalized_id in seen_warehouse_ids:
+            continue
+        seen_warehouse_ids.add(normalized_id)
+        warehouses.append(
+            {
+                "wb_id": normalized_id,
+                "name": warehouse.get("name") or warehouse.get("warehouseName"),
+            }
+        )
 
     if not warehouses:
-        print("ingest_stocks: wb_warehouses is empty, running ingest_warehouses first")
-        await ingest_warehouses()
-        with engine.connect() as conn:
-            result = conn.execute(select_warehouses_sql).mappings().all()
-            warehouses = [dict(row) for row in result]
+        print(f"ingest_stocks: project_id={project_id} has no FBS warehouses")
+        return {
+            "ok": True,
+            "scope": "project",
+            "project_id": project_id,
+            "domain": "stocks",
+            "reason": "no_fbs_warehouses",
+            "warehouses": 0,
+            "api_records": 0,
+            "inserted": 0,
+        }
 
-    if not warehouses:
-        print("ingest_stocks: no warehouses available after ingest_warehouses, aborting")
-        return {"ok": False, "scope": "project", "project_id": project_id, "domain": "stocks", "reason": "no_warehouses"}
-
-    print(f"ingest_stocks: using {len(warehouses)} warehouses from wb_warehouses")
+    print(f"ingest_stocks: using {len(warehouses)} project FBS warehouses from WB API")
 
     # 2. Получаем chrtIds из products
     chrt_ids = db_products.get_chrt_ids(project_id)
@@ -149,8 +177,6 @@ async def ingest_stocks(project_id: int, run_id: int | None = None) -> Dict[str,
         f"(first 5: {chrt_ids[:5] if len(chrt_ids) >= 5 else chrt_ids}), "
         f"run_id={run_id}"
     )
-
-    client = WBClient(token=token)
 
     # Один run_at для всего прогона, чтобы все строки snapshot'а имели одинаковый timestamp
     run_at = datetime.now(timezone.utc)
@@ -237,7 +263,8 @@ async def ingest_stocks(project_id: int, run_id: int | None = None) -> Dict[str,
 
             if not stocks:
                 empty_chunks += 1
-                failed_chunks += 1
+                if client.last_response_status != 200 or client.last_error_text:
+                    failed_chunks += 1
                 print(
                     f"ingest_stocks: warehouse={warehouse_id}, chunk_size={len(batch_chrt_ids)}, stocks=0"
                 )
@@ -314,7 +341,7 @@ async def ingest_stocks(project_id: int, run_id: int | None = None) -> Dict[str,
     )
 
     # If we had failures, report ok=False so run is marked failed (avoid silent partial/empty success).
-    ok = failed_chunks == 0 and total_api_records > 0
+    ok = failed_chunks == 0
     if not ok:
         return {
             "ok": False,
@@ -335,6 +362,8 @@ async def ingest_stocks(project_id: int, run_id: int | None = None) -> Dict[str,
         "domain": "stocks",
         "api_records": total_api_records,
         "inserted": total_inserted,
+        "failed_chunks": failed_chunks,
+        "empty_chunks": empty_chunks,
     }
 
 
@@ -391,8 +420,8 @@ async def start_ingest_stocks(
     """
     # Check credentials before starting background task
     try:
-        credentials = get_wb_credentials_for_project(project_id)
-        if credentials is None:
+        project_token = get_wb_api_token_for_project(project_id)
+        if project_token is None:
             # Not enabled or no connection - allow env fallback
             pass
     except ValueError as e:

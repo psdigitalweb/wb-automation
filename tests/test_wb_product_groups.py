@@ -183,6 +183,7 @@ def test_comparison_endpoint_returns_members_without_group_metric_aggregation(mo
             "funnel": {"orders": 4},
         },
     ]
+    monkeypatch.setattr(api_wb_product_groups, "enforce_report_period", lambda *_args: None)
     monkeypatch.setattr(api_wb_product_groups, "get_group_comparison", lambda **_kwargs: members)
 
     result = asyncio.run(
@@ -201,6 +202,7 @@ def test_comparison_endpoint_returns_members_without_group_metric_aggregation(mo
 
 
 def test_series_endpoint_limits_visual_comparison_to_five_products(monkeypatch):
+    monkeypatch.setattr(api_wb_product_groups, "enforce_report_period", lambda *_args: None)
     monkeypatch.setattr(
         api_wb_product_groups,
         "get_group_members",

@@ -12,7 +12,7 @@ from app.db_wb_finances import (
     insert_report_line_if_new,
     compute_payload_hash,
 )
-from app.utils.get_project_marketplace_token import get_wb_credentials_for_project
+from app.utils.get_project_marketplace_token import get_wb_api_token_for_project
 
 
 async def ingest_wb_finance_reports_by_period(
@@ -42,8 +42,8 @@ async def ingest_wb_finance_reports_by_period(
     """
     # Get WB token for project
     try:
-        credentials = get_wb_credentials_for_project(project_id)
-        if not credentials or not credentials.get("token"):
+        token = get_wb_api_token_for_project(project_id)
+        if not token:
             return {
                 "http_status": 0,
                 "total_reports": 0,
@@ -53,7 +53,6 @@ async def ingest_wb_finance_reports_by_period(
                 "skipped_lines": 0,
                 "error": "WB not connected or token missing",
             }
-        token = credentials["token"]
     except ValueError as e:
         return {
             "http_status": 0,

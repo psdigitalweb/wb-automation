@@ -17,6 +17,7 @@ from app.schemas.data_availability import (
     DatasetAvailability,
     Grain,
 )
+from app.services.wb_storefront_brands import get_project_storefront_snapshot_scope
 
 
 def _safe_execute(conn, stmt, params: Optional[dict] = None):
@@ -176,7 +177,8 @@ def compute_project_data_availability(project_id: int, *, days: int = 90) -> Dat
     start_ts = datetime.combine(window_from, datetime.min.time())
     end_ts = datetime.combine(window_to + timedelta(days=1), datetime.min.time())
 
-    wb_brand_ids = _get_wb_frontend_brand_ids_for_project(project_id)
+    storefront_scope = get_project_storefront_snapshot_scope(project_id)
+    wb_brand_ids = storefront_scope.query_values
 
     items: List[DatasetAvailability] = []
 
@@ -289,7 +291,7 @@ def compute_project_data_availability(project_id: int, *, days: int = 90) -> Dat
                 )
             )
 
-        # 4) Витрина WB: frontend_catalog_price_snapshots by configured brand_id(s)
+        # 4) Витрина WB: selected seller/brand storefront snapshot scope.
         try:
             if not wb_brand_ids:
                 items.append(
@@ -300,7 +302,7 @@ def compute_project_data_availability(project_id: int, *, days: int = 90) -> Dat
                         window_from=window_from,
                         window_to=window_to,
                         present_periods=[],
-                        note="WB brand_id не настроен",
+                        note="Витрина WB не настроена",
                     )
                 )
             else:
@@ -309,7 +311,7 @@ def compute_project_data_availability(project_id: int, *, days: int = 90) -> Dat
                         """
                         SELECT DISTINCT (snapshot_at::date) AS d
                         FROM frontend_catalog_price_snapshots
-                        WHERE query_type = 'brand'
+                        WHERE query_type = :storefront_query_type
                           AND query_value IN :brand_ids
                           AND snapshot_at >= :start_ts
                           AND snapshot_at < :end_ts
@@ -317,7 +319,12 @@ def compute_project_data_availability(project_id: int, *, days: int = 90) -> Dat
                     )
                     .bindparams(bindparam("brand_ids", expanding=True))
                 )
-                params = {"brand_ids": wb_brand_ids, "start_ts": start_ts, "end_ts": end_ts}
+                params = {
+                    "brand_ids": wb_brand_ids,
+                    "storefront_query_type": storefront_scope.query_type,
+                    "start_ts": start_ts,
+                    "end_ts": end_ts,
+                }
                 dates = _safe_execute(conn, sql, params).scalars().all()
                 items.append(
                     _build_dataset_availability(
@@ -327,7 +334,7 @@ def compute_project_data_availability(project_id: int, *, days: int = 90) -> Dat
                         window_from=window_from,
                         window_to=window_to,
                         present_periods=[d for d in dates if isinstance(d, date)],
-                        note=f"brand_id: {', '.join(wb_brand_ids)}",
+                        note=f"{storefront_scope.query_type}: {', '.join(wb_brand_ids)}",
                     )
                 )
         except Exception as e:

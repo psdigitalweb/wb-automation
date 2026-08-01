@@ -30,6 +30,8 @@ import {
 import { GroupAnalytics } from './_components/GroupAnalytics'
 import { CustomerOpinionSection } from './_components/CustomerOpinionSection'
 import { ProductSalesChart } from './_components/ProductSalesChart'
+import { useConstrainedReportPeriod } from '@/hooks/useReportFilterOptions'
+import { ReportDataCoverage } from '@/components/ui-v2/ReportDataCoverage'
 import styles from './product.module.css'
 
 const integer = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 })
@@ -281,6 +283,20 @@ export default function WBCatalogProductPage() {
   const [opinionExpanded, setOpinionExpanded] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const { options: reportOptions, loading: reportOptionsLoading } = useConstrainedReportPeriod(
+    projectId,
+    'catalog-product',
+    periodFrom,
+    periodTo,
+    setPeriodFrom,
+    setPeriodTo,
+  )
+
+  useEffect(() => {
+    if (!reportOptions) return
+    setDraftFrom(periodFrom)
+    setDraftTo(periodTo)
+  }, [periodFrom, periodTo, reportOptions])
 
   const loadProduct = useCallback(
     async (from: string, to: string) => {
@@ -320,8 +336,10 @@ export default function WBCatalogProductPage() {
   )
 
   useEffect(() => {
+    if (reportOptionsLoading) return
+    if (reportOptions?.date_filter.enabled && (!periodFrom || !periodTo)) return
     void loadProduct(periodFrom, periodTo)
-  }, [loadProduct, periodFrom, periodTo])
+  }, [loadProduct, periodFrom, periodTo, reportOptions, reportOptionsLoading])
 
   useEffect(() => {
     if (!projectId || !nmId) return
@@ -423,6 +441,8 @@ export default function WBCatalogProductPage() {
           <div className={styles.identityMeta}>
             <span>{item.vendor_code || 'Без артикула'}</span>
             <span>nmID {item.nm_id}</span>
+            <span>{item.brand?.trim() || 'Без бренда'}</span>
+            <span>{item.subject_name || 'Без категории'}</span>
             <span className={styles.activity}>
               <i className={item.is_active ? styles.activeDot : undefined} />
               {item.is_active ? 'Активен на витрине' : 'Активность не подтверждена'}
@@ -444,6 +464,8 @@ export default function WBCatalogProductPage() {
             <input
               type="date"
               value={draftFrom}
+              min={reportOptions?.date_filter.min_date ?? undefined}
+              max={draftTo || reportOptions?.date_filter.max_date || undefined}
               onChange={(event) => setDraftFrom(event.target.value)}
             />
           </label>
@@ -452,6 +474,8 @@ export default function WBCatalogProductPage() {
             <input
               type="date"
               value={draftTo}
+              min={draftFrom || reportOptions?.date_filter.min_date || undefined}
+              max={reportOptions?.date_filter.max_date ?? undefined}
               onChange={(event) => setDraftTo(event.target.value)}
             />
           </label>
@@ -461,7 +485,37 @@ export default function WBCatalogProductPage() {
         </div>
       </section>
 
+      <ReportDataCoverage
+        options={reportOptions}
+        periodFrom={periodFrom}
+        periodTo={periodTo}
+      />
+
       {error ? <div className={styles.errorBanner}>{error}</div> : null}
+
+      <section className={styles.sizeSection}>
+        <div className={styles.sectionHeading}>
+          <div>
+            <h2>Размеры и варианты</h2>
+            <p>Текущие размерные варианты из Content API кабинета WB.</p>
+          </div>
+          <strong>{item.sizes.length}</strong>
+        </div>
+        {item.sizes.length ? (
+          <div className={styles.sizeGrid}>
+            {item.sizes.map((size, index) => (
+              <article key={`${size.chrt_id ?? 'size'}-${index}`}>
+                <strong>{size.tech_size || size.wb_size || `Вариант ${index + 1}`}</strong>
+                <span>Размер WB: {size.wb_size || '—'}</span>
+                <span>chrtID: {size.chrt_id ?? '—'}</span>
+                <span>Штрихкодов: {size.skus.length}</span>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <p className={styles.sizeEmpty}>Размерные варианты не переданы Wildberries.</p>
+        )}
+      </section>
 
       <section className={styles.kpiGrid}>
         <article>

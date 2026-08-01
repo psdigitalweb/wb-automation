@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useState } from 'react'
 import { useParams } from 'next/navigation'
 import {
   getContentAnalyticsSummary,
@@ -11,6 +11,8 @@ import {
 import { usePageTitle } from '@/hooks/usePageTitle'
 import PortalBackButton from '@/components/PortalBackButton'
 import WBProductLookupInput from '@/components/WBProductLookupInput'
+import { useConstrainedReportPeriod } from '@/hooks/useReportFilterOptions'
+import { ReportDataCoverage } from '@/components/ui-v2/ReportDataCoverage'
 
 function formatRUB(value: number | null | undefined): string {
   if (value == null || Number.isNaN(value)) return '—'
@@ -52,6 +54,9 @@ export default function ContentAnalyticsPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [data, setData] = useState<ContentAnalyticsSummaryResponse | null>(null)
+  const { options: reportOptions } = useConstrainedReportPeriod(
+    projectId, 'content-analytics', periodFrom, periodTo, setPeriodFrom, setPeriodTo,
+  )
 
   usePageTitle('Аналитика карточек', projectId || null)
 
@@ -87,12 +92,6 @@ export default function ContentAnalyticsPage() {
       .finally(() => setLoading(false))
   }, [projectId, periodFrom, periodTo, productSearch, selectedProduct])
 
-  useEffect(() => {
-    const def = defaultPeriod()
-    setPeriodFrom(def.period_from)
-    setPeriodTo(def.period_to)
-  }, [])
-
   const items = data?.items ?? []
 
   return (
@@ -114,6 +113,8 @@ export default function ContentAnalyticsPage() {
               <input
                 type="date"
                 value={periodFrom}
+                min={reportOptions?.date_filter.min_date ?? undefined}
+                max={periodTo || reportOptions?.date_filter.max_date || undefined}
                 onChange={(e) => setPeriodFrom(e.target.value)}
                 className="h-10 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
@@ -123,6 +124,8 @@ export default function ContentAnalyticsPage() {
               <input
                 type="date"
                 value={periodTo}
+                min={periodFrom || reportOptions?.date_filter.min_date || undefined}
+                max={reportOptions?.date_filter.max_date ?? undefined}
                 onChange={(e) => setPeriodTo(e.target.value)}
                 className="h-10 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
@@ -154,6 +157,7 @@ export default function ContentAnalyticsPage() {
               </button>
             </div>
           </div>
+          <ReportDataCoverage options={reportOptions} periodFrom={periodFrom} periodTo={periodTo} />
         </div>
       </div>
 

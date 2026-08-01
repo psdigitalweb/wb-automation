@@ -48,6 +48,8 @@ marketplace_product_source AS (
             END
         ) AS subject_id,
         COALESCE(p.subject_name, mp.attributes->>'subject_name') AS subject_name,
+        p.brand,
+        p.sizes,
         p.pics,
         p.raw,
         mp.updated_at AS product_updated_at
@@ -69,6 +71,8 @@ legacy_product_fallback AS (
         p.title,
         p.subject_id,
         p.subject_name,
+        p.brand,
+        p.sizes,
         p.pics,
         p.raw,
         p.updated_at AS product_updated_at

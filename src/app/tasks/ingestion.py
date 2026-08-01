@@ -19,46 +19,9 @@ def _get_frontend_prices_proxy_config(project_id: int) -> tuple[str | None, str 
     - Raises on misconfiguration when enabled (to avoid silent non-proxy runs).
     - Does NOT include host/user/pass in exception messages.
     """
-    from urllib.parse import quote
+    from app.services.project_proxy import get_frontend_prices_proxy_config
 
-    from app.db_project_proxy_settings import get_project_proxy_settings
-    from app.utils.proxy_secrets_encryption import decrypt_proxy_secret
-
-    proxy_settings = get_project_proxy_settings(int(project_id))
-    enabled = bool(proxy_settings and proxy_settings.get("enabled"))
-    if not enabled:
-        return None, None
-
-    scheme = (proxy_settings.get("scheme") or "http").strip().lower()
-    host = (proxy_settings.get("host") or "").strip()
-    port = int(proxy_settings.get("port") or 0)
-    rotate_mode = (proxy_settings.get("rotate_mode") or "fixed").strip().lower()
-
-    if rotate_mode != "fixed":
-        raise ValueError("proxy_invalid_rotate_mode")
-    if scheme not in ("http", "https"):
-        raise ValueError("proxy_invalid_scheme")
-    if not host:
-        raise ValueError("proxy_host_required")
-    if port < 1 or port > 65535:
-        raise ValueError("proxy_invalid_port")
-
-    username = proxy_settings.get("username")
-    password_plain: str | None = None
-    if proxy_settings.get("password_encrypted"):
-        password_plain = decrypt_proxy_secret(proxy_settings["password_encrypted"])
-
-    auth = ""
-    if username is not None and str(username) != "":
-        user_escaped = quote(str(username), safe="")
-        if password_plain is not None and str(password_plain) != "":
-            pass_escaped = quote(str(password_plain), safe="")
-            auth = f"{user_escaped}:{pass_escaped}@"
-        else:
-            auth = f"{user_escaped}@"
-
-    proxy_url = f"{scheme}://{auth}{host}:{port}"
-    return proxy_url, scheme
+    return get_frontend_prices_proxy_config(int(project_id))
 
 
 @celery_app.task(name="app.tasks.ingestion.prices")
@@ -76,8 +39,9 @@ def ingest_prices_task(project_id: int) -> Dict[str, Any]:
 def ingest_supplier_stocks_task(project_id: int) -> Dict[str, Any]:
     from app.ingest_supplier_stocks import ingest_supplier_stocks as _ingest_supplier_stocks
 
-    asyncio.run(_ingest_supplier_stocks(project_id))
-    return {"status": "completed", "project_id": project_id, "domain": "supplier_stocks"}
+    result = asyncio.run(_ingest_supplier_stocks(project_id))
+    status_value = "completed" if result.get("ok", True) else "failed"
+    return {**result, "status": status_value}
 
 
 @celery_app.task(name="app.tasks.ingestion.products")
@@ -118,7 +82,10 @@ def ingest_frontend_prices_task(project_id: int, run_id: int | None = None) -> D
     from app.db import engine
     from app.ingest_frontend_prices import ingest_frontend_brand_prices
     from app.services.ingest.runs import get_run
-    from app.services.wb_storefront_brands import extract_frontend_brand_ids
+    from app.services.wb_storefront_brands import (
+        extract_frontend_brand_ids,
+        extract_storefront_snapshot_scope,
+    )
 
     brand_id: int | None = None
     base_url_template: str | None = None
@@ -149,6 +116,7 @@ def ingest_frontend_prices_task(project_id: int, run_id: int | None = None) -> D
         ).mappings().first()
 
         brand_ids = extract_frontend_brand_ids((wb_settings_row or {}).get("settings_json"))
+        storefront_scope = extract_storefront_snapshot_scope((wb_settings_row or {}).get("settings_json"))
         base_url_template = (wb_settings_row or {}).get("base_url_template")
         fp_sleep_base_ms_str = (wb_settings_row or {}).get("fp_sleep_base_ms")
         fp_sleep_ms_str = (wb_settings_row or {}).get("fp_sleep_ms")
@@ -273,6 +241,7 @@ def ingest_frontend_prices_task(project_id: int, run_id: int | None = None) -> D
     result = asyncio.run(
         ingest_frontend_brand_prices(
             brand_id=brand_id,
+            query_type=storefront_scope.query_type,
             base_url=str(base_url_template).strip(),
             max_pages=max_pages,
             sleep_ms=sleep_ms,

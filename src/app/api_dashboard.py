@@ -5,7 +5,7 @@ from sqlalchemy import text
 
 from app.db import engine
 from app.deps import get_current_active_user, get_project_membership
-from app.services.wb_storefront_brands import get_project_frontend_brand_id_strings
+from app.services.wb_storefront_brands import get_project_storefront_snapshot_scope
 
 router = APIRouter(prefix="/api/v1/dashboard", tags=["dashboard"])
 
@@ -152,15 +152,19 @@ async def get_dashboard_metrics(
             check_sql = text("SELECT 1 FROM frontend_catalog_price_snapshots LIMIT 1")
             _safe_execute(check_sql).scalar_one_or_none()
 
-            brand_ids = get_project_frontend_brand_id_strings(project_id)
+            storefront_scope = get_project_storefront_snapshot_scope(project_id)
+            brand_ids = storefront_scope.query_values
 
             if brand_ids:
                 sql = text("""
                     SELECT COUNT(*) AS cnt, COUNT(DISTINCT nm_id) AS uniq
                     FROM frontend_catalog_price_snapshots
-                    WHERE query_type = 'brand' AND query_value = ANY(:brand_ids)
+                    WHERE query_type = :storefront_query_type AND query_value = ANY(:brand_ids)
                 """)
-                row = _safe_execute(sql, {"brand_ids": brand_ids}).mappings().first()
+                row = _safe_execute(sql, {
+                    "brand_ids": brand_ids,
+                    "storefront_query_type": storefront_scope.query_type,
+                }).mappings().first()
                 if row:
                     counts["frontend_prices"] = row.get("cnt", 0)
                     counts["frontend_prices_rows"] = row.get("cnt", 0)
@@ -177,15 +181,19 @@ async def get_dashboard_metrics(
             check_sql = text("SELECT 1 FROM frontend_catalog_price_snapshots LIMIT 1")
             _safe_execute(check_sql).scalar_one_or_none()
 
-            brand_ids = get_project_frontend_brand_id_strings(project_id)
+            storefront_scope = get_project_storefront_snapshot_scope(project_id)
+            brand_ids = storefront_scope.query_values
 
             if brand_ids:
                 sql = text("""
                     SELECT MAX(snapshot_at) AS max_date
                     FROM frontend_catalog_price_snapshots
-                    WHERE query_type = 'brand' AND query_value = ANY(:brand_ids)
+                    WHERE query_type = :storefront_query_type AND query_value = ANY(:brand_ids)
                 """)
-                result = _safe_execute(sql, {"brand_ids": brand_ids}).mappings().all()
+                result = _safe_execute(sql, {
+                    "brand_ids": brand_ids,
+                    "storefront_query_type": storefront_scope.query_type,
+                }).mappings().all()
             else:
                 result = []
                 
@@ -239,7 +247,8 @@ async def get_dashboard_kpis(
     - Storefront: frontend_catalog_price_snapshots for project brand_id, latest snapshot_at run
     - RRP XML: rrp_snapshots, latest snapshot_at run
     """
-    brand_ids = get_project_frontend_brand_id_strings(project_id)
+    storefront_scope = get_project_storefront_snapshot_scope(project_id)
+    brand_ids = storefront_scope.query_values
 
     sql = text(
         """
@@ -320,14 +329,14 @@ async def get_dashboard_kpis(
         storefront_run AS (
             SELECT MAX(f.snapshot_at) AS run_at
             FROM frontend_catalog_price_snapshots f
-            WHERE f.query_type = 'brand'
+            WHERE f.query_type = :storefront_query_type
               AND f.query_value = ANY(:brand_ids)
         ),
         storefront_latest AS (
             SELECT COUNT(DISTINCT f.nm_id)::bigint AS cnt
             FROM frontend_catalog_price_snapshots f
             JOIN storefront_run r ON f.snapshot_at = r.run_at
-            WHERE f.query_type = 'brand'
+            WHERE f.query_type = :storefront_query_type
               AND f.query_value = ANY(:brand_ids)
         ),
         expected_storefront AS (
@@ -398,7 +407,11 @@ async def get_dashboard_kpis(
 
     try:
         with engine.connect() as conn:
-            row = conn.execute(sql, {"project_id": project_id, "brand_ids": brand_ids}).mappings().first() or {}
+            row = conn.execute(sql, {
+                "project_id": project_id,
+                "brand_ids": brand_ids,
+                "storefront_query_type": storefront_scope.query_type,
+            }).mappings().first() or {}
     except Exception as e:
         # Log error for debugging
         import traceback

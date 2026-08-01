@@ -1,9 +1,9 @@
-"""Ingestion endpoints for WB Statistics API supplier stock balances."""
+"""Ingestion endpoints for current WB Analytics API FBO stock balances."""
 
 import asyncio
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Query, Path, Depends
@@ -13,7 +13,7 @@ from app.db import engine
 from app.wb.client import WBClient
 from app.deps import get_current_active_user, get_project_membership
 from app.services.product_identity import resolve_marketplace_product_ids
-from app.utils.get_project_marketplace_token import get_wb_credentials_for_project
+from app.utils.get_project_marketplace_token import get_wb_api_token_for_project
 
 router = APIRouter(prefix="/api/v1/ingest", tags=["ingest"])
 # Отдельный роутер для витринных эндпоинтов по supplier stocks
@@ -55,8 +55,8 @@ def _parse_rfc3339_to_datetime(date_str: str) -> datetime:
     raise ValueError(f"Unable to parse RFC3339 date: {date_str}")
 
 
-async def ingest_supplier_stocks(project_id: int, run_id: int | None = None) -> None:
-    """Fetch and insert supplier stock snapshots from WB Statistics API.
+async def _ingest_supplier_stocks_legacy(project_id: int, run_id: int | None = None) -> None:
+    """Deprecated implementation retained temporarily for historical compatibility.
     
     Алгоритм:
     1. Определить начальный dateFrom:
@@ -74,8 +74,7 @@ async def ingest_supplier_stocks(project_id: int, run_id: int | None = None) -> 
     """
     # Prefer per-project credentials; fallback to env for backward compatibility
     try:
-        credentials = get_wb_credentials_for_project(project_id)
-        token = credentials.get("token", "") if credentials else (os.getenv("WB_TOKEN", "") or "")
+        token = get_wb_api_token_for_project(project_id) or (os.getenv("WB_TOKEN", "") or "")
     except ValueError as e:
         print(f"ingest_supplier_stocks: {str(e)}, skipping (run_id={run_id})")
         return
@@ -317,18 +316,194 @@ async def ingest_supplier_stocks(project_id: int, run_id: int | None = None) -> 
     print(f"ingest_supplier_stocks: finished. pages={total_pages}, total_received={total_received}, total_inserted={total_inserted}, max(last_change_date)={final_max_date}")
 
 
+async def ingest_supplier_stocks(project_id: int, run_id: int | None = None) -> Dict[str, Any]:
+    """Fetch current FBO stocks from WB Analytics API and save a project snapshot."""
+    try:
+        token = get_wb_api_token_for_project(project_id) or (os.getenv("WB_TOKEN", "") or "")
+    except ValueError as exc:
+        return {
+            "ok": False,
+            "scope": "project",
+            "project_id": project_id,
+            "domain": "supplier_stocks",
+            "reason": "wb_token_unavailable",
+            "message": str(exc),
+        }
+
+    if not token or token.upper() == "MOCK":
+        return {
+            "ok": False,
+            "scope": "project",
+            "project_id": project_id,
+            "domain": "supplier_stocks",
+            "reason": "wb_token_missing",
+        }
+
+    snapshot_at = datetime.now(timezone.utc)
+    page_size = min(max(int(os.getenv("WB_FBO_STOCKS_PAGE_SIZE", "250000")), 1), 250_000)
+    max_pages = max(int(os.getenv("WB_FBO_STOCKS_MAX_PAGES", "200")), 1)
+    client = WBClient(token=token)
+    offset = 0
+    pages = 0
+    total_received = 0
+    aggregated: Dict[tuple[int, str], Dict[str, Any]] = {}
+
+    while pages < max_pages:
+        stocks = await client.fetch_fbo_stocks_page(limit=page_size, offset=offset)
+        if client.last_response_status != 200 or client.last_error_text:
+            return {
+                "ok": False,
+                "scope": "project",
+                "project_id": project_id,
+                "domain": "supplier_stocks",
+                "reason": "failed_to_fetch_fbo_stocks",
+                "http_status": client.last_response_status,
+                "pages": pages,
+                "api_records": total_received,
+            }
+
+        pages += 1
+        total_received += len(stocks)
+        for stock in stocks:
+            nm_id = stock.get("nmId") or stock.get("nm_id")
+            if nm_id is None:
+                continue
+            warehouse_name = str(stock.get("warehouseName") or stock.get("warehouse_name") or "")
+            key = (int(nm_id), warehouse_name)
+            row = aggregated.setdefault(
+                key,
+                {
+                    "nm_id": int(nm_id),
+                    "warehouse_name": warehouse_name,
+                    "warehouse_id": stock.get("warehouseId"),
+                    "region_name": stock.get("regionName"),
+                    "quantity": 0,
+                    "in_way_to_client": 0,
+                    "in_way_from_client": 0,
+                    "chrt_ids": [],
+                },
+            )
+            row["quantity"] += int(stock.get("quantity") or 0)
+            row["in_way_to_client"] += int(stock.get("inWayToClient") or 0)
+            row["in_way_from_client"] += int(stock.get("inWayFromClient") or 0)
+            if stock.get("chrtId") is not None:
+                row["chrt_ids"].append(int(stock["chrtId"]))
+
+        if len(stocks) < page_size:
+            break
+        offset += len(stocks)
+
+        if run_id is not None:
+            try:
+                from app.services.ingest import runs as runs_service
+
+                runs_service.set_run_progress(
+                    int(run_id),
+                    {
+                        "ok": None,
+                        "phase": "supplier_stocks",
+                        "page": pages,
+                        "received": total_received,
+                        "offset": offset,
+                    },
+                )
+            except Exception:
+                pass
+
+    if pages >= max_pages and total_received >= page_size * max_pages:
+        return {
+            "ok": False,
+            "scope": "project",
+            "project_id": project_id,
+            "domain": "supplier_stocks",
+            "reason": "fbo_stocks_page_limit_reached",
+            "pages": pages,
+            "api_records": total_received,
+        }
+
+    insert_sql = text("""
+        INSERT INTO supplier_stock_snapshots (
+            project_id, marketplace_product_id,
+            snapshot_at, last_change_date, warehouse_name, nm_id,
+            supplier_article, barcode, tech_size, quantity, quantity_full,
+            in_way_to_client, in_way_from_client, is_supply, is_realization,
+            price, discount, raw
+        )
+        VALUES (
+            :project_id, :marketplace_product_id,
+            :snapshot_at, :last_change_date, :warehouse_name, :nm_id,
+            :supplier_article, :barcode, :tech_size, :quantity, :quantity_full,
+            :in_way_to_client, :in_way_from_client, :is_supply, :is_realization,
+            :price, :discount, :raw
+        )
+        ON CONFLICT (project_id, last_change_date, nm_id, barcode, warehouse_name) DO NOTHING
+    """)
+
+    rows: List[Dict[str, Any]] = []
+    for stock in aggregated.values():
+        rows.append(
+            {
+                "project_id": int(project_id),
+                "snapshot_at": snapshot_at,
+                "last_change_date": snapshot_at,
+                "warehouse_name": stock["warehouse_name"],
+                "nm_id": stock["nm_id"],
+                "supplier_article": None,
+                "barcode": None,
+                "tech_size": None,
+                "quantity": stock["quantity"],
+                "quantity_full": None,
+                "in_way_to_client": stock["in_way_to_client"],
+                "in_way_from_client": stock["in_way_from_client"],
+                "is_supply": None,
+                "is_realization": None,
+                "price": None,
+                "discount": None,
+                "raw": _serialize_json_field({"source": "wb_analytics", **stock}),
+            }
+        )
+
+    inserted = 0
+    if rows:
+        with engine.begin() as conn:
+            product_ids = resolve_marketplace_product_ids(
+                project_id=project_id,
+                marketplace_code="wildberries",
+                marketplace_item_ids=(row["nm_id"] for row in rows),
+                connection=conn,
+            )
+            for row in rows:
+                row["marketplace_product_id"] = product_ids.get(str(row["nm_id"]))
+            result = conn.execute(insert_sql, rows)
+            inserted = int(result.rowcount or 0)
+
+    return {
+        "ok": True,
+        "scope": "project",
+        "project_id": project_id,
+        "domain": "supplier_stocks",
+        "source": "wb_analytics",
+        "pages": pages,
+        "api_records": total_received,
+        "snapshot_rows": len(rows),
+        "inserted": inserted,
+        "snapshot_at": snapshot_at.isoformat(),
+    }
+
+
 @router.get("/supplier-stocks")
 async def get_supplier_stocks_info():
     """Get information about supplier stocks ingestion endpoint."""
     token = os.getenv("WB_TOKEN", "")
-    endpoint = "https://statistics-api.wildberries.ru/api/v1/supplier/stocks"
+    endpoint = "https://seller-analytics-api.wildberries.ru/api/analytics/v1/stocks-report/wb-warehouses"
     
     return {
         "endpoint": endpoint,
         "token_configured": bool(token and token != "MOCK"),
         "mock_mode": token.upper() == "MOCK",
-        "rate_limit": "1 request per minute",
-        "pagination": "via lastChangeDate parameter"
+        "token_category": "Analytics",
+        "rate_limit": "1 request per 20 seconds",
+        "pagination": "via offset parameter"
     }
 
 
@@ -346,8 +521,7 @@ async def start_ingest_supplier_stocks_for_project(
     """
     # Check credentials early for a better UX (don't start a background task that immediately skips)
     try:
-        credentials = get_wb_credentials_for_project(project_id)
-        token = credentials.get("token", "") if credentials else (os.getenv("WB_TOKEN", "") or "")
+        token = get_wb_api_token_for_project(project_id) or (os.getenv("WB_TOKEN", "") or "")
     except ValueError as e:
         from fastapi import HTTPException, status
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))

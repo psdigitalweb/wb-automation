@@ -12,6 +12,8 @@ import {
   type ApiError,
 } from '@/lib/apiClient'
 import s from '../../../cogs/cogs.module.css'
+import { useConstrainedReportPeriod } from '@/hooks/useReportFilterOptions'
+import { ReportDataCoverage } from '@/components/ui-v2/ReportDataCoverage'
 
 function formatRUB(value: number, fractionDigits: number = 2): string {
   return new Intl.NumberFormat('ru-RU', {
@@ -122,6 +124,9 @@ export default function WBSkuPnlPage() {
   const [expandedRow, setExpandedRow] = useState<string | null>(null)
   const [hoverSku, setHoverSku] = useState<string | null>(null)
   const [sourcesOpen, setSourcesOpen] = useState(false)
+  const { options: reportOptions } = useConstrainedReportPeriod(
+    projectId, 'finances-sku-pnl', periodFrom, periodTo, setPeriodFrom, setPeriodTo,
+  )
   const [subjects, setSubjects] = useState<WBProductSubjectItem[]>([])
   const [subjectsLoading, setSubjectsLoading] = useState(false)
   const [subjectId, setSubjectId] = useState<number | null>(null)
@@ -309,6 +314,8 @@ export default function WBSkuPnlPage() {
               <input
                 type="date"
                 value={periodFrom}
+                min={reportOptions?.date_filter.min_date ?? undefined}
+                max={periodTo || reportOptions?.date_filter.max_date || undefined}
                 onChange={(e) => {
                   setPeriodFrom(e.target.value)
                   handlePeriodChange()
@@ -321,6 +328,8 @@ export default function WBSkuPnlPage() {
               <input
                 type="date"
                 value={periodTo}
+                min={periodFrom || reportOptions?.date_filter.min_date || undefined}
+                max={reportOptions?.date_filter.max_date ?? undefined}
                 onChange={(e) => {
                   setPeriodTo(e.target.value)
                   handlePeriodChange()
@@ -430,6 +439,7 @@ export default function WBSkuPnlPage() {
               </button>
             </div>
           </div>
+          <ReportDataCoverage options={reportOptions} periodFrom={periodFrom} periodTo={periodTo} />
         </div>
       </div>
 

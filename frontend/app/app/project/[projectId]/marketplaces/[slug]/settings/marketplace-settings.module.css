@@ -1,0 +1,239 @@
+.sections {
+  display: grid;
+  gap: 20px;
+  margin-top: 20px;
+}
+
+.sectionCard {
+  padding: 20px;
+}
+
+.sectionHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding-bottom: 16px;
+  margin-bottom: 16px;
+  border-bottom: 0.5px solid var(--color-border, #e5e7eb);
+}
+
+.sectionHeader h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--color-text, #1f2937);
+}
+
+.sectionHeader p {
+  max-width: 720px;
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--color-text-2, #4b5563);
+}
+
+.statusBadge {
+  flex: none;
+  min-height: 20px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.success {
+  color: oklch(42% 0.13 158);
+  background: oklch(95% 0.05 158);
+}
+
+.warning {
+  color: oklch(48% 0.13 70);
+  background: oklch(96% 0.06 75);
+}
+
+.neutral {
+  color: var(--color-text-2, #4b5563);
+  background: var(--color-surface-2, #f3f4f6);
+}
+
+.danger {
+  color: oklch(44% 0.18 22);
+  background: oklch(96% 0.04 22);
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.storefrontForm {
+  display: grid;
+  gap: 16px;
+  max-width: 760px;
+}
+
+.fieldHint {
+  color: var(--color-text-3, #6b7280);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.sellerSummary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border: 0.5px solid var(--color-border, #e5e7eb);
+  border-radius: var(--radius-md, 8px);
+  background: var(--color-surface-2, #f7f7f5);
+}
+
+.sellerSummary div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.sellerSummary span {
+  color: var(--color-text-3, #6b7280);
+  font-size: 11px;
+}
+
+.sellerSummary strong {
+  font-family: "Geist Mono", ui-monospace, monospace;
+  font-size: 14px;
+}
+
+.sellerSummary a {
+  color: var(--color-accent-text, #176b46);
+  font-size: 13px;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.verificationCard {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 0.5px solid var(--color-border, #e5e7eb);
+  border-radius: var(--radius-lg, 10px);
+}
+
+.verificationSuccess {
+  background: oklch(98% 0.018 158);
+  border-color: oklch(56% 0.15 158 / 0.28);
+}
+
+.verificationError {
+  background: oklch(98% 0.014 22);
+  border-color: oklch(56% 0.2 22 / 0.25);
+}
+
+.verificationHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.verificationHeader > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.verificationHeader span,
+.verificationMetrics span,
+.productSamples > span {
+  color: var(--color-text-3, #6b7280);
+  font-size: 11px;
+}
+
+.verificationHeader strong {
+  color: var(--color-text, #1f2937);
+  font-size: 14px;
+}
+
+.verificationMessage,
+.verificationMeta {
+  margin: 0;
+  color: var(--color-text-2, #4b5563);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.verificationMetrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  overflow: hidden;
+  border: 0.5px solid var(--color-border, #e5e7eb);
+  border-radius: var(--radius-md, 8px);
+  background: var(--color-surface, #fff);
+}
+
+.verificationMetrics > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  border-right: 0.5px solid var(--color-border, #e5e7eb);
+}
+
+.verificationMetrics > div:last-child {
+  border-right: 0;
+}
+
+.verificationMetrics strong {
+  font-family: "Geist Mono", ui-monospace, monospace;
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.productSamples {
+  display: grid;
+  gap: 8px;
+}
+
+.productSamples > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.productSamples > div > span {
+  padding: 4px 7px;
+  border-radius: var(--radius-pill, 999px);
+  color: var(--color-text-2, #4b5563);
+  background: var(--color-surface, #fff);
+  font-size: 11px;
+}
+
+@media (max-width: 720px) {
+  .sectionHeader {
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .sellerSummary {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .verificationMetrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .verificationMetrics > div:nth-child(2) {
+    border-right: 0;
+  }
+
+  .verificationMetrics > div:nth-child(-n + 2) {
+    border-bottom: 0.5px solid var(--color-border, #e5e7eb);
+  }
+}

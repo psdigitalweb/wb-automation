@@ -149,13 +149,16 @@ async def _wrap_ingest_products(project_id: int, run_id: int) -> Dict[str, Any]:
 
 
 async def _wrap_ingest_supplier_stocks(project_id: int, run_id: int) -> Dict[str, Any]:
-    await _ingest_supplier_stocks(project_id=project_id, run_id=run_id)
+    result = await _ingest_supplier_stocks(project_id=project_id, run_id=run_id)
+    if isinstance(result, dict) and result.get("ok") is False:
+        return result
     return {
         "ok": True,
         "scope": "project",
         "project_id": project_id,
         "domain": "supplier_stocks",
         "finished_at": datetime.utcnow().isoformat(),
+        **(result if isinstance(result, dict) else {}),
     }
 
 
@@ -193,13 +196,21 @@ async def _wrap_wb_stock_total_daily(project_id: int, run_id: int) -> Dict[str, 
     return result
 
 
+def _prices_refresh_failure_reason(result: Dict[str, Any]) -> str | None:
+    stats = result.get("stats") if isinstance(result.get("stats"), dict) else {}
+    value = stats.get("reason") or result.get("detail")
+    return str(value) if value else None
+
+
 async def _wrap_frontend_prices(project_id: int, run_id: int) -> Dict[str, Any]:
     """Call frontend_prices ingestion directly (async) to avoid nested asyncio.run() calls.
     
     This avoids the issue where ingest_frontend_prices_task.run() calls asyncio.run()
     inside an already-running event loop (from run_async_safe).
     """
-    # Step A) Refresh WB admin prices snapshot synchronously (strict: fail-fast).
+    prices_refresh_warning: Dict[str, Any] | None = None
+
+    # Step A) Refresh WB admin prices snapshot synchronously.
     # This ensures frontend_prices report has fresh wb_discount/customer_price for SPP calc.
     try:
         from app.services.ingest import runs as runs_service
@@ -276,21 +287,34 @@ async def _wrap_frontend_prices(project_id: int, run_id: int) -> Dict[str, Any]:
         )
 
         if prices_result.get("status") != "success":
-            msg = (
-                "Failed to refresh WB admin prices (job 'prices') before frontend prices ingest; retry later."
-            )
-            logger.warning(
-                f"frontend_prices: {msg} project_id={project_id} run_id={run_id} "
-                f"prices_run_id={prices_run['id']} prices_status={prices_result.get('status')}"
-            )
-            return {
-                "ok": False,
-                "reason": msg,
-                "error_summary": msg,
-                "prices_refresh_run_id": int(prices_run["id"]),
-                "prices_refresh_status": prices_result.get("status"),
-                "prices_refresh_duration_ms": dt_ms,
-            }
+            prices_failure_reason = _prices_refresh_failure_reason(prices_result)
+            if prices_failure_reason == "wb_rate_limited":
+                prices_refresh_warning = {
+                    "reason": "wb_rate_limited",
+                    "run_id": int(prices_run["id"]),
+                    "duration_ms": dt_ms,
+                }
+                logger.warning(
+                    "frontend_prices: continuing storefront crawl with stale/missing admin prices "
+                    "because the independent WB prices API is rate limited "
+                    f"project_id={project_id} run_id={run_id} prices_run_id={prices_run['id']}"
+                )
+            else:
+                msg = (
+                    "Failed to refresh WB admin prices (job 'prices') before frontend prices ingest; retry later."
+                )
+                logger.warning(
+                    f"frontend_prices: {msg} project_id={project_id} run_id={run_id} "
+                    f"prices_run_id={prices_run['id']} prices_status={prices_result.get('status')}"
+                )
+                return {
+                    "ok": False,
+                    "reason": msg,
+                    "error_summary": msg,
+                    "prices_refresh_run_id": int(prices_run["id"]),
+                    "prices_refresh_status": prices_result.get("status"),
+                    "prices_refresh_duration_ms": dt_ms,
+                }
     except Exception as e:
         # Strict mode: do not continue.
         # #region agent log
@@ -319,7 +343,11 @@ async def _wrap_frontend_prices(project_id: int, run_id: int) -> Dict[str, Any]:
     from app.db import engine
     from app.ingest_frontend_prices import ingest_frontend_brand_prices
     from app.services.ingest.runs import get_run, set_run_progress
-    from app.services.wb_storefront_brands import extract_frontend_brand_ids
+    from app.services.wb_storefront_brands import (
+        extract_frontend_brand_ids,
+        extract_storefront_snapshot_scope,
+        resolve_frontend_catalog_template,
+    )
     from app.tasks.ingestion import _get_frontend_prices_proxy_config
 
     # Load WB settings: storefront brand scope, base_url_template, frontend_prices (limit, max_pages, sleep).
@@ -363,9 +391,13 @@ async def _wrap_frontend_prices(project_id: int, run_id: int) -> Dict[str, Any]:
             base_url_template = conn.execute(
                 text("SELECT value->>'url' AS url FROM app_settings WHERE key = 'frontend_prices.brand_base_url'")
             ).scalar_one_or_none()
-    base_url_template = (base_url_template or "").strip()
+    base_url_template = resolve_frontend_catalog_template(
+        (wb_row or {}).get("settings_json"),
+        base_url_template,
+    )
 
     brand_ids: List[int] = extract_frontend_brand_ids((wb_row or {}).get("settings_json"))
+    storefront_scope = extract_storefront_snapshot_scope((wb_row or {}).get("settings_json"))
 
     if not brand_ids:
         return {
@@ -373,8 +405,8 @@ async def _wrap_frontend_prices(project_id: int, run_id: int) -> Dict[str, Any]:
             "scope": "project",
             "project_id": project_id,
             "domain": "frontend_prices",
-            "reason": "no_storefront_brands_configured",
-            "error": "Добавьте бренд витрины WB в настройках Wildberries для загрузки frontend_prices.",
+            "reason": "no_storefront_seller_configured",
+            "error": "Добавьте ссылку на продавца WB в настройках витрины Wildberries.",
         }
 
     if not base_url_template:
@@ -384,7 +416,7 @@ async def _wrap_frontend_prices(project_id: int, run_id: int) -> Dict[str, Any]:
             "project_id": project_id,
             "domain": "frontend_prices",
             "reason": "base_url_template_not_configured",
-            "error": "frontend_prices.base_url_template not set (WB marketplace settings or app_settings) with {brand_id} placeholder.",
+            "error": "Шаблон загрузки витрины не настроен.",
         }
 
     limit = 50
@@ -518,6 +550,7 @@ async def _wrap_frontend_prices(project_id: int, run_id: int) -> Dict[str, Any]:
         logger.info(f"frontend_prices: brand {i+1}/{len(brand_ids)} brand_id={bid} project_id={project_id} run_id={run_id}")
         result = await ingest_frontend_brand_prices(
             brand_id=bid,
+            query_type=storefront_scope.query_type,
             base_url=base_url_template,
             max_pages=max_pages,
             sleep_ms=sleep_base_ms,
@@ -568,6 +601,8 @@ async def _wrap_frontend_prices(project_id: int, run_id: int) -> Dict[str, Any]:
         "status": status_kind,
         "finished_at": datetime.utcnow().isoformat(),
     }
+    if prices_refresh_warning is not None:
+        stats["prices_refresh_warning"] = prices_refresh_warning
     # So run error_message shows real cause (execute_ingest uses stats.reason/error/message)
     if not ok and failed_brands:
         first = failed_brands[0]

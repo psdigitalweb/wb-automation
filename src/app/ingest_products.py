@@ -22,7 +22,7 @@ from fastapi import APIRouter, BackgroundTasks, Path, Depends
 
 from app.db_products import ensure_schema, upsert_products
 from app.deps import get_current_active_user, get_project_membership
-from app.utils.get_project_marketplace_token import get_wb_credentials_for_project
+from app.utils.get_project_marketplace_token import get_wb_api_token_for_project
 from app.db import engine
 from app.services.marketplace_product_dual_write import mirror_wb_products_best_effort
 from sqlalchemy import text
@@ -265,9 +265,9 @@ async def ingest(
 
     # Get credentials from project_marketplaces (preferred) or fallback to env
     try:
-        credentials = get_wb_credentials_for_project(project_id)
-        if credentials:
-            token = credentials.get("token", "")
+        project_token = get_wb_api_token_for_project(project_id)
+        if project_token:
+            token = project_token
         else:
             # Not enabled or no connection - use env fallback
             token = os.getenv("WB_TOKEN", "") or ""
@@ -480,8 +480,8 @@ async def start_ingest_products(
     """
     # Check credentials before starting background task
     try:
-        credentials = get_wb_credentials_for_project(project_id)
-        if credentials is None:
+        project_token = get_wb_api_token_for_project(project_id)
+        if project_token is None:
             # Not enabled or no connection - allow env fallback
             pass
     except ValueError as e:

@@ -15,10 +15,20 @@ export type WBCatalogSort =
   | 'order_sum'
   | 'buyouts'
 
+export interface WBCatalogSize {
+  chrt_id: number | null
+  tech_size: string | null
+  wb_size: string | null
+  skus: string[]
+}
+
 export interface WBCatalogItem {
   nm_id: number
   vendor_code: string | null
   title: string | null
+  brand: string | null
+  subject_name: string | null
+  sizes: WBCatalogSize[]
   main_photo_url: string | null
   is_active: boolean
 

@@ -11,6 +11,8 @@ import {
   type WBProductLookupItem,
 } from '@/lib/apiClient'
 import { usePageTitle } from '@/hooks/usePageTitle'
+import { useConstrainedReportPeriod } from '@/hooks/useReportFilterOptions'
+import { ReportDataCoverage } from '@/components/ui-v2/ReportDataCoverage'
 import styles from './sales-trends.module.css'
 
 type Metric = 'revenue' | 'orders'
@@ -127,6 +129,9 @@ export default function SalesTrendsPage() {
   const [data, setData] = useState<SalesTrendsResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const { options: reportOptions } = useConstrainedReportPeriod(
+    projectId, 'sales-trends', periodFrom, periodTo, setPeriodFrom, setPeriodTo,
+  )
 
   useEffect(() => {
     const normalized = query.trim()
@@ -238,11 +243,11 @@ export default function SalesTrendsPage() {
 
         <label>
           Период с
-          <input type="date" value={periodFrom} onChange={(event) => setPeriodFrom(event.target.value)} />
+          <input type="date" value={periodFrom} min={reportOptions?.date_filter.min_date ?? undefined} max={periodTo || reportOptions?.date_filter.max_date || undefined} onChange={(event) => setPeriodFrom(event.target.value)} />
         </label>
         <label>
           Период по
-          <input type="date" value={periodTo} onChange={(event) => setPeriodTo(event.target.value)} />
+          <input type="date" value={periodTo} min={periodFrom || reportOptions?.date_filter.min_date || undefined} max={reportOptions?.date_filter.max_date ?? undefined} onChange={(event) => setPeriodTo(event.target.value)} />
         </label>
         <label>
           Окно среднего
@@ -254,6 +259,7 @@ export default function SalesTrendsPage() {
           {loading ? 'Строим…' : 'Построить график'}
         </button>
       </section>
+      <ReportDataCoverage options={reportOptions} periodFrom={periodFrom} periodTo={periodTo} />
 
       {error && <div className={styles.error}>{error}</div>}
 

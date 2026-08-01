@@ -4,6 +4,9 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { apiGetData } from '@/lib/apiClient'
 import { usePageTitle } from '@/hooks/usePageTitle'
+import { useReportFilterOptions } from '@/hooks/useReportFilterOptions'
+import { normalizeReportPeriod } from '@/lib/reportFilterOptions'
+import { ReportDataCoverage } from '@/components/ui-v2/ReportDataCoverage'
 import styles from './spp-dynamics.module.css'
 
 const PAGE_SIZE = 50
@@ -296,9 +299,11 @@ interface FiltersProps {
   filters: FiltersState
   categories: CategoryOption[]
   onChange: (patch: Partial<FiltersState>) => void
+  minDate?: string | null
+  maxDate?: string | null
 }
 
-function SppFilters({ filters, categories, onChange }: FiltersProps) {
+function SppFilters({ filters, categories, onChange, minDate, maxDate }: FiltersProps) {
   const [qInput, setQInput] = useState(filters.q)
 
   useEffect(() => {
@@ -319,6 +324,8 @@ function SppFilters({ filters, categories, onChange }: FiltersProps) {
         <input
           type="date"
           value={filters.dateFrom}
+          min={minDate ?? undefined}
+          max={filters.dateTo || maxDate || undefined}
           onChange={(event) => onChange({ dateFrom: event.target.value, page: 1 })}
         />
       </label>
@@ -327,6 +334,8 @@ function SppFilters({ filters, categories, onChange }: FiltersProps) {
         <input
           type="date"
           value={filters.dateTo}
+          min={filters.dateFrom || minDate || undefined}
+          max={maxDate ?? undefined}
           onChange={(event) => onChange({ dateTo: event.target.value, page: 1 })}
         />
       </label>
@@ -982,6 +991,7 @@ export default function SppDynamicsPage() {
   const searchParams = useSearchParams()
   const projectId = params.projectId as string
   usePageTitle('Динамика СПП', projectId)
+  const { options: reportOptions } = useReportFilterOptions(projectId, 'spp-dynamics')
 
   const filters = useMemo(() => parseFilters(new URLSearchParams(searchParams.toString())), [searchParams])
   const [summary, setSummary] = useState<SppSummary | null>(null)
@@ -1009,6 +1019,14 @@ export default function SppDynamicsPage() {
     const base = `/app/project/${projectId}/wildberries/spp-dynamics`
     router.push(qs.toString() ? `${base}?${qs.toString()}` : base)
   }, [filters, projectId, router])
+
+  useEffect(() => {
+    if (!reportOptions) return
+    const normalized = normalizeReportPeriod(reportOptions, filters.dateFrom, filters.dateTo)
+    if (normalized.from !== filters.dateFrom || normalized.to !== filters.dateTo) {
+      updateQuery({ dateFrom: normalized.from, dateTo: normalized.to, page: 1 })
+    }
+  }, [filters.dateFrom, filters.dateTo, reportOptions, updateQuery])
 
   const apiQuery = useMemo(() => {
     const qs = new URLSearchParams()
@@ -1164,7 +1182,14 @@ export default function SppDynamicsPage() {
         </div>
       </section>
 
-      <SppFilters filters={filters} categories={categories} onChange={updateQuery} />
+      <SppFilters
+        filters={filters}
+        categories={categories}
+        onChange={updateQuery}
+        minDate={reportOptions?.date_filter.min_date}
+        maxDate={reportOptions?.date_filter.max_date}
+      />
+      <ReportDataCoverage options={reportOptions} periodFrom={filters.dateFrom} periodTo={filters.dateTo} />
 
       {error && (
         <div className={styles.errorCard}>

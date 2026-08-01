@@ -1,12 +1,35 @@
 """Helper to get marketplace API credentials from project_marketplaces for ingestion."""
 
-from typing import Optional, Dict
+from typing import Optional, TypedDict
+
 from sqlalchemy import text
+
 from app.db import engine
 from app.utils.secrets_encryption import decrypt_token
 
-def get_wb_credentials_for_project(project_id: int) -> Optional[Dict[str, any]]:
-    """Get Wildberries API credentials (token + brand_id) from project_marketplaces for a specific project.
+
+class WBCredentials(TypedDict):
+    token: str
+    brand_id: Optional[int]
+
+
+def get_wb_api_token_for_project(project_id: int) -> Optional[str]:
+    """Return the required cabinet API token without storefront settings.
+
+    A missing or disabled marketplace connection returns ``None`` so legacy
+    callers may use their existing environment fallback. An enabled connection
+    must contain a usable token; storefront configuration is intentionally not
+    considered here.
+    """
+    pm = _get_project_marketplace_by_code(project_id, "wildberries")
+    if not pm or not pm.get("is_enabled", False):
+        return None
+
+    return _get_required_wb_token(pm)
+
+
+def get_wb_credentials_for_project(project_id: int) -> Optional[WBCredentials]:
+    """Compatibility adapter returning token plus optional legacy brand ID.
     
     Reads token from api_token_encrypted field and brand_id from settings_json.brand_id.
     
@@ -14,12 +37,13 @@ def get_wb_credentials_for_project(project_id: int) -> Optional[Dict[str, any]]:
         project_id: Project ID to get credentials for.
     
     Returns:
-        Dict with 'token' and 'brand_id' keys if found and enabled, None if not enabled or not found.
+        Dict with required ``token`` and optional ``brand_id`` keys if found and
+        enabled, None if not enabled or not found.
         
     Raises:
-        ValueError: If marketplace is enabled but missing token or brand_id (not connected).
+        ValueError: If marketplace is enabled but its token is missing or cannot
+        be decrypted.
     """
-    # Get project marketplace connection for wildberries
     pm = _get_project_marketplace_by_code(project_id, "wildberries")
     
     if not pm:
@@ -28,27 +52,7 @@ def get_wb_credentials_for_project(project_id: int) -> Optional[Dict[str, any]]:
     if not pm.get("is_enabled", False):
         return None  # Marketplace disabled - can use env fallback
     
-    # Read token from api_token_encrypted (preferred)
-    encrypted_token = pm.get("api_token_encrypted")
-    token = None
-    if encrypted_token:
-        token = decrypt_token(encrypted_token)
-        if token and token.upper() == "MOCK":
-            token = None
-    
-    # Fallback: try settings_json for backward compatibility
-    if not token:
-        settings = pm.get("settings_json")
-        if settings:
-            if isinstance(settings, str):
-                import json
-                settings = json.loads(settings)
-            
-            token = settings.get("api_token") or settings.get("token")
-            if token and token == "***":
-                token = None
-            elif token and token.upper() == "MOCK":
-                token = None
+    token = _get_required_wb_token(pm)
     
     # Read brand_id from settings_json
     settings = pm.get("settings_json")
@@ -65,17 +69,34 @@ def get_wb_credentials_for_project(project_id: int) -> Optional[Dict[str, any]]:
             except (ValueError, TypeError):
                 brand_id = None
     
-    # If enabled but missing credentials, raise error with actionable detail.
-    if encrypted_token and not token:
-        # Token exists in DB but couldn't be decrypted (usually missing/mismatched PROJECT_SECRETS_KEY).
-        raise ValueError("WB token is saved but cannot be decrypted (check PROJECT_SECRETS_KEY)")
-    if not token or not brand_id:
-        raise ValueError("WB not connected")
-    
     return {
         "token": token,
         "brand_id": brand_id
     }
+
+
+def _get_required_wb_token(pm: dict) -> str:
+    encrypted_token = pm.get("api_token_encrypted")
+    token = decrypt_token(encrypted_token) if encrypted_token else None
+    if token and token.upper() == "MOCK":
+        token = None
+
+    if not token:
+        settings = pm.get("settings_json")
+        if settings:
+            if isinstance(settings, str):
+                import json
+
+                settings = json.loads(settings)
+            token = settings.get("api_token") or settings.get("token")
+            if token and (token == "***" or token.upper() == "MOCK"):
+                token = None
+
+    if encrypted_token and not token:
+        raise ValueError("WB token is saved but cannot be decrypted (check PROJECT_SECRETS_KEY)")
+    if not token:
+        raise ValueError("WB not connected")
+    return str(token)
 
 
 def get_wb_analytics_token_for_project(project_id: int) -> Optional[str]:

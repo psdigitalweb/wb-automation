@@ -7,7 +7,9 @@ Goals:
 
 from __future__ import annotations
 
+import ssl
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 import httpx
 
@@ -34,9 +36,19 @@ def make_async_client(
     if not proxy_url:
         return httpx.AsyncClient(**base_kwargs)
 
+    proxy_config: Any = proxy_url
+    if urlparse(proxy_url).scheme.lower() == "https":
+        # Some proxy pools expose a reseller hostname while presenting the
+        # upstream provider certificate. Validate the CA chain and dates, but
+        # do not require the proxy certificate hostname to match the alias.
+        # Destination HTTPS certificates remain fully verified by httpx.
+        proxy_ssl_context = ssl.create_default_context()
+        proxy_ssl_context.check_hostname = False
+        proxy_config = httpx.Proxy(proxy_url, ssl_context=proxy_ssl_context)
+
     # Prefer modern `proxy=` (httpx>=0.23), fallback to `proxies=` if needed.
     try:
-        return httpx.AsyncClient(proxy=proxy_url, **base_kwargs)
+        return httpx.AsyncClient(proxy=proxy_config, **base_kwargs)
     except TypeError:
         try:
             return httpx.AsyncClient(proxies=proxy_url, **base_kwargs)

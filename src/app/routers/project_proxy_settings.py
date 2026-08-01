@@ -23,6 +23,10 @@ from app.schemas.project_proxy_settings import (
     ProjectProxyTestResponse,
 )
 from app.utils.proxy_secrets_encryption import decrypt_proxy_secret, encrypt_proxy_secret
+from app.services.wb_storefront_brands import (
+    WB_SELLER_CATALOG_URL_TEMPLATE,
+    get_project_frontend_brand_ids,
+)
 
 router = APIRouter(prefix="/api/v1", tags=["project-proxy-settings"])
 
@@ -165,6 +169,15 @@ async def test_project_proxy_settings_endpoint(
     port = int(settings.get("port") or 0)
     rotate_mode = (settings.get("rotate_mode") or "fixed")
     test_url = (settings.get("test_url") or "https://www.wildberries.ru")
+    seller_ids = get_project_frontend_brand_ids(int(project_id))
+    if seller_ids:
+        seller_id = seller_ids[0]
+        test_url = (
+            WB_SELLER_CATALOG_URL_TEMPLATE
+            .replace("{seller_id}", str(seller_id))
+            .replace("{brand_id}", str(seller_id))
+            .replace("{page}", "1")
+        )
 
     # Test makes sense only when enabled, to match how ingestion applies it.
     if not enabled:
@@ -196,7 +209,7 @@ async def test_project_proxy_settings_endpoint(
         password=password_plain,
     )
 
-    timeout_s = 20.0
+    timeout_s = 60.0 if seller_ids else 30.0
     timeout = httpx.Timeout(timeout_s, connect=timeout_s, read=timeout_s, write=timeout_s, pool=timeout_s)
 
     started = time.perf_counter()
@@ -205,10 +218,27 @@ async def test_project_proxy_settings_endpoint(
 
     for attempt in range(1, 3):  # 2 tries
         try:
-            async with make_async_client(timeout=timeout, proxy_url=proxy_url, follow_redirects=True) as client:
+            headers = None
+            if seller_ids:
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "Accept": "application/json",
+                    "Referer": "https://www.wildberries.ru/",
+                    "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+                }
+            async with make_async_client(
+                timeout=timeout,
+                proxy_url=proxy_url,
+                follow_redirects=True,
+                headers=headers,
+            ) as client:
                 r = await client.get(str(test_url))
                 last_status = int(r.status_code)
-                if 200 <= r.status_code < 400:
+                # For a proxy connectivity check, a WB 4xx (especially 429)
+                # still proves that the request reached WB through the proxy.
+                # 407 is proxy authentication failure and must stay an error.
+                if 200 <= r.status_code < 500 and r.status_code != 407:
                     elapsed_ms = int(round((time.perf_counter() - started) * 1000))
                     set_last_test(project_id=int(project_id), ok=True, error=None)
                     return ProjectProxyTestResponse(ok=True, status_code=last_status, elapsed_ms=elapsed_ms)

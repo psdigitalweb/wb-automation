@@ -11,6 +11,8 @@ from sqlalchemy import text
 
 from app.db import engine
 from app.deps import allow_client_portal_read
+from app.services.wb_storefront_brands import get_project_storefront_snapshot_scope
+from app.utils.report_period import enforce_report_period
 
 
 router = APIRouter(prefix="/api/v1/projects", tags=["wb-spp-dynamics"])
@@ -212,7 +214,9 @@ def _items_base_sql(search_clause: str, having_clause: str = "") -> str:
                 f.name
             FROM frontend_catalog_price_snapshots f
             JOIN product_scope ps ON ps.nm_id = f.nm_id
-            WHERE f.name IS NOT NULL
+            WHERE f.query_type = :storefront_query_type
+              AND f.query_value = ANY(:brand_ids)
+              AND f.name IS NOT NULL
             ORDER BY f.nm_id, f.snapshot_at DESC
         ),
         item_rows AS (
@@ -287,6 +291,7 @@ async def get_spp_dynamics_summary(
     _auth: dict = Depends(allow_client_portal_read),
 ) -> Dict[str, Any]:
     start, end = _resolve_period(date_from, date_to)
+    enforce_report_period(project_id, "spp-dynamics", start.date(), end.date())
     today_start, today_end = _resolve_day_bounds(spp_today_date)
     parsed_category_ids = _parse_category_ids(category_ids)
     category_clause = "AND subject_id = ANY(:category_ids)" if parsed_category_ids else ""
@@ -433,10 +438,12 @@ async def get_spp_dynamics_items(
     _auth: dict = Depends(allow_client_portal_read),
 ) -> Dict[str, Any]:
     start, end = _resolve_period(date_from, date_to)
+    enforce_report_period(project_id, "spp-dynamics", start.date(), end.date())
     today_start, today_end = _resolve_day_bounds(spp_today_date)
     sort_key = _parse_sort(sort)
     order_clause = _sort_to_order(sort_key)
 
+    storefront_scope = get_project_storefront_snapshot_scope(project_id)
     params: Dict[str, Any] = {
         "project_id": project_id,
         "date_from": start,
@@ -446,6 +453,8 @@ async def get_spp_dynamics_items(
         "limit": limit,
         "offset": offset,
         "min_delta": min_delta,
+        "brand_ids": storefront_scope.query_values,
+        "storefront_query_type": storefront_scope.query_type,
     }
 
     search_parts: List[str] = []
@@ -550,7 +559,16 @@ async def get_spp_dynamics_item_series(
     _auth: dict = Depends(allow_client_portal_read),
 ) -> Dict[str, Any]:
     start, end = _resolve_period(date_from, date_to)
-    params = {"project_id": project_id, "nm_id": nm_id, "date_from": start, "date_to": end}
+    enforce_report_period(project_id, "spp-dynamics", start.date(), end.date())
+    storefront_scope = get_project_storefront_snapshot_scope(project_id)
+    params = {
+        "project_id": project_id,
+        "nm_id": nm_id,
+        "date_from": start,
+        "date_to": end,
+        "brand_ids": storefront_scope.query_values,
+        "storefront_query_type": storefront_scope.query_type,
+    }
 
     product_sql = text(
         """
@@ -563,6 +581,8 @@ async def get_spp_dynamics_item_series(
                 SELECT f.name
                 FROM frontend_catalog_price_snapshots f
                 WHERE f.nm_id = p.nm_id
+                  AND f.query_type = :storefront_query_type
+                  AND f.query_value = ANY(:brand_ids)
                   AND f.name IS NOT NULL
                 ORDER BY f.snapshot_at DESC
                 LIMIT 1

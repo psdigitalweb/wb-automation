@@ -46,6 +46,18 @@ export default function ProjectProxySettingsPage() {
     return 'Прокси включен, но проверка ещё не выполнялась.'
   }, [enabled, loaded])
 
+  const hasUnsavedChanges = useMemo(() => {
+    if (!loaded) return false
+    return (
+      enabled !== loaded.enabled ||
+      scheme !== loaded.scheme ||
+      host.trim() !== loaded.host ||
+      port !== loaded.port ||
+      username !== (loaded.username || '') ||
+      changePassword
+    )
+  }, [changePassword, enabled, host, loaded, port, scheme, username])
+
   const load = async () => {
     try {
       setLoading(true)
@@ -138,6 +150,10 @@ export default function ProjectProxySettingsPage() {
       showToast(err, 5000)
       return
     }
+    if (hasUnsavedChanges) {
+      showToast('Сначала сохраните изменения, затем запустите проверку', 5000)
+      return
+    }
     setTesting(true)
     try {
       const res = await testProjectProxySettings(projectId)
@@ -175,7 +191,7 @@ export default function ProjectProxySettingsPage() {
 
       <div className="card" style={{ padding: 20, marginTop: 20 }}>
         <p style={{ color: '#666', marginBottom: 16 }}>
-          Настройка прокси применяется <strong>только</strong> для задачи загрузки витринных цен (frontend_prices).
+          Настройка прокси применяется <strong>только</strong> для загрузки витринных цен. Проверка выполняет тот же запрос к API витрины WB, что и сборщик.
         </p>
 
         {loading ? (
@@ -332,23 +348,8 @@ export default function ProjectProxySettingsPage() {
               </div>
 
               <div className={`${styles.field} ${styles.fullWidth}`}>
-                <label style={{ fontSize: 13, fontWeight: 500 }}>Test URL</label>
-                <input
-                  type="text"
-                  value={testUrl}
-                  onChange={(e) => setTestUrl(e.target.value)}
-                  placeholder="https://www.wildberries.ru"
-                  style={{
-                    width: '100%',
-                    padding: '8px 10px',
-                    borderRadius: 5,
-                    border: '1px solid #d1d5db',
-                    fontSize: 14,
-                    height: 38,
-                  }}
-                />
                 <div style={{ fontSize: 12, color: '#6b7280' }}>
-                  По умолчанию: <code>https://www.wildberries.ru</code>
+                  Проверяется каталог продавца, подключённого в настройках витрины Wildberries.
                 </div>
               </div>
             </div>
