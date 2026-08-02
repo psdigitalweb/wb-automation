@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
 import {
-  ApiError,
+  getApiErrorMessage,
   getOrderGeography,
   type OrderGeographyGroupBy,
   type OrderGeographyItem,
@@ -143,9 +143,8 @@ export default function OrderGeographyPage() {
         limit,
       })
       setData(result)
-    } catch (e: any) {
-      const err = e as ApiError
-      setError(err.detail || 'Не удалось загрузить отчёт')
+    } catch (error: unknown) {
+      setError(getApiErrorMessage(error, 'Не удалось загрузить отчёт'))
     } finally {
       setLoading(false)
     }

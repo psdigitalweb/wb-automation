@@ -27,6 +27,34 @@ export interface ApiError {
   debug: ApiDebug
 }
 
+function messageFromApiErrorValue(value: unknown): string | null {
+  if (typeof value === 'string') {
+    const message = value.trim()
+    return message || null
+  }
+
+  if (!value || typeof value !== 'object') return null
+
+  const errorValue = value as Record<string, unknown>
+  for (const key of ['message', 'reason', 'detail']) {
+    const candidate = errorValue[key]
+    if (typeof candidate === 'string' && candidate.trim()) return candidate.trim()
+  }
+
+  return null
+}
+
+export function getApiErrorMessage(error: unknown, fallback: string): string {
+  if (!error || typeof error !== 'object') return fallback
+
+  const apiError = error as Record<string, unknown>
+  return (
+    messageFromApiErrorValue(apiError.detail) ??
+    messageFromApiErrorValue(apiError.message) ??
+    fallback
+  )
+}
+
 export interface ApiResult<T> {
   data: T
   debug: ApiDebug
