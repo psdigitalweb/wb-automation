@@ -8,6 +8,8 @@ from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.services.taxes.profiles import normalize_tax_profile_params
+
 
 class TaxProfileResponse(BaseModel):
     project_id: int
@@ -22,6 +24,28 @@ class TaxProfileUpdate(BaseModel):
         None,
         description="Tax model parameters. If None, defaults to {}.",
     )
+
+    @model_validator(mode="after")
+    def validate_profile_params(self) -> "TaxProfileUpdate":
+        self.params_json = normalize_tax_profile_params(
+            self.model_code,
+            self.params_json or {},
+        )
+        return self
+
+
+class TaxProfileModelResponse(BaseModel):
+    model_code: str
+    title: str
+    short_title: str
+    description: str
+    formula: str
+    base_kind: str
+    tax_rate_label: str
+    default_tax_percent: float
+    default_vat_percent: float
+    vat_options: list[float] = Field(default_factory=list)
+    supported_views: list[str] = Field(default_factory=list)
 
 
 class TaxStatementResponse(BaseModel):

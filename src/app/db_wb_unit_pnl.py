@@ -14,6 +14,12 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from app.services.taxes.profiles import (
+    build_unit_pnl_tax_inputs,
+    calculate_unit_pnl_tax,
+    get_tax_profile_definition,
+)
+
 
 @dataclass
 class ReportScope:
@@ -117,6 +123,8 @@ def _compute_unit_pnl_tax_header(
     transfer_for_goods: object,
     wb_total_signed: object,
     cogs_cost_total: object,
+    sale_amount: object = 0,
+    profit_before_tax: object = 0,
 ) -> Dict[str, Any]:
     row = conn.execute(
         text(
@@ -139,33 +147,40 @@ def _compute_unit_pnl_tax_header(
 
     model_code = str(row.get("model_code") or "")
     params = row.get("params_json") or {}
-    if model_code != "wb_transfer_minus_vat_wb_cogs_tax":
+
+    try:
+        inputs = build_unit_pnl_tax_inputs(
+            sale_amount=sale_amount,
+            transfer_for_goods=transfer_for_goods,
+            wb_total_signed=wb_total_signed,
+            cogs_cost_total=cogs_cost_total,
+            profit_before_tax=profit_before_tax,
+        )
+        calculation = calculate_unit_pnl_tax(
+            model_code=model_code,
+            params=params,
+            inputs=inputs,
+        )
+    except ValueError as exc:
         return {
             "tax_model_code": model_code,
             "tax_base": 0.0,
             "tax_vat_amount": 0.0,
+            "tax_profit_amount": 0.0,
             "tax_expense_total": 0.0,
+            "tax_profile_error": str(exc),
         }
 
-    vat_rate = Decimal(str(params.get("vat_rate", "0")))
-    tax_rate = Decimal(str(params.get("tax_rate", "0")))
-    transfer = Decimal(str(transfer_for_goods or 0))
-    wb_take = Decimal(str(wb_total_signed or 0))
-    cogs = Decimal(str(cogs_cost_total or 0))
-
-    vat_amount = transfer * vat_rate
-    tax_base = transfer - vat_amount - wb_take - cogs
-    taxable_base = max(Decimal("0"), tax_base)
-    profit_tax_amount = taxable_base * tax_rate
-
+    definition = get_tax_profile_definition(model_code)
     return {
         "tax_model_code": model_code,
-        "tax_base": float(tax_base),
-        "tax_vat_amount": float(vat_amount),
-        "tax_profit_amount": float(profit_tax_amount),
-        "tax_expense_total": float(profit_tax_amount),
-        "tax_rate": float(tax_rate),
-        "tax_vat_rate": float(vat_rate),
+        "tax_profile_title": definition.title if definition else model_code,
+        "tax_base": float(calculation.tax_base),
+        "tax_vat_amount": float(calculation.vat_amount),
+        "tax_profit_amount": float(calculation.profit_tax_amount),
+        "tax_expense_total": float(calculation.tax_expense_total),
+        "tax_rate": float(calculation.tax_rate),
+        "tax_vat_rate": float(calculation.vat_rate),
     }
 
 
@@ -943,6 +958,8 @@ def get_wb_unit_pnl_table(
         transfer_for_goods=header_totals.get("transfer_for_goods"),
         wb_total_signed=header_totals.get("wb_total_signed"),
         cogs_cost_total=extended_header.get("cogs_cost_total"),
+        sale_amount=header_totals.get("sale"),
+        profit_before_tax=extended_header.get("full_profit_total"),
     )
     full_profit_before_tax = extended_header.get("full_profit_total")
     tax_expense_total = float(tax_header.get("tax_expense_total") or 0)
@@ -953,12 +970,14 @@ def get_wb_unit_pnl_table(
     )
     sale_for_margin = float(header_totals.get("sale") or 0)
     header_totals["tax_model_code"] = tax_header.get("tax_model_code")
+    header_totals["tax_profile_title"] = tax_header.get("tax_profile_title")
     header_totals["tax_base"] = tax_header.get("tax_base")
     header_totals["tax_vat_amount"] = tax_header.get("tax_vat_amount")
     header_totals["tax_profit_amount"] = tax_header.get("tax_profit_amount")
     header_totals["tax_expense_total"] = tax_expense_total
     header_totals["tax_rate"] = tax_header.get("tax_rate")
     header_totals["tax_vat_rate"] = tax_header.get("tax_vat_rate")
+    header_totals["tax_profile_error"] = tax_header.get("tax_profile_error")
     header_totals["full_profit_before_tax_total"] = full_profit_before_tax
     header_totals["full_profit_total"] = full_profit_after_tax
     header_totals["full_margin_pct_of_revenue"] = (

@@ -468,6 +468,13 @@ export default function WBUnitPnlPage() {
         href: `/app/project/${projectId}/settings/taxes`,
         action: 'Настроить налоги',
       })
+    } else if (headerTotals.tax_profile_error) {
+      issues.push({
+        title: 'Налоговый профиль требует настройки',
+        detail: 'Налоги не включены в расчёт прибыли',
+        href: `/app/project/${projectId}/settings/taxes`,
+        action: 'Проверить профиль',
+      })
     }
 
     return issues

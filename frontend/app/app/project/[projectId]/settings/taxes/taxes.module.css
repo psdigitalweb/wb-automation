@@ -1,0 +1,446 @@
+.page {
+  --tax-border: var(--color-border, rgba(15, 23, 42, 0.14));
+  --tax-surface: var(--color-surface, #fff);
+  --tax-surface-2: var(--color-surface-2, #f6f7f5);
+  --tax-text: var(--color-text, #17211b);
+  --tax-text-2: var(--color-text-2, #56615b);
+  --tax-text-3: var(--color-text-3, #7b8580);
+  --tax-accent: var(--color-accent, #276749);
+  --tax-accent-hover: var(--color-accent-hover, #20583d);
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 28px 24px 48px;
+  color: var(--tax-text);
+}
+
+.loading {
+  padding: 48px 24px;
+  color: var(--color-text-2, #56615b);
+  text-align: center;
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 20px;
+}
+
+.header h1 {
+  margin: 4px 0 6px;
+  font-size: 28px;
+  line-height: 1.15;
+}
+
+.header p,
+.description {
+  margin: 0;
+  color: var(--tax-text-2);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.eyebrow {
+  color: var(--tax-text-3);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.backLink {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 0.5px solid var(--tax-border);
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  background: var(--tax-surface);
+  color: var(--tax-text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.profileCard {
+  border: 0.5px solid var(--tax-border);
+  border-radius: 10px;
+  background: var(--tax-surface);
+  box-shadow: var(--shadow-sm, 0 1px 2px rgba(15, 23, 42, 0.04));
+}
+
+.profileCard {
+  padding: 20px;
+}
+
+.cardHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.cardHeader h2 {
+  margin: 8px 0 0;
+  font-size: 16px;
+  line-height: 1.3;
+}
+
+.profileMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--tax-text-3);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.badge,
+.active,
+.inactive {
+  min-height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.badge {
+  background: var(--color-accent-soft, #eaf5ef);
+  color: var(--color-accent-text, #276749);
+}
+
+.active {
+  background: var(--color-success-bg, #eaf7ef);
+  color: #247447;
+}
+
+.inactive {
+  background: var(--tax-surface-2);
+  color: var(--tax-text-3);
+}
+
+.description {
+  max-width: 760px;
+  margin-top: 12px;
+}
+
+.profileSelector {
+  margin-top: 18px;
+  display: grid;
+  gap: 7px;
+}
+
+.profileSelector > span,
+.fields label > span {
+  color: var(--tax-text);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.profileSelector select {
+  width: min(520px, 100%);
+}
+
+.rateGrid {
+  margin-top: 18px;
+  display: grid;
+  grid-template-columns: 0.8fr 0.8fr 1.4fr;
+  gap: 10px;
+}
+
+.rateCard,
+.applicationCard {
+  min-height: 112px;
+  padding: 14px;
+  border: 0.5px solid var(--tax-border);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  background: var(--tax-surface);
+}
+
+.rateCard > span,
+.applicationCard > span {
+  color: var(--tax-text-3);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.rateCard strong {
+  margin-top: 7px;
+  color: var(--tax-text);
+  font: 700 24px/1 var(--font-mono, ui-monospace, monospace);
+}
+
+.applicationCard strong {
+  margin-top: 8px;
+  font-size: 15px;
+}
+
+.rateCard small,
+.applicationCard small {
+  margin-top: auto;
+  color: var(--tax-text-2);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.applicationCard {
+  border-color: color-mix(in oklab, var(--tax-accent), transparent 70%);
+  background: var(--color-accent-soft, #eef8f2);
+}
+
+.calculationBlock {
+  margin-top: 16px;
+  padding: 14px;
+  border: 0.5px solid var(--tax-border);
+  border-radius: 8px;
+  background: var(--tax-surface-2);
+}
+
+.calculationTitle {
+  color: var(--tax-text-3);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.baseFormula {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.baseFormula span {
+  padding: 5px 8px;
+  border: 0.5px solid var(--tax-border);
+  border-radius: 6px;
+  background: var(--tax-surface);
+  color: var(--tax-text);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.baseFormula b {
+  color: var(--tax-text-3);
+  font-size: 12px;
+}
+
+.baseFormula .resultToken {
+  border-color: color-mix(in oklab, var(--tax-accent), transparent 65%);
+  background: var(--color-accent-soft, #eef8f2);
+  color: var(--color-accent-text, #276749);
+}
+
+.calculationBlock p {
+  margin: 10px 0 0;
+  color: var(--tax-text-2);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.formulaText {
+  margin-top: 9px;
+  color: var(--tax-text);
+  font: 600 12px/1.5 var(--font-mono, ui-monospace, monospace);
+}
+
+.form {
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 0.5px solid var(--tax-border);
+}
+
+.formHeader {
+  margin-bottom: 14px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.formHeader h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.formHeader span {
+  color: var(--tax-text-3);
+  font-size: 11px;
+}
+
+.fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.fields label {
+  display: grid;
+  gap: 7px;
+}
+
+.fields input,
+.fields select,
+.profileSelector select {
+  width: 100%;
+  height: 36px;
+  padding: 0 10px;
+  border: 0.5px solid var(--tax-border);
+  border-radius: 6px;
+  background: var(--tax-surface);
+  color: var(--tax-text);
+  font: 13px/1 var(--font-mono, ui-monospace, monospace);
+}
+
+.fields input:focus,
+.fields select:focus,
+.profileSelector select:focus {
+  outline: none;
+  border-color: var(--color-info, #3b82f6);
+  box-shadow: var(--shadow-focus, 0 0 0 3px rgba(39, 103, 73, 0.18));
+}
+
+.fields select:disabled {
+  color: var(--tax-text-2);
+  cursor: not-allowed;
+  opacity: 0.75;
+}
+
+.fields small {
+  color: var(--tax-text-3);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.scopeNote {
+  margin-top: 16px;
+  padding: 12px;
+  border-left: 3px solid var(--tax-accent);
+  border-radius: 0 6px 6px 0;
+  background: var(--color-accent-soft, #eef8f2);
+  color: var(--tax-text-2);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.scopeNote strong {
+  color: var(--tax-text);
+}
+
+.actions {
+  margin-top: 18px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.primaryButton {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--tax-accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.primaryButton:hover:not(:disabled) {
+  background: var(--tax-accent-hover);
+}
+
+.primaryButton:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.updatedAt {
+  color: var(--tax-text-3);
+  font-size: 11px;
+}
+
+.errorBanner,
+.successBanner,
+.warningBanner {
+  margin-bottom: 14px;
+  padding: 11px 13px;
+  border: 0.5px solid;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.errorBanner {
+  border-color: rgba(190, 40, 40, 0.25);
+  background: var(--color-danger-bg, #fff0f0);
+  color: #9b2c2c;
+}
+
+.successBanner {
+  border-color: rgba(36, 116, 71, 0.25);
+  background: var(--color-success-bg, #eaf7ef);
+  color: #247447;
+}
+
+.warningBanner {
+  border-color: rgba(183, 112, 0, 0.28);
+  background: var(--color-warning-bg, #fff8e8);
+  color: #805500;
+}
+
+.warningBanner code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+.reportLink {
+  margin-top: 14px;
+  display: inline-flex;
+  color: var(--color-accent-text, #276749);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+@media (max-width: 720px) {
+  .page {
+    padding: 20px 16px 40px;
+  }
+
+  .header,
+  .cardHeader,
+  .formHeader {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .fields {
+    grid-template-columns: 1fr;
+  }
+
+  .rateGrid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .applicationCard {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 460px) {
+  .rateGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .applicationCard {
+    grid-column: auto;
+  }
+}

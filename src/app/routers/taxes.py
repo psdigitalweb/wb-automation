@@ -12,6 +12,7 @@ from app.schemas.taxes import (
     BuildTaxRequest,
     BuildTaxResponse,
     TaxProfileResponse,
+    TaxProfileModelResponse,
     TaxProfileUpdate,
     TaxStatementResponse,
 )
@@ -25,9 +26,23 @@ from app.services.ingest.runs import create_run_queued
 from app.services.ingest.registry import IngestJobNotFound, get_job_definition
 from app.tasks.ingest_execute import execute_ingest
 from app.utils.periods import ensure_period
+from app.services.taxes.profiles import list_tax_profile_definitions
 
 
 router = APIRouter(prefix="/api/v1", tags=["taxes"])
+
+
+@router.get(
+    "/projects/{project_id}/taxes/profile-models",
+    response_model=List[TaxProfileModelResponse],
+)
+async def list_tax_profile_models_endpoint(
+    project_id: int = Path(..., description="Project ID"),
+    current_user: dict = Depends(get_current_active_user),
+    membership: dict = Depends(get_project_membership),
+):
+    """List tax profiles that can be configured for the project."""
+    return [TaxProfileModelResponse(**item) for item in list_tax_profile_definitions()]
 
 
 @router.get(

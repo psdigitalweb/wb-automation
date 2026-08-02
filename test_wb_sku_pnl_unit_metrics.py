@@ -6,6 +6,22 @@ import pytest
 from app import db_wb_unit_pnl
 from app.db_wb_unit_pnl import compute_extended_unit_metrics, compute_wb_take_signed, prorate_amount_by_overlap
 from app.services.wb_financial.sku_pnl_metrics import compute_unit_metrics
+from app.schemas.taxes import TaxProfileUpdate
+from app.services.taxes.profiles import (
+    AUSN_INCOME_EXPENSES_PROFILE_CODE,
+    AUSN_INCOME_PROFILE_CODE,
+    NPD_PROFILE_CODE,
+    OSNO_LLC_PROFILE_CODE,
+    USN_INCOME_EXPENSES_PROFILE_CODE,
+    USN_INCOME_PROFILE_CODE,
+    WB_UNIT_PNL_PROFILE_CODE,
+    build_unit_pnl_tax_inputs,
+    calculate_unit_pnl_tax,
+    calculate_wb_unit_pnl_tax,
+    coerce_tax_profile_params,
+    list_tax_profile_definitions,
+    normalize_tax_profile_params,
+)
 
 
 def test_sku_pnl_unit_metrics_example_from_ticket():
@@ -94,6 +110,138 @@ def test_unit_pnl_tax_profile_transfer_minus_vat_wb_cogs():
     assert result["tax_base"] == pytest.approx(50000.0)
     assert result["tax_profit_amount"] == pytest.approx(7500.0)
     assert result["tax_expense_total"] == pytest.approx(7500.0)
+
+
+def test_unit_pnl_tax_profile_registry_preserves_current_formula():
+    result = calculate_wb_unit_pnl_tax(
+        params={"vat_rate": "0.047619047619047616", "tax_rate": "0.15"},
+        transfer_for_goods=105000,
+        wb_total_signed=20000,
+        cogs_cost_total=30000,
+    )
+
+    assert result.vat_amount == pytest.approx(Decimal("5000"))
+    assert result.tax_base == pytest.approx(Decimal("50000"))
+    assert result.tax_expense_total == pytest.approx(Decimal("7500"))
+
+
+def test_unit_pnl_tax_profile_does_not_tax_negative_base():
+    result = calculate_wb_unit_pnl_tax(
+        params={"vat_rate": "0.05", "tax_rate": "0.15"},
+        transfer_for_goods=10000,
+        wb_total_signed=7000,
+        cogs_cost_total=4000,
+    )
+
+    assert result.tax_base == Decimal("-1500.00")
+    assert result.tax_expense_total == Decimal("0.00")
+
+
+def test_tax_profile_catalog_contains_management_models():
+    model_codes = {item["model_code"] for item in list_tax_profile_definitions()}
+
+    assert model_codes == {
+        WB_UNIT_PNL_PROFILE_CODE,
+        USN_INCOME_PROFILE_CODE,
+        USN_INCOME_EXPENSES_PROFILE_CODE,
+        AUSN_INCOME_PROFILE_CODE,
+        AUSN_INCOME_EXPENSES_PROFILE_CODE,
+        OSNO_LLC_PROFILE_CODE,
+        NPD_PROFILE_CODE,
+    }
+
+
+@pytest.mark.parametrize(
+    ("model_code", "tax_rate", "vat_rate", "expected_base", "expected_tax", "expected_total"),
+    [
+        (USN_INCOME_PROFILE_CODE, "0.06", "0", "100000", "6000", "6000"),
+        (USN_INCOME_EXPENSES_PROFILE_CODE, "0.15", "0", "30000", "4500", "4500"),
+        (AUSN_INCOME_PROFILE_CODE, "0.08", "0", "100000", "8000", "8000"),
+        (AUSN_INCOME_EXPENSES_PROFILE_CODE, "0.20", "0", "30000", "6000", "6000"),
+        (OSNO_LLC_PROFILE_CODE, "0.25", "0.18", "12000", "3000", "21000"),
+        (NPD_PROFILE_CODE, "0.04", "0", "100000", "4000", "4000"),
+    ],
+)
+def test_management_tax_profiles_calculate_from_declared_base(
+    model_code,
+    tax_rate,
+    vat_rate,
+    expected_base,
+    expected_tax,
+    expected_total,
+):
+    inputs = build_unit_pnl_tax_inputs(
+        sale_amount=100000,
+        transfer_for_goods=70000,
+        wb_total_signed=20000,
+        cogs_cost_total=30000,
+        profit_before_tax=30000,
+    )
+
+    result = calculate_unit_pnl_tax(
+        model_code=model_code,
+        params={"tax_rate": tax_rate, "vat_rate": vat_rate},
+        inputs=inputs,
+    )
+
+    assert result.tax_base == Decimal(expected_base)
+    assert result.primary_tax_amount == Decimal(expected_tax)
+    assert result.tax_expense_total == Decimal(expected_total)
+
+
+@pytest.mark.parametrize(
+    ("params", "message"),
+    [
+        ({"tax_rate": "0.15"}, "vat_rate"),
+        ({"vat_rate": "0.05", "tax_rate": "1.01"}, "tax_rate"),
+        ({"vat_rate": "invalid", "tax_rate": "0.15"}, "vat_rate"),
+    ],
+)
+def test_unit_pnl_tax_profile_rejects_invalid_rates(params, message):
+    with pytest.raises(ValueError, match=message):
+        normalize_tax_profile_params(WB_UNIT_PNL_PROFILE_CODE, params)
+
+
+def test_tax_profile_update_normalizes_registered_profile_rates():
+    profile = TaxProfileUpdate(
+        model_code=WB_UNIT_PNL_PROFILE_CODE,
+        params_json={"vat_rate": 0.05, "tax_rate": 0.15},
+    )
+
+    assert profile.params_json == {"vat_rate": "0.05", "tax_rate": "0.15"}
+
+
+def test_tax_profile_params_support_legacy_text_column():
+    params = coerce_tax_profile_params('{"vat_rate":"0.05","tax_rate":"0.15"}')
+
+    assert params == {"vat_rate": "0.05", "tax_rate": "0.15"}
+
+
+def test_unit_pnl_invalid_saved_tax_profile_does_not_break_report():
+    class FakeResult:
+        def mappings(self):
+            return self
+
+        def first(self):
+            return {
+                "model_code": WB_UNIT_PNL_PROFILE_CODE,
+                "params_json": {"vat_rate": "invalid", "tax_rate": "0.15"},
+            }
+
+    class FakeConn:
+        def execute(self, sql, params):
+            return FakeResult()
+
+    result = db_wb_unit_pnl._compute_unit_pnl_tax_header(
+        FakeConn(),
+        1,
+        transfer_for_goods=105000,
+        wb_total_signed=20000,
+        cogs_cost_total=30000,
+    )
+
+    assert result["tax_expense_total"] == 0
+    assert "vat_rate" in result["tax_profile_error"]
 
 
 def test_unit_pnl_extended_metrics_missing_packaging_keeps_full_profit_unknown():

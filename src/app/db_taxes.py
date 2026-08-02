@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import text
 
 from app.db import engine
+from app.services.taxes.profiles import coerce_tax_profile_params
 
 
 def get_tax_profile(project_id: int) -> Optional[Dict[str, Any]]:
@@ -33,7 +34,7 @@ def get_tax_profile(project_id: int) -> Optional[Dict[str, Any]]:
         return {
             "project_id": row["project_id"],
             "model_code": row["model_code"],
-            "params_json": row["params_json"],
+            "params_json": coerce_tax_profile_params(row["params_json"]),
             "updated_at": row["updated_at"],
         }
 
@@ -87,7 +88,7 @@ def upsert_tax_profile(
         return {
             "project_id": row["project_id"],
             "model_code": row["model_code"],
-            "params_json": row["params_json"],
+            "params_json": coerce_tax_profile_params(row["params_json"]),
             "updated_at": row["updated_at"],
         }
 

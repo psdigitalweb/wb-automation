@@ -942,12 +942,14 @@ export interface WBUnitPnlResponse {
     marketplace_additional_costs_total?: number | null
     warehouse_labor_costs_total?: number | null
     tax_model_code?: string | null
+    tax_profile_title?: string | null
     tax_base?: number | null
     tax_vat_amount?: number | null
     tax_profit_amount?: number | null
     tax_expense_total?: number | null
     tax_rate?: number | null
     tax_vat_rate?: number | null
+    tax_profile_error?: string | null
     full_profit_before_tax_total?: number | null
     full_profit_total?: number | null
     full_margin_pct_of_revenue?: number | null
