@@ -1,6 +1,11 @@
+import inspect
 from types import SimpleNamespace
 
 from app import api_wb_price_discrepancies as price_api
+
+
+def test_price_analytics_endpoint_runs_blocking_sql_in_threadpool():
+    assert not inspect.iscoroutinefunction(price_api.get_wb_price_discrepancies)
 
 
 def _filters(**overrides):

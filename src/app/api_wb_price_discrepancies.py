@@ -1207,7 +1207,7 @@ async def get_wb_price_apply_status(
 
 
 @router.get("/{project_id}/wildberries/price-discrepancies")
-async def get_wb_price_discrepancies(
+def get_wb_price_discrepancies(
     project_id: int = Path(..., description="Project ID"),
     q: Optional[str] = Query(None, description="Search by article/nmID/title"),
     category_ids: Optional[str] = Query(
@@ -1277,244 +1277,22 @@ async def get_wb_price_discrepancies(
     total_count = 0
     rrp_snapshot_count = 0
     
-    # #region agent log
-    import json
-    try:
-        with open(r'd:\Work\EcomCore\.cursor\debug.log', 'a', encoding='utf-8') as f:
-            f.write(json.dumps({
-                "sessionId": "debug-session",
-                "runId": "run1",
-                "hypothesisId": "H1",
-                "location": "api_wb_price_discrepancies.py:578",
-                "message": "get_wb_price_discrepancies: before SQL execution",
-                "data": {
-                    "project_id": project_id,
-                    "filters_only_below_rrp": filters.only_below_rrp,
-                },
-                "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
-            }, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
-    # #endregion
-    
     with engine.connect() as conn:
-        # #region agent log
-        # Diagnostic: Check data availability at each step
-        try:
-            # Check rrp_run (critical for JOIN)
-            rrp_run_check = conn.execute(
-                text("SELECT MAX(snapshot_at) AS run_at FROM rrp_snapshots WHERE project_id = :project_id"),
-                {"project_id": project_id},
-            ).scalar()
-            
-            # Check rrp_snapshots count
-            rrp_count = conn.execute(
+        rrp_snapshot_count = int(
+            conn.execute(
                 text("SELECT COUNT(*) FROM rrp_snapshots WHERE project_id = :project_id"),
                 {"project_id": project_id},
-            ).scalar() or 0
-            rrp_snapshot_count = int(rrp_count)
-            
-            # Check products count
-            products_count = conn.execute(
-                text("SELECT COUNT(*) FROM v_wb_product_source WHERE project_id = :project_id AND vendor_code_norm IS NOT NULL"),
-                {"project_id": project_id},
-            ).scalar() or 0
-            
-            frontend_count = 0
-            if params.get("brand_ids"):
-                frontend_count = conn.execute(
-                    text("""
-                        SELECT COUNT(*) FROM frontend_catalog_price_snapshots
-                        WHERE query_type = :storefront_query_type AND query_value = ANY(:brand_ids)
-                    """),
-                    {
-                        "brand_ids": params["brand_ids"],
-                        "storefront_query_type": params["storefront_query_type"],
-                    },
-                ).scalar() or 0
-            
-            # Check Internal Data availability
-            internal_data_count = conn.execute(
-                text("""
-                    SELECT COUNT(*) FROM internal_product_prices ipp
-                    JOIN internal_data_snapshots ids ON ipp.snapshot_id = ids.id
-                    WHERE ids.project_id = :project_id AND ipp.rrp IS NOT NULL
-                """),
-                {"project_id": project_id},
-            ).scalar() or 0
-            
-            # Check mapping: products with vendor_code_norm that match internal_sku
-            mapping_count = conn.execute(
-                text("""
-                    SELECT COUNT(DISTINCT p.vendor_code_norm) FROM v_wb_product_source p
-                    JOIN internal_products ip ON ip.internal_sku = p.vendor_code_norm
-                    JOIN internal_product_prices ipp ON ipp.internal_product_id = ip.id
-                    JOIN internal_data_snapshots ids ON ipp.snapshot_id = ids.id
-                    WHERE ids.project_id = :project_id AND p.project_id = :project_id
-                      AND ipp.rrp IS NOT NULL
-                """),
-                {"project_id": project_id},
-            ).scalar() or 0
-            
-            with open(r'd:\Work\EcomCore\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                f.write(json.dumps({
-                    "sessionId": "debug-session",
-                    "runId": "run1",
-                    "hypothesisId": "H1",
-                    "location": "api_wb_price_discrepancies.py:620",
-                    "message": "get_wb_price_discrepancies: data availability check",
-                    "data": {
-                        "project_id": project_id,
-                        "rrp_snapshots_count": rrp_count,
-                        "rrp_run_max_snapshot_at": rrp_run_check.isoformat() if rrp_run_check else None,
-                        "products_with_vendor_code_norm": products_count,
-                        "frontend_catalog_price_snapshots_count": frontend_count,
-                        "internal_data_rrp_count": internal_data_count,
-                        "products_mapped_to_internal_data": mapping_count,
-                    },
-                    "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
-                }, ensure_ascii=False) + "\n")
-        except Exception as e:
-            try:
-                with open(r'd:\Work\EcomCore\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                    f.write(json.dumps({
-                        "sessionId": "debug-session",
-                        "runId": "run1",
-                        "hypothesisId": "H1",
-                        "location": "api_wb_price_discrepancies.py:650",
-                        "message": "get_wb_price_discrepancies: data availability check ERROR",
-                        "data": {"error": str(e)},
-                        "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
-                    }, ensure_ascii=False) + "\n")
-            except Exception:
-                pass
-        # #endregion
-        
+            ).scalar()
+            or 0
+        )
+
         result = conn.execute(text(sql), params).mappings().all()
-        
-        # #region agent log
-        try:
-            with open(r'd:\Work\EcomCore\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                f.write(json.dumps({
-                    "sessionId": "debug-session",
-                    "runId": "run1",
-                    "hypothesisId": "H2",
-                    "location": "api_wb_price_discrepancies.py:680",
-                    "message": "get_wb_price_discrepancies: SQL result rows",
-                    "data": {
-                        "project_id": project_id,
-                        "rows_returned": len(result),
-                    },
-                    "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
-                }, ensure_ascii=False) + "\n")
-        except Exception:
-            pass
-        # #endregion
         
         for row in result:
             row_dict = dict(row)
             total_count = int(row_dict.get("total_count", total_count or 0))
             items.append(_row_to_item(row_dict))
         
-        # #region agent log
-        # If no data, check intermediate CTE results
-        if total_count == 0:
-            try:
-                # Test rrp_latest CTE directly
-                rrp_latest_test = conn.execute(
-                    text("""
-                        WITH
-                        rrp_run AS (
-                            SELECT MAX(snapshot_at) AS run_at FROM rrp_snapshots WHERE project_id = :project_id
-                        ),
-                        rrp_latest AS (
-                            SELECT s.vendor_code_norm, MAX(s.rrp_price) AS rrp_price
-                            FROM rrp_snapshots s
-                            JOIN rrp_run r ON s.snapshot_at = r.run_at
-                            WHERE s.project_id = :project_id
-                            GROUP BY s.vendor_code_norm
-                        )
-                        SELECT COUNT(*) AS count FROM rrp_latest
-                    """),
-                    {"project_id": project_id},
-                ).scalar() or 0
-                
-                # Test base CTE (products with joins)
-                base_test = conn.execute(
-                    text("""
-                        WITH
-                        rrp_run AS (
-                            SELECT MAX(snapshot_at) AS run_at FROM rrp_snapshots WHERE project_id = :project_id
-                        ),
-                        front_run AS (
-                            SELECT MAX(f.snapshot_at) AS run_at
-                            FROM frontend_catalog_price_snapshots f
-                            WHERE f.query_type = :storefront_query_type AND f.query_value = ANY(:brand_ids)
-                        ),
-                        rrp_latest AS (
-                            SELECT s.vendor_code_norm, MAX(s.rrp_price) AS rrp_price
-                            FROM rrp_snapshots s
-                            JOIN rrp_run r ON s.snapshot_at = r.run_at
-                            WHERE s.project_id = :project_id
-                            GROUP BY s.vendor_code_norm
-                        ),
-                        front_latest AS (
-                            SELECT DISTINCT ON (f.nm_id) f.nm_id::bigint AS nm_id, f.price_product AS showcase_price
-                            FROM frontend_catalog_price_snapshots f
-                            JOIN front_run r ON f.snapshot_at = r.run_at
-                            WHERE f.query_type = :storefront_query_type AND f.query_value = ANY(:brand_ids)
-                            ORDER BY f.nm_id, f.snapshot_at DESC
-                        )
-                        SELECT 
-                            COUNT(*) AS products_total,
-                            COUNT(rrp_latest.vendor_code_norm) AS products_with_rrp,
-                            COUNT(front_latest.nm_id) AS products_with_frontend,
-                            COUNT(CASE WHEN rrp_latest.vendor_code_norm IS NOT NULL AND front_latest.nm_id IS NOT NULL THEN 1 END) AS products_with_both
-                        FROM v_wb_product_source p
-                        LEFT JOIN rrp_latest ON btrim(rrp_latest.vendor_code_norm) = btrim(p.vendor_code_norm)
-                        LEFT JOIN front_latest ON front_latest.nm_id = p.nm_id
-                        WHERE p.project_id = :project_id AND p.vendor_code_norm IS NOT NULL
-                    """),
-                    {
-                        "project_id": project_id,
-                        "brand_ids": params["brand_ids"],
-                        "storefront_query_type": params["storefront_query_type"],
-                    },
-                ).mappings().first()
-                
-                with open(r'd:\Work\EcomCore\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                    f.write(json.dumps({
-                        "sessionId": "debug-session",
-                        "runId": "run1",
-                        "hypothesisId": "H3",
-                        "location": "api_wb_price_discrepancies.py:720",
-                        "message": "get_wb_price_discrepancies: CTE analysis (empty result)",
-                        "data": {
-                            "project_id": project_id,
-                            "rrp_latest_count": rrp_latest_test,
-                            "products_total": base_test.get("products_total") if base_test else 0,
-                            "products_with_rrp": base_test.get("products_with_rrp") if base_test else 0,
-                            "products_with_frontend": base_test.get("products_with_frontend") if base_test else 0,
-                            "products_with_both": base_test.get("products_with_both") if base_test else 0,
-                            "only_below_rrp_filter": filters.only_below_rrp,
-                        },
-                        "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
-                    }, ensure_ascii=False) + "\n")
-            except Exception as e:
-                try:
-                    with open(r'd:\Work\EcomCore\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                        f.write(json.dumps({
-                            "sessionId": "debug-session",
-                            "runId": "run1",
-                            "hypothesisId": "H3",
-                            "location": "api_wb_price_discrepancies.py:750",
-                            "message": "get_wb_price_discrepancies: CTE analysis ERROR",
-                            "data": {"error": str(e)},
-                            "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
-                        }, ensure_ascii=False) + "\n")
-                except Exception:
-                    pass
-        # #endregion
     
     end_time = datetime.now(timezone.utc)
     elapsed_ms = (end_time - start_time).total_seconds() * 1000
