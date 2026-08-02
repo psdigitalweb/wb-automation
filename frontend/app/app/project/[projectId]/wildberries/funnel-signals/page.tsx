@@ -215,6 +215,18 @@ function defaultPeriod(): { period_from: string; period_to: string } {
   }
 }
 
+function countDaysInclusive(from: string, to: string): number {
+  const fromParts = from.split('-').map(Number)
+  const toParts = to.split('-').map(Number)
+  if (fromParts.length !== 3 || toParts.length !== 3) return 0
+  const [fromYear, fromMonth, fromDay] = fromParts
+  const [toYear, toMonth, toDay] = toParts
+  const start = Date.UTC(fromYear, fromMonth - 1, fromDay)
+  const end = Date.UTC(toYear, toMonth - 1, toDay)
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return 0
+  return Math.floor((end - start) / 86_400_000) + 1
+}
+
 const SIGNAL_CODES: { value: string; label: string }[] = [
   { value: '', label: 'Любой' },
   { value: 'insufficient_data', label: 'Недостаточно данных' },
@@ -511,6 +523,53 @@ export default function FunnelSignalsPage() {
   const totalPages = meta?.pages ?? 1
   const canGoPrev = (meta?.page ?? 1) > 1
   const canGoNext = (meta?.page ?? 1) < totalPages
+  const rowsHaveCtrData = useMemo(
+    () => data?.some(
+      (row) => row.impressions > 0 || row.card_clicks > 0 || row.funnel_ctr_percent != null,
+    ) ?? false,
+    [data],
+  )
+  const selectedPeriodDays = useMemo(
+    () => countDaysInclusive(periodFrom, periodTo),
+    [periodFrom, periodTo],
+  )
+  const ctrCoveredDays = useMemo(() => {
+    const ctrCoverage = reportOptions?.datasets.find(
+      (dataset) => dataset.code === 'wb_funnel_ctr_daily',
+    )
+    if (!ctrCoverage || !periodFrom || !periodTo) return 0
+    return ctrCoverage.segments.reduce((total, segment) => {
+      const overlapFrom = segment.start > periodFrom ? segment.start : periodFrom
+      const overlapTo = segment.end < periodTo ? segment.end : periodTo
+      return total + countDaysInclusive(overlapFrom, overlapTo)
+    }, 0)
+  }, [periodFrom, periodTo, reportOptions])
+  const hasCtrDataInSelectedPeriod = ctrCoveredDays > 0 || rowsHaveCtrData
+  const hasPartialCtrCoverage = hasCtrDataInSelectedPeriod && ctrCoveredDays < selectedPeriodDays
+  const ctrCoverageLabel = !periodFrom || !periodTo
+    ? 'Выберите период'
+    : hasCtrDataInSelectedPeriod
+      ? ctrCoveredDays > 0
+        ? `${ctrCoveredDays}/${selectedPeriodDays} дн.`
+        : 'CTR доступен'
+      : 'Нет данных'
+  const ctrCoverageTitle = !periodFrom || !periodTo
+    ? 'Выберите период, чтобы проверить наличие CTR-данных'
+    : !hasCtrDataInSelectedPeriod
+      ? 'Нет CTR-данных за выбранный период'
+      : hasPartialCtrCoverage
+        ? `CTR-данные доступны за ${ctrCoveredDays} из ${selectedPeriodDays} дней`
+        : 'CTR-данные доступны за весь выбранный период'
+  const hasCtrData = rowsHaveCtrData
+  const hasEnterpriseStockData = useMemo(
+    () => data?.some((row) => row.enterprise_stock_qty != null) ?? false,
+    [data],
+  )
+  const visibleColumnCount = 10 + (hasEnterpriseStockData ? 1 : 0) + (hasCtrData ? 2 : 0)
+
+  useEffect(() => {
+    if (!hasCtrDataInSelectedPeriod && ctrMode !== 'raw') setCtrMode('raw')
+  }, [ctrMode, hasCtrDataInSelectedPeriod])
 
   const handleSort = (field: 'opens' | 'cart_rate' | 'cart_to_order' | 'order_rate' | 'revenue') => {
     const nextOrder = sortBy === field ? (sortOrder === 'desc' ? 'asc' : 'desc') : 'desc'
@@ -687,34 +746,43 @@ export default function FunnelSignalsPage() {
             <strong>{formatInt(meta.total)}</strong>
           </div>
         )}
-        <label className={styles.buttonPrimary} style={{ cursor: importing ? 'wait' : 'pointer' }}>
-          {importing ? 'Загрузка…' : 'Загрузить XLSX / CSV / ZIP'}
-          <input
-            type="file"
-            accept=".xlsx,.csv,.zip"
-            hidden
-            disabled={importing}
-            onChange={async (event) => {
-              const selected = event.target.files?.[0]
-              event.target.value = ''
-              if (!selected || !projectId) return
-              setImporting(true)
-              setImportMessage(null)
-              setError(null)
-              try {
-                const result = await uploadWBFunnelReport(projectId, selected)
-                setImportMessage(result.duplicate
-                  ? `Отчёт уже загружен: ${result.rows_total} строк`
-                  : `Загружено ${result.rows_total} строк за ${result.period_from} — ${result.period_to}`)
-                load(1)
-              } catch (e: unknown) {
-                setError((e as { detail?: string })?.detail || 'Не удалось загрузить отчёт')
-              } finally {
-                setImporting(false)
-              }
-            }}
-          />
-        </label>
+        <div className={styles.uploadBlock}>
+          <label
+            className={`${styles.buttonPrimary} ${styles.uploadButton}`}
+            style={{ cursor: importing ? 'wait' : 'pointer' }}
+            title="Загрузить отчёт Wildberries с показами и переходами для расчёта CTR"
+          >
+            {importing ? 'Загрузка CTR-отчёта…' : 'Загрузить CTR-отчёт'}
+            <input
+              type="file"
+              accept=".xlsx,.csv,.zip"
+              hidden
+              disabled={importing}
+              onChange={async (event) => {
+                const selected = event.target.files?.[0]
+                event.target.value = ''
+                if (!selected || !projectId) return
+                setImporting(true)
+                setImportMessage(null)
+                setError(null)
+                try {
+                  const result = await uploadWBFunnelReport(projectId, selected)
+                  setImportMessage(result.duplicate
+                    ? `Отчёт уже загружен: ${result.rows_total} строк`
+                    : `Загружено ${result.rows_total} строк за ${result.period_from} — ${result.period_to}`)
+                  load(1)
+                } catch (e: unknown) {
+                  setError((e as { detail?: string })?.detail || 'Не удалось загрузить отчёт')
+                } finally {
+                  setImporting(false)
+                }
+              }}
+            />
+          </label>
+          <span className={styles.uploadHint}>
+            Показы и переходы для расчёта CTR · XLSX, CSV или ZIP
+          </span>
+        </div>
       </header>
 
       {importMessage && <div style={{ marginBottom: 16, color: '#166534' }}>{importMessage}</div>}
@@ -725,11 +793,30 @@ export default function FunnelSignalsPage() {
           <h3>Фильтры</h3>
           <div className={styles.filterGrid}>
             <div className={styles.field}>
-              <label className={styles.fieldLabel}>Режим CTR</label>
+              <div className={styles.fieldLabelRow}>
+                <label className={styles.fieldLabel} htmlFor="ctr-mode">Режим CTR</label>
+                <span
+                  id="ctr-coverage-hint"
+                  className={`${styles.ctrCoverage} ${
+                    !hasCtrDataInSelectedPeriod
+                      ? styles.ctrCoverageEmpty
+                      : hasPartialCtrCoverage
+                        ? styles.ctrCoveragePartial
+                        : ''
+                  }`}
+                  title={ctrCoverageTitle}
+                >
+                  {ctrCoverageLabel}
+                </span>
+              </div>
               <select
+                id="ctr-mode"
                 value={ctrMode}
                 onChange={(e) => setCtrMode(e.target.value as 'raw' | 'quality_filtered')}
                 className={styles.control}
+                disabled={!hasCtrDataInSelectedPeriod}
+                aria-describedby="ctr-coverage-hint"
+                title={ctrCoverageTitle}
               >
                 <option value="raw">Raw / blended</option>
                 <option value="quality_filtered">Quality filtered</option>
@@ -872,9 +959,9 @@ export default function FunnelSignalsPage() {
                 <col style={{ width: 110 }} />
                 <col style={{ width: '16%' }} />
                 <col style={{ width: 70 }} />
-                <col style={{ width: 70 }} />
-                <col style={{ width: 90 }} />
-                <col style={{ width: 90 }} />
+                {hasEnterpriseStockData && <col style={{ width: 70 }} />}
+                {hasCtrData && <col style={{ width: 90 }} />}
+                {hasCtrData && <col style={{ width: 90 }} />}
                 <col style={{ width: 90 }} />
                 <col style={{ width: 85 }} />
                 <col style={{ width: 95 }} />
@@ -893,18 +980,24 @@ export default function FunnelSignalsPage() {
                   >
                     FBO
                   </th>
-                  <th
-                    style={{ padding: '10px 8px', textAlign: 'right', fontWeight: 600, lineHeight: 1.3 }}
-                    title="Остаток предприятия из каталога/РРЦ (если загружено)"
-                  >
-                    Склад
-                  </th>
-                  <th style={{ padding: '10px 8px', textAlign: 'right', fontWeight: 600 }} title="Показы из загруженного отчёта WB">
-                    Показы
-                  </th>
-                  <th style={{ padding: '10px 8px', textAlign: 'right', fontWeight: 600 }} title="SUM(переходы) / SUM(показы), не среднее reported CTR">
-                    WB funnel CTR
-                  </th>
+                  {hasEnterpriseStockData && (
+                    <th
+                      style={{ padding: '10px 8px', textAlign: 'right', fontWeight: 600, lineHeight: 1.3 }}
+                      title="Остаток предприятия из каталога/РРЦ (если загружено)"
+                    >
+                      Склад
+                    </th>
+                  )}
+                  {hasCtrData && (
+                    <th style={{ padding: '10px 8px', textAlign: 'right', fontWeight: 600 }} title="Показы из загруженного отчёта WB">
+                      Показы
+                    </th>
+                  )}
+                  {hasCtrData && (
+                    <th style={{ padding: '10px 8px', textAlign: 'right', fontWeight: 600 }} title="SUM(переходы) / SUM(показы), не среднее reported CTR">
+                      WB funnel CTR
+                    </th>
+                  )}
                   <th
                     style={{
                       padding: '10px 8px',
@@ -1008,7 +1101,7 @@ export default function FunnelSignalsPage() {
               <tbody>
                 {data.length === 0 ? (
                   <tr>
-                    <td colSpan={11} style={{ padding: 24, textAlign: 'center', color: '#6b7280' }}>
+                    <td colSpan={visibleColumnCount} style={{ padding: 24, textAlign: 'center', color: '#6b7280' }}>
                       Нет данных за выбранный период
                     </td>
                   </tr>
@@ -1075,16 +1168,22 @@ export default function FunnelSignalsPage() {
                       >
                         {formatInt(row.fbo_stock_qty)}
                       </td>
-                      <td
-                        style={{ padding: '8px 6px', textAlign: 'right' }}
-                        title={row.enterprise_stock_updated_at ? `Обновлено: ${new Date(row.enterprise_stock_updated_at).toLocaleString('ru-RU')}` : ''}
-                      >
-                        {formatInt(row.enterprise_stock_qty)}
-                      </td>
-                      <td style={{ padding: '8px 6px', textAlign: 'right' }}>{formatInt(row.impressions)}</td>
-                      <td style={{ padding: '8px 6px', textAlign: 'right' }} title={row.ctr_quality_flags.join(', ')}>
-                        {formatPctPoints(row.funnel_ctr_percent)}
-                      </td>
+                      {hasEnterpriseStockData && (
+                        <td
+                          style={{ padding: '8px 6px', textAlign: 'right' }}
+                          title={row.enterprise_stock_updated_at ? `Обновлено: ${new Date(row.enterprise_stock_updated_at).toLocaleString('ru-RU')}` : ''}
+                        >
+                          {formatInt(row.enterprise_stock_qty)}
+                        </td>
+                      )}
+                      {hasCtrData && (
+                        <td style={{ padding: '8px 6px', textAlign: 'right' }}>{formatInt(row.impressions)}</td>
+                      )}
+                      {hasCtrData && (
+                        <td style={{ padding: '8px 6px', textAlign: 'right' }} title={row.ctr_quality_flags.join(', ')}>
+                          {formatPctPoints(row.funnel_ctr_percent)}
+                        </td>
+                      )}
                       <td style={{ padding: '8px 6px', textAlign: 'right' }}>{formatInt(row.opens)}</td>
                       <td style={{ padding: '8px 6px', textAlign: 'right' }}>{formatPct(row.cart_rate)}</td>
                       <td style={{ padding: '8px 6px', textAlign: 'right' }}>{formatPct(row.cart_to_order)}</td>

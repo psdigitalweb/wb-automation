@@ -90,6 +90,25 @@
   line-height: 1.15;
 }
 
+.uploadBlock {
+  width: 270px;
+  max-width: 100%;
+  flex: 0 0 auto;
+  display: grid;
+  gap: 5px;
+}
+
+.uploadButton {
+  width: 100%;
+}
+
+.uploadHint {
+  color: var(--color-text-3, #6b7280);
+  font-size: 10px;
+  line-height: 1.3;
+  text-align: center;
+}
+
 .filterCard,
 .tableCard,
 .errorCard {
@@ -146,6 +165,36 @@
   font-weight: 500;
   letter-spacing: 0;
   line-height: 1.25;
+}
+
+.fieldLabelRow {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.fieldLabelRow .fieldLabel {
+  margin-bottom: 4px;
+}
+
+.ctrCoverage {
+  overflow: hidden;
+  color: var(--color-success, #15803d);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ctrCoveragePartial {
+  color: var(--color-warning, #a16207);
+}
+
+.ctrCoverageEmpty {
+  color: var(--color-text-3, #6b7280);
 }
 
 .control {
@@ -708,6 +757,10 @@
   .headerMeta {
     width: 100%;
     text-align: left;
+  }
+
+  .uploadBlock {
+    width: 100%;
   }
 
   .filterGrid {
