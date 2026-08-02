@@ -103,7 +103,7 @@ export const railItems: Array<RailItemConfig | { divider: true }> = [
     id: 'compare',
     label: 'Цены',
     icon: 'arrowsDiff',
-    href: (projectId) => (projectId ? `/app/project/${projectId}/wildberries/price-discrepancies` : '/app/projects'),
+    href: (projectId) => (projectId ? `/app/project/${projectId}/wildberries/price-analytics` : '/app/projects'),
     match: () => false,
     requiresProject: true,
     disabled: true,

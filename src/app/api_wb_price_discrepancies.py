@@ -50,6 +50,12 @@ SortKey = Literal[
     "rrp_price_asc",
     "showcase_price_desc",
     "showcase_price_asc",
+    "wb_admin_price_desc",
+    "wb_admin_price_asc",
+    "wb_discount_desc",
+    "wb_discount_asc",
+    "spp_desc",
+    "spp_asc",
     "nm_id_desc",
     "nm_id_asc",
 ]
@@ -69,8 +75,15 @@ class WbPriceApplyRequest(BaseModel):
     sizes: List[WbPriceApplySizeInput] = Field(default_factory=list)
 
 
+class WbBulkPriceEditInput(BaseModel):
+    nm_id: int = Field(..., gt=0)
+    price: int = Field(..., gt=0)
+    discount: int = Field(..., ge=0, le=99)
+
+
 class WbBulkPriceApplyRequest(BaseModel):
-    nm_ids: List[int] = Field(..., min_length=1, max_length=1000)
+    nm_ids: List[int] = Field(default_factory=list, max_length=1000)
+    items: List[WbBulkPriceEditInput] = Field(default_factory=list, max_length=1000)
 
 
 def _parse_sort(sort: Optional[str]) -> SortKey:
@@ -88,6 +101,12 @@ def _parse_sort(sort: Optional[str]) -> SortKey:
         "rrp_price_asc": "rrp_price_asc",
         "showcase_price_desc": "showcase_price_desc",
         "showcase_price_asc": "showcase_price_asc",
+        "wb_admin_price_desc": "wb_admin_price_desc",
+        "wb_admin_price_asc": "wb_admin_price_asc",
+        "wb_discount_desc": "wb_discount_desc",
+        "wb_discount_asc": "wb_discount_asc",
+        "spp_desc": "spp_desc",
+        "spp_asc": "spp_asc",
         "nm_id_desc": "nm_id_desc",
         "nm_id_asc": "nm_id_asc",
     }
@@ -112,6 +131,18 @@ def _sort_to_order_clause(sort: SortKey) -> str:
         return "showcase_price DESC NULLS LAST, nm_id"
     if sort == "showcase_price_asc":
         return "showcase_price ASC NULLS LAST, nm_id"
+    if sort == "wb_admin_price_desc":
+        return "wb_admin_price DESC NULLS LAST, nm_id"
+    if sort == "wb_admin_price_asc":
+        return "wb_admin_price ASC NULLS LAST, nm_id"
+    if sort == "wb_discount_desc":
+        return "wb_discount_percent DESC NULLS LAST, nm_id"
+    if sort == "wb_discount_asc":
+        return "wb_discount_percent ASC NULLS LAST, nm_id"
+    if sort == "spp_desc":
+        return "spp_percent DESC NULLS LAST, nm_id"
+    if sort == "spp_asc":
+        return "spp_percent ASC NULLS LAST, nm_id"
     if sort == "nm_id_desc":
         return "nm_id DESC"
     if sort == "nm_id_asc":
@@ -127,6 +158,7 @@ class DiscrepancyFilters:
     only_below_rrp: bool
     has_wb_stock: Literal["any", "true", "false"]
     has_enterprise_stock: Literal["any", "true", "false"]
+    has_showcase_price: Literal["any", "true", "false"]
     front_snapshot_at: Optional[datetime]
     sort: SortKey
     page: int
@@ -220,6 +252,11 @@ def _build_discrepancies_sql(
     elif filters.has_enterprise_stock == "false":
         where_clauses.append("COALESCE(rrp_latest.rrp_stock, 0) <= 0")
 
+    if filters.has_showcase_price == "true":
+        where_clauses.append("front_latest.showcase_price IS NOT NULL")
+    elif filters.has_showcase_price == "false":
+        where_clauses.append("front_latest.showcase_price IS NULL")
+
     # Only below RRP – strictly handled on computed diff
     only_below_rrp_expr = ""
     if filters.only_below_rrp:
@@ -289,6 +326,31 @@ def _build_discrepancies_sql(
         WHERE ss.project_id = :project_id
         GROUP BY ss.nm_id
     ),
+    -- Latest FBO stock per nm_id across WB warehouses and product variants
+    fbo_warehouse_latest AS (
+        SELECT DISTINCT ON (s.nm_id, s.warehouse_name, s.barcode, s.tech_size)
+            s.nm_id::bigint AS nm_id,
+            s.warehouse_name,
+            s.barcode,
+            s.tech_size,
+            COALESCE(s.quantity, 0)::bigint AS quantity
+        FROM supplier_stock_snapshots s
+        WHERE s.project_id = :project_id
+          AND s.nm_id IS NOT NULL
+        ORDER BY
+            s.nm_id,
+            s.warehouse_name,
+            s.barcode,
+            s.tech_size,
+            COALESCE(s.last_change_date, s.snapshot_at) DESC,
+            s.id DESC
+    ),
+    fbo_latest AS (
+        SELECT nm_id,
+               SUM(quantity)::bigint AS fbo_stock_qty
+        FROM fbo_warehouse_latest
+        GROUP BY nm_id
+    ),
     base AS (
         SELECT
             p.nm_id::bigint AS nm_id,
@@ -306,6 +368,7 @@ def _build_discrepancies_sql(
             front_latest.spp_percent,
             front_latest.showcase_updated_at,
             stock_latest.wb_stock_qty,
+            fbo_latest.fbo_stock_qty,
             rrp_run.run_at     AS rrp_updated_at,
             stock_run.run_at   AS stock_updated_at,
             front_run.run_at   AS showcase_run_at,
@@ -316,6 +379,7 @@ def _build_discrepancies_sql(
         LEFT JOIN wb_price_latest ON wb_price_latest.nm_id = p.nm_id
         LEFT JOIN front_latest ON front_latest.nm_id = p.nm_id
         LEFT JOIN stock_latest ON stock_latest.nm_id = p.nm_id
+        LEFT JOIN fbo_latest ON fbo_latest.nm_id = p.nm_id
         LEFT JOIN rrp_run ON TRUE
         LEFT JOIN stock_run ON TRUE
         LEFT JOIN front_run ON TRUE
@@ -404,6 +468,7 @@ def _build_discrepancies_sql(
         wb_discount_percent,
         spp_percent,
         wb_stock_qty,
+        fbo_stock_qty,
         enterprise_stock_qty,
         diff_rub,
         diff_percent,
@@ -465,6 +530,7 @@ def _row_to_item(row: Dict[str, Any]) -> Dict[str, Any]:
     }
     stocks = {
         "wb_stock_qty": int(row["wb_stock_qty"]) if row.get("wb_stock_qty") is not None else 0,
+        "fbo_stock_qty": int(row["fbo_stock_qty"]) if row.get("fbo_stock_qty") is not None else 0,
         "enterprise_stock_qty": int(row["enterprise_stock_qty"])
         if row.get("enterprise_stock_qty") is not None
         else 0,
@@ -546,6 +612,7 @@ def _get_price_discrepancy_items(project_id: int, nm_ids: List[int]) -> Dict[int
         only_below_rrp=False,
         has_wb_stock="any",
         has_enterprise_stock="any",
+        has_showcase_price="any",
         front_snapshot_at=None,
         sort="nm_id_asc",
         page=1,
@@ -841,9 +908,10 @@ async def apply_wb_recommended_prices_bulk(
     _membership: dict = Depends(require_project_admin),
 ):
     """Create one WB price upload task for selected report rows."""
+    explicit_updates = {int(item.nm_id): item for item in body.items}
     seen: set[int] = set()
     nm_ids: List[int] = []
-    for raw_nm_id in body.nm_ids:
+    for raw_nm_id in [*body.nm_ids, *explicit_updates.keys()]:
         try:
             nm_id = int(raw_nm_id)
         except (TypeError, ValueError):
@@ -867,17 +935,23 @@ async def apply_wb_recommended_prices_bulk(
             skipped.append({"nm_id": nm_id, "reason": "not_found", "message": "Товар не найден в отчете"})
             continue
 
-        recommended_price = _coerce_int_price(item["computed"].get("recommended_wb_admin_price"))
-        if recommended_price is None:
-            skipped.append(
-                {
-                    "nm_id": nm_id,
-                    "article": item.get("article"),
-                    "reason": "no_recommended_price",
-                    "message": "Нет рекомендованной цены",
-                }
-            )
-            continue
+        explicit_update = explicit_updates.get(nm_id)
+        if explicit_update is not None:
+            target_price = int(explicit_update.price)
+            discount = int(explicit_update.discount)
+        else:
+            target_price = _coerce_int_price(item["computed"].get("recommended_wb_admin_price"))
+            if target_price is None:
+                skipped.append(
+                    {
+                        "nm_id": nm_id,
+                        "article": item.get("article"),
+                        "reason": "no_recommended_price",
+                        "message": "Нет рекомендованной цены",
+                    }
+                )
+                continue
+            discount = _coerce_int_price(item["discounts"].get("wb_discount_percent")) or 0
 
         if (item.get("staleness") or {}).get("showcase_price_stale"):
             skipped.append(
@@ -902,14 +976,13 @@ async def apply_wb_recommended_prices_bulk(
             )
             continue
 
-        discount = _coerce_int_price(item["discounts"].get("wb_discount_percent")) or 0
         ready.append(
             {
                 "nm_id": nm_id,
                 "article": item.get("article"),
                 "title": item.get("title"),
                 "current_price": item["prices"].get("wb_admin_price"),
-                "recommended_price": recommended_price,
+                "recommended_price": target_price,
                 "discount": discount,
             }
         )
@@ -1159,6 +1232,9 @@ async def get_wb_price_discrepancies(
     has_enterprise_stock: Literal["any", "true", "false"] = Query(
         "any", description="Filter by enterprise (1C/XML) stock quantity"
     ),
+    has_showcase_price: Literal["any", "true", "false"] = Query(
+        "any", description="Filter by availability of the WB showcase price"
+    ),
     sort: Optional[str] = Query(
         "diff_percent_desc",
         description="Sort key, e.g. diff_percent_desc, diff_rub_desc, nm_id_asc",
@@ -1188,6 +1264,7 @@ async def get_wb_price_discrepancies(
         only_below_rrp=only_below_rrp,
         has_wb_stock=has_wb_stock,
         has_enterprise_stock=has_enterprise_stock,
+        has_showcase_price=has_showcase_price,
         front_snapshot_at=front_snapshot_at,
         sort=_parse_sort(sort),
         page=page,
@@ -1198,6 +1275,7 @@ async def get_wb_price_discrepancies(
 
     items: List[Dict[str, Any]] = []
     total_count = 0
+    rrp_snapshot_count = 0
     
     # #region agent log
     import json
@@ -1234,6 +1312,7 @@ async def get_wb_price_discrepancies(
                 text("SELECT COUNT(*) FROM rrp_snapshots WHERE project_id = :project_id"),
                 {"project_id": project_id},
             ).scalar() or 0
+            rrp_snapshot_count = int(rrp_count)
             
             # Check products count
             products_count = conn.execute(
@@ -1799,6 +1878,7 @@ async def get_wb_price_discrepancies(
             "page_size": page_size,
             "updated_at": updated_at_iso,
             "front_snapshot_at": front_snapshot_at_used.isoformat() if isinstance(front_snapshot_at_used, datetime) else None,
+            "rrp_snapshot_count": rrp_snapshot_count,
         },
         "items": items,
     }
@@ -1836,6 +1916,9 @@ async def export_wb_price_discrepancies_csv(
     has_enterprise_stock: Literal["any", "true", "false"] = Query(
         "any", description="Filter by enterprise (1C/XML) stock quantity"
     ),
+    has_showcase_price: Literal["any", "true", "false"] = Query(
+        "any", description="Filter by availability of the WB showcase price"
+    ),
     sort: Optional[str] = Query(
         "diff_percent_desc",
         description="Sort key, e.g. diff_percent_desc, diff_rub_desc, nm_id_asc",
@@ -1854,6 +1937,7 @@ async def export_wb_price_discrepancies_csv(
         only_below_rrp=only_below_rrp,
         has_wb_stock=has_wb_stock,
         has_enterprise_stock=has_enterprise_stock,
+        has_showcase_price=has_showcase_price,
         front_snapshot_at=front_snapshot_at,
         sort=_parse_sort(sort),
         page=1,
@@ -1890,6 +1974,7 @@ async def export_wb_price_discrepancies_csv(
             "delta_recommended",
             "expected_showcase_price",
             "wb_stock_qty",
+            "fbo_stock_qty",
             "enterprise_stock_qty",
             "category_name",
         ]
@@ -1927,6 +2012,7 @@ async def export_wb_price_discrepancies_csv(
                 if computed.get("expected_showcase_price") is not None
                 else "",
                 stocks.get("wb_stock_qty") if stocks.get("wb_stock_qty") is not None else "",
+                stocks.get("fbo_stock_qty") if stocks.get("fbo_stock_qty") is not None else "",
                 stocks.get("enterprise_stock_qty")
                 if stocks.get("enterprise_stock_qty") is not None
                 else "",
