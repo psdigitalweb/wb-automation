@@ -2,8 +2,10 @@
 
 import React, { useMemo, useState, useEffect } from 'react'
 import Link from 'next/link'
-import { useParams, useRouter } from 'next/navigation'
-import { apiGet, apiPost, ApiError } from '@/lib/apiClient'
+import { useParams } from 'next/navigation'
+import { apiGet, apiPost, type ApiError } from '@/lib/apiClient'
+import { usePageTitle } from '@/hooks/usePageTitle'
+import styles from './reports.module.css'
 
 interface WBFinanceReport {
   report_id: number
@@ -25,8 +27,8 @@ interface WBFinancesIngestResponse {
 
 export default function WBFinancesReportsPage() {
   const params = useParams()
-  const router = useRouter()
   const projectId = params.projectId as string
+  usePageTitle('Финансовые отчёты WB', projectId)
   const [reports, setReports] = useState<WBFinanceReport[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -56,7 +58,7 @@ export default function WBFinancesReportsPage() {
         `/api/v1/projects/${projectId}/marketplaces/wildberries/finances/reports`
       )
       setReports(data)
-    } catch (e: any) {
+    } catch (e: unknown) {
       const err = e as ApiError
       if (err.status === 404) {
         setReports([])
@@ -111,7 +113,7 @@ export default function WBFinancesReportsPage() {
 
       // refetch: сразу после успешного запуска
       await loadReports()
-    } catch (e: any) {
+    } catch (e: unknown) {
       const err = e as ApiError
       const fallback = err?.bodyPreview ? `${err.detail || 'Ошибка'} (${err.status}): ${err.bodyPreview}` : null
       setManualError(err.detail || fallback || 'Не удалось запустить загрузку финансовых отчётов')
@@ -121,189 +123,166 @@ export default function WBFinancesReportsPage() {
   }
 
   const formatDate = (dateStr: string | null) => {
-    if (!dateStr) return '-'
+    if (!dateStr) return '—'
     return new Date(dateStr).toLocaleDateString('ru-RU')
   }
 
+  const formatAmount = (amount: number | null, currency: string | null) => {
+    if (amount == null) return '—'
+    try {
+      return new Intl.NumberFormat('ru-RU', {
+        style: 'currency',
+        currency: currency || 'RUB',
+        maximumFractionDigits: 0,
+      }).format(amount)
+    } catch {
+      return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format(amount)
+    }
+  }
+
   return (
-    <div className="container">
-      <div style={{ marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h1>Финансовые отчёты Wildberries</h1>
-        <div style={{ display: 'flex', gap: '10px' }}>
-          <button onClick={loadReports} disabled={loading}>
-            {loading ? 'Обновление...' : 'Обновить список'}
-          </button>
-          <button onClick={() => router.push(`/app/project/${projectId}/marketplaces`)}>
-            Назад к настройкам
-          </button>
-        </div>
-      </div>
-
-      {error && (
-        <div style={{ 
-          padding: '15px', 
-          marginBottom: '20px', 
-          backgroundColor: '#f8d7da', 
-          color: '#721c24', 
-          borderRadius: '4px'
-        }}>
-          <strong>Ошибка:</strong> {error}
-        </div>
-      )}
-
-      <div className="card" style={{ marginBottom: '20px' }}>
-        <div style={{ padding: '16px 20px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '16px' }}>
-            <h2 style={{ margin: 0 }}>Ручная загрузка</h2>
-            <div style={{ color: '#6c757d', fontSize: '0.85rem' }}>
-              WB может отвечать долго; если долго — попробуем позже.
-            </div>
+    <main className={styles.page}>
+      <header className={styles.pageHeader}>
+        <div className={styles.titleBlock}>
+          <div className={styles.eyebrow}>Wildberries · Финансы</div>
+          <div className={styles.titleRow}>
+            <h1>Финансовые отчёты</h1>
+            <span className={styles.marketplaceBadge}><span />WB</span>
           </div>
+          <p>Загрузка и история финансовых отчётов для расчёта Unit PNL.</p>
+        </div>
+        <div className={styles.headerActions}>
+          <button className={styles.buttonSecondary} type="button" onClick={loadReports} disabled={loading}>
+            {loading ? 'Обновляем…' : 'Обновить'}
+          </button>
+          <Link className={styles.buttonSecondary} href={`/app/project/${projectId}/marketplaces`}>
+            Настройки WB
+          </Link>
+        </div>
+      </header>
 
-          {manualError && (
-            <div
-              style={{
-                padding: '10px',
-                marginTop: '12px',
-                backgroundColor: '#f8d7da',
-                color: '#721c24',
-                borderRadius: '4px',
-              }}
-            >
-              <strong>Ошибка:</strong> {manualError}
-            </div>
-          )}
+      {error ? (
+        <div className={`${styles.notice} ${styles.noticeError}`} role="alert">
+          <strong>Не удалось загрузить отчёты</strong>
+          <span>{error}</span>
+        </div>
+      ) : null}
 
-          {manualSuccess && (
-            <div
-              style={{
-                padding: '10px',
-                marginTop: '12px',
-                backgroundColor: '#d4edda',
-                color: '#155724',
-                borderRadius: '4px',
-              }}
-            >
-              <strong>ОК:</strong> {manualSuccess}
-            </div>
-          )}
-
-          <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-end', flexWrap: 'wrap', marginTop: '12px' }}>
-            <div style={{ flex: '1', minWidth: '160px' }}>
-              <label
-                htmlFor="wb-finances-manual-date-from"
-                style={{ display: 'block', marginBottom: '5px', fontWeight: 500 }}
-              >
-                date_from
-              </label>
+      <section className={styles.card}>
+        <div className={styles.cardHeader}>
+          <div>
+            <h2>Загрузка отчётов</h2>
+            <p>Выберите период, за который нужно запросить финансовые данные WB.</p>
+          </div>
+          <span className={styles.cardMeta}>Запрос может занять несколько минут</span>
+        </div>
+        <div className={styles.cardBody}>
+          <div className={styles.filterGrid}>
+            <label className={styles.field} htmlFor="wb-finances-manual-date-from">
+              <span>Период с</span>
               <input
                 id="wb-finances-manual-date-from"
                 type="date"
                 value={manualDateFrom}
-                onChange={(e) => setManualDateFrom(e.target.value)}
+                onChange={(event) => setManualDateFrom(event.target.value)}
                 disabled={manualLoading}
-                style={{ width: '100%', padding: '8px', fontSize: '14px' }}
               />
-            </div>
+            </label>
 
-            <div style={{ flex: '1', minWidth: '160px' }}>
-              <label
-                htmlFor="wb-finances-manual-date-to"
-                style={{ display: 'block', marginBottom: '5px', fontWeight: 500 }}
-              >
-                date_to
-              </label>
+            <label className={styles.field} htmlFor="wb-finances-manual-date-to">
+              <span>Период по</span>
               <input
                 id="wb-finances-manual-date-to"
                 type="date"
                 value={manualDateTo}
-                onChange={(e) => setManualDateTo(e.target.value)}
+                onChange={(event) => setManualDateTo(event.target.value)}
                 disabled={manualLoading}
-                style={{ width: '100%', padding: '8px', fontSize: '14px' }}
               />
-            </div>
+            </label>
 
             <button
+              className={styles.buttonPrimary}
+              type="button"
               onClick={handleManualIngest}
-              disabled={manualLoading || !!manualValidationError}
-              style={{
-                backgroundColor: '#2563eb',
-                color: 'white',
-                padding: '10px 18px',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: manualLoading ? 'not-allowed' : 'pointer',
-                opacity: manualLoading || !!manualValidationError ? 0.6 : 1,
-              }}
+              disabled={manualLoading || Boolean(manualValidationError)}
             >
-              {manualLoading ? 'Загрузка…' : 'Загрузить'}
+              {manualLoading ? 'Запускаем…' : 'Загрузить отчёты'}
             </button>
           </div>
-        </div>
-      </div>
 
-      {loading ? (
-        <p>Загрузка...</p>
-      ) : reports.length === 0 ? (
-        <div className="card">
-          <p style={{ padding: '20px', textAlign: 'center', color: '#6c757d' }}>
-            Отчётов пока нет — запустите загрузку в блоке «Ручная загрузка» выше
-          </p>
-          <div style={{ textAlign: 'center', marginTop: '15px' }}>
-            <button
-              onClick={() => router.push(`/app/project/${projectId}/marketplaces`)}
-              style={{
-                backgroundColor: '#007bff',
-                color: 'white',
-                padding: '10px 20px',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer'
-              }}
-            >
-              Перейти к настройкам
-            </button>
+          {manualError ? (
+            <div className={`${styles.notice} ${styles.noticeError}`} role="alert">
+              <strong>Загрузка не запущена</strong>
+              <span>{manualError}</span>
+            </div>
+          ) : null}
+
+          {manualSuccess ? (
+            <div className={`${styles.notice} ${styles.noticeSuccess}`} role="status" aria-live="polite">
+              <strong>Загрузка запущена</strong>
+              <span>{manualSuccess}</span>
+            </div>
+          ) : null}
+        </div>
+      </section>
+
+      <section className={styles.tableCard}>
+        <div className={styles.cardHeader}>
+          <div>
+            <h2>История отчётов</h2>
+            <p>Последние полученные финансовые отчёты Wildberries.</p>
           </div>
+          {!loading ? <span className={styles.countBadge}>{reports.length}</span> : null}
         </div>
-      ) : (
-        <div className="card">
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr style={{ borderBottom: '2px solid #dee2e6' }}>
-                <th style={{ padding: '12px', textAlign: 'left', fontWeight: 'bold' }}>Report ID</th>
-                <th style={{ padding: '12px', textAlign: 'left', fontWeight: 'bold' }}>Period From</th>
-                <th style={{ padding: '12px', textAlign: 'left', fontWeight: 'bold' }}>Period To</th>
-                <th style={{ padding: '12px', textAlign: 'right', fontWeight: 'bold' }}>Rows Count</th>
-                <th style={{ padding: '12px', textAlign: 'left', fontWeight: 'bold' }}></th>
-              </tr>
-            </thead>
-            <tbody>
-              {sortedReports.map((report, index) => (
-                <tr 
-                  key={report.report_id} 
-                  style={{ 
-                    borderBottom: '1px solid #dee2e6',
-                    backgroundColor: index % 2 === 0 ? '#fff' : '#f8f9fa'
-                  }}
-                >
-                  <td style={{ padding: '12px' }}>{report.report_id}</td>
-                  <td style={{ padding: '12px' }}>{formatDate(report.period_from)}</td>
-                  <td style={{ padding: '12px' }}>{formatDate(report.period_to)}</td>
-                  <td style={{ padding: '12px', textAlign: 'right' }}>{report.rows_count}</td>
-                  <td style={{ padding: '12px' }}>
-                    <Link
-                      href={`/app/project/${projectId}/wildberries/finances/unit-pnl?report_id=${report.report_id}`}
-                      style={{ color: '#007bff', textDecoration: 'none' }}
-                    >
-                      Детализация
-                    </Link>
-                  </td>
+
+        {loading ? (
+          <div className={styles.loadingState} aria-label="Загрузка отчётов">
+            <span />
+            <span />
+            <span />
+          </div>
+        ) : reports.length === 0 ? (
+          <div className={styles.emptyState}>
+            <div className={styles.emptyIcon} aria-hidden="true">₽</div>
+            <strong>Финансовых отчётов пока нет</strong>
+            <p>Выберите период выше и запустите первую загрузку.</p>
+            <Link className={styles.buttonSecondary} href={`/app/project/${projectId}/marketplaces`}>
+              Проверить подключение WB
+            </Link>
+          </div>
+        ) : (
+          <div className={styles.tableScroll}>
+            <table className={styles.table}>
+              <thead>
+                <tr>
+                  <th>ID отчёта</th>
+                  <th>Период с</th>
+                  <th>Период по</th>
+                  <th className={styles.numeric}>Строк</th>
+                  <th className={styles.numeric}>Сумма</th>
+                  <th><span className={styles.srOnly}>Действия</span></th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
+              </thead>
+              <tbody>
+                {sortedReports.map((report) => (
+                  <tr key={report.report_id}>
+                    <td className={styles.mono}>#{report.report_id}</td>
+                    <td>{formatDate(report.period_from)}</td>
+                    <td>{formatDate(report.period_to)}</td>
+                    <td className={`${styles.numeric} ${styles.mono}`}>{report.rows_count.toLocaleString('ru-RU')}</td>
+                    <td className={styles.numeric}>{formatAmount(report.total_amount, report.currency)}</td>
+                    <td className={styles.actionCell}>
+                      <Link href={`/app/project/${projectId}/wildberries/finances/unit-pnl?report_id=${report.report_id}`}>
+                        Открыть
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </main>
   )
 }

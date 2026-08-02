@@ -248,7 +248,7 @@ test.describe('UI v2 navigation contract', () => {
     await expect(page.locator('.ec-rail-item.is-active')).toHaveText(/WB/)
 
     const wbRoutes = [
-      ['/app/project/1/wildberries/price-discrepancies?ui=v2', /Аналитика цен/],
+      ['/app/project/1/wildberries/price-analytics?ui=v2', /Цены/],
       ['/app/project/1/wildberries/stock-without-photos?ui=v2', /Без фото/],
       ['/app/project/1/wildberries/finances/unit-pnl?ui=v2', /Unit PNL/],
       ['/app/project/1/wildberries/funnel-signals?ui=v2', /Воронка/],

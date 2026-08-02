@@ -155,9 +155,8 @@ export const subNavGroupsByRail: Record<string, SubNavGroup[]> = {
           id: 'prices',
           label: 'Цены',
           icon: 'coins',
-          href: () => '#',
-          match: () => false,
-          disabled: true,
+          href: (projectId) => `/app/project/${projectId}/wildberries/price-analytics`,
+          match: (rest) => rest.startsWith('wildberries/price-analytics'),
         },
         {
           id: 'stocks',
@@ -186,13 +185,6 @@ export const subNavGroupsByRail: Record<string, SubNavGroup[]> = {
           icon: 'percent',
           href: (projectId) => `/app/project/${projectId}/wildberries/spp-dynamics`,
           match: (rest) => rest.startsWith('wildberries/spp-dynamics'),
-        },
-        {
-          id: 'price-discrepancies',
-          label: 'Аналитика цен',
-          icon: 'arrowsDiff',
-          href: (projectId) => `/app/project/${projectId}/wildberries/price-discrepancies`,
-          match: (rest) => rest.startsWith('wildberries/price-discrepancies'),
         },
         {
           id: 'product-groups',
@@ -498,6 +490,7 @@ export function humanizeSegment(segment: string): string {
     'product-groups': 'Аналитика связок',
     'search-report': 'Поисковые запросы',
     'price-discrepancies': 'Расхождения цен',
+    'price-analytics': 'Аналитика цен',
     'stock-without-photos': 'Товары без фото',
     settings: 'Настройки',
     members: 'Участники',
