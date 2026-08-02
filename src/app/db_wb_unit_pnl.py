@@ -634,6 +634,7 @@ def get_wb_unit_pnl_table(
             "rrp_model": None,
             "packaging_cost_total": 0.0,
             "cogs_cost_total": 0.0,
+            "cogs_missing_count": 0,
             "packaging_missing_count": 0,
             "additional_costs_total": 0.0,
             "marketplace_additional_costs_total": 0.0,
@@ -931,6 +932,7 @@ def get_wb_unit_pnl_table(
     header_totals["rrp_coverage_pct"] = rrp_model.get("rrp_coverage_qty_pct")
     header_totals["packaging_cost_total"] = extended_header.get("packaging_cost_total")
     header_totals["cogs_cost_total"] = extended_header.get("cogs_cost_total")
+    header_totals["cogs_missing_count"] = extended_header.get("cogs_missing_count")
     header_totals["packaging_missing_count"] = extended_header.get("packaging_missing_count")
     header_totals["additional_costs_total"] = extended_header.get("additional_costs_total")
     header_totals["marketplace_additional_costs_total"] = extended_header.get("marketplace_additional_costs_total")
@@ -1542,6 +1544,7 @@ def apply_extended_costs(
         return {
             "packaging_cost_total": 0.0,
             "cogs_cost_total": 0.0,
+            "cogs_missing_count": 0,
             "additional_costs_total": 0.0,
             "full_profit_total": None,
             "full_margin_pct_of_revenue": None,
@@ -1571,6 +1574,7 @@ def apply_extended_costs(
     full_profit_known = False
     full_margin_revenue = 0.0
     full_margin_revenue_known = False
+    cogs_missing_count = 0
     packaging_missing_count = 0
 
     for item in items:
@@ -1590,6 +1594,8 @@ def apply_extended_costs(
         cogs_total = item.get("cogs_total")
         if cogs_total is not None:
             cogs_total_sum += float(cogs_total or 0)
+        if item.get("cogs_missing") or item.get("cogs_per_unit") is None:
+            cogs_missing_count += 1
 
         product_total = float(product_costs_map.get(str(sku_norm), 0.0)) if sku_norm else 0.0
         marketplace_allocated = (
@@ -1644,6 +1650,7 @@ def apply_extended_costs(
     return {
         "packaging_cost_total": packaging_total_sum,
         "cogs_cost_total": cogs_total_sum,
+        "cogs_missing_count": cogs_missing_count,
         "additional_costs_total": additional_total_sum,
         "full_profit_total": full_profit_total_sum if full_profit_known else None,
         "full_margin_pct_of_revenue": (

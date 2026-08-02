@@ -72,8 +72,10 @@ export default function Breadcrumbs() {
             href: `/app/project/${projectId}/wildberries/finances/reports`,
             label: 'Финансовые отчёты',
           })
-          if (rest.includes('unit-pnl')) {
-            base.push({ href: '', label: 'Юнит-экономика' })
+          if (rest.includes('unit-pnl-full')) {
+            base.push({ href: '', label: 'Unit P&L' })
+          } else if (rest.includes('unit-pnl')) {
+            base.push({ href: '', label: 'Разбор финансовых отчётов' })
           }
         } else if (rest.startsWith('wildberries/content-analytics')) {
           base.push({ href: '', label: 'Аналитика карточек' })

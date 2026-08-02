@@ -210,7 +210,7 @@ export default function WBUnitPnlPage() {
   const useFullWbTakeSummary = pathname.includes('/unit-pnl-full')
   const reportPath = useFullWbTakeSummary ? 'unit-pnl-full' : 'unit-pnl'
   const projectId = params.projectId as string
-  usePageTitle('WB Unit PnL', projectId)
+  usePageTitle(useFullWbTakeSummary ? 'WB Unit P&L' : 'Разбор финансовых отчётов WB', projectId)
 
   const reportIdFromUrl = searchParams.get('report_id')
   const rrDtFromUrl = searchParams.get('rr_dt_from')
@@ -437,6 +437,41 @@ export default function WBUnitPnlPage() {
   const items = data?.items ?? []
   const rowsTotal = data?.rows_total ?? 0
   const SummaryComponent = useFullWbTakeSummary ? HeaderSummaryFull : HeaderSummary
+  const fullDataIssues = useMemo(() => {
+    if (!useFullWbTakeSummary || !headerTotals || rowsTotal === 0) return []
+
+    const skusTotal = headerTotals.skus_total ?? rowsTotal
+    const issues: Array<{ title: string; detail: string; href: string; action: string }> = []
+    const cogsMissing = headerTotals.cogs_missing_count ?? 0
+    const packagingMissing = headerTotals.packaging_missing_count ?? 0
+
+    if (cogsMissing > 0) {
+      issues.push({
+        title: 'Не задана себестоимость',
+        detail: `${cogsMissing} из ${skusTotal} SKU`,
+        href: `/app/project/${projectId}/cogs`,
+        action: 'Настроить себестоимость',
+      })
+    }
+    if (packagingMissing > 0) {
+      issues.push({
+        title: 'Не задана стоимость упаковки',
+        detail: `${packagingMissing} из ${skusTotal} SKU`,
+        href: `/app/project/${projectId}/additional-costs?tab=packaging`,
+        action: 'Настроить упаковку',
+      })
+    }
+    if (!headerTotals.tax_model_code) {
+      issues.push({
+        title: 'Не настроена налоговая модель',
+        detail: 'Налоги не включены в расчёт прибыли',
+        href: `/app/project/${projectId}/settings/taxes`,
+        action: 'Настроить налоги',
+      })
+    }
+
+    return issues
+  }, [headerTotals, projectId, rowsTotal, useFullWbTakeSummary])
 
   const canGoPrev = offset > 0
   const canGoNext = offset + limit < rowsTotal
@@ -495,10 +530,14 @@ export default function WBUnitPnlPage() {
       <div className={styles.pageHeader}>
         <div className={styles.titleBlock}>
           <div className={styles.titleRow}>
-            <h1>Unit-экономика</h1>
+            <h1>{useFullWbTakeSummary ? 'Unit P&L' : 'Разбор финансовых отчётов'}</h1>
             <span className={styles.marketplaceBadge}><span />WB</span>
           </div>
-          <p>Unit PnL по SKU: выплаты, затраты WB, РРЦ-модель и прибыль на единицу.</p>
+          <p>
+            {useFullWbTakeSummary
+              ? 'Unit P&L по SKU: выплаты, затраты WB, себестоимость и прибыль на единицу.'
+              : 'Детализация выплат, комиссий, логистики и других затрат по финансовым отчётам WB.'}
+          </p>
         </div>
         <div className={styles.headerActions}>
           <Link href={reportsHref} className={styles.buttonSecondary}>
@@ -591,6 +630,25 @@ export default function WBUnitPnlPage() {
             <h2>{headerTotals.filter_header ? 'Сводка по отфильтрованным SKU' : 'Сводка по выборке'}</h2>
           </div>
           <div className={styles.cardBody}>
+            {fullDataIssues.length > 0 && (
+              <div className={styles.dataQualityAlert} role="status">
+                <div className={styles.dataQualityTitle}>Для полного расчёта не хватает данных</div>
+                <p className={styles.dataQualityDescription}>
+                  Итоговая прибыль и маржа могут быть неполными. Заполните недостающие данные:
+                </p>
+                <ul className={styles.dataQualityList}>
+                  {fullDataIssues.map((issue) => (
+                    <li key={issue.title} className={styles.dataQualityItem}>
+                      <div>
+                        <strong>{issue.title}</strong>
+                        <span>{issue.detail}</span>
+                      </div>
+                      <Link href={issue.href}>{issue.action}</Link>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             <SummaryComponent headerTotals={headerTotals} items={items} />
             <div className={styles.summaryMeta}>
               Операций (строк отчёта): {headerTotals.scope_lines_total ?? headerTotals.lines_total ?? 0} · SKU в
@@ -766,7 +824,12 @@ export default function WBUnitPnlPage() {
                         <tr className={styles.expandedRow}>
                           <td colSpan={8}>
                             {details ? (
-                              <DetailsPanel details={details} row={row} />
+                              <DetailsPanel
+                                details={details}
+                                row={row}
+                                showPnlSections={useFullWbTakeSummary}
+                                hideMissingProfitability={useFullWbTakeSummary}
+                              />
                             ) : (
                               <div className={styles.emptyCard}>
                                 Загрузка…
@@ -862,8 +925,19 @@ function MetricLine({
   )
 }
 
-function DetailsPanel({ details, row }: { details: WBUnitPnlDetailsResponse; row: WBUnitPnlRow }) {
+function DetailsPanel({
+  details,
+  row,
+  showPnlSections = true,
+  hideMissingProfitability = false,
+}: {
+  details: WBUnitPnlDetailsResponse
+  row: WBUnitPnlRow
+  showPnlSections?: boolean
+  hideMissingProfitability?: boolean
+}) {
   const { product, base_calc, wb_costs_per_unit, logistics_counts, profitability, extended_costs } = details
+  const profitabilityMissing = Boolean(profitability?.rrp_missing || profitability?.cogs_missing)
 
   const commissionVvSigned = details.commission_vv_signed ?? 0
   const acquiring = details.acquiring ?? 0
@@ -1008,9 +1082,10 @@ function DetailsPanel({ details, row }: { details: WBUnitPnlDetailsResponse; row
         </div>
       </div>
 
-      <div className={`${styles.detailsCard} ${styles.detailsFull}`}>
-        <h3 className={styles.detailsTitle}>Полная экономика</h3>
-        <div className={styles.detailsEconomyGrid}>
+      {showPnlSections && (
+        <div className={`${styles.detailsCard} ${styles.detailsFull}`}>
+          <h3 className={styles.detailsTitle}>Полная экономика</h3>
+          <div className={styles.detailsEconomyGrid}>
           <div>
             <div className={styles.sectionKicker}>На единицу</div>
             <div className={styles.metricList}>
@@ -1093,17 +1168,19 @@ function DetailsPanel({ details, row }: { details: WBUnitPnlDetailsResponse; row
               />
             </div>
           </div>
-        </div>
-      </div>
-
-      <div className={`${styles.detailsCard} ${styles.detailsFull}`}>
-        <h3 className={styles.detailsTitle}>Доходность</h3>
-        {profitability?.rrp_missing || profitability?.cogs_missing ? (
-          <div className={styles.warningCard} style={{ marginTop: 10 }}>
-            Загрузите Internal Data / каталог, чтобы видеть РРЦ и COGS.
           </div>
-        ) : (
-          <div className={styles.profitGrid} style={{ marginTop: 10 }}>
+        </div>
+      )}
+
+      {showPnlSections && !(hideMissingProfitability && profitabilityMissing) && (
+        <div className={`${styles.detailsCard} ${styles.detailsFull}`}>
+          <h3 className={styles.detailsTitle}>Доходность</h3>
+          {profitabilityMissing ? (
+            <div className={styles.warningCard} style={{ marginTop: 10 }}>
+              Загрузите Internal Data / каталог, чтобы видеть РРЦ и COGS.
+            </div>
+          ) : (
+            <div className={styles.profitGrid} style={{ marginTop: 10 }}>
             <div className={styles.profitSubCard}>
               <div className={styles.sectionKicker}>Факт</div>
               <div className={styles.metricList}>
@@ -1155,9 +1232,10 @@ function DetailsPanel({ details, row }: { details: WBUnitPnlDetailsResponse; row
                 />
               </div>
             </div>
-          </div>
-        )}
-      </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

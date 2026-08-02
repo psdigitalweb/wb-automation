@@ -163,10 +163,58 @@ def test_unit_pnl_allocates_warehouse_labor_as_additional_cost(monkeypatch):
 
     assert totals["warehouse_labor_costs_total"] == 3000.0
     assert totals["additional_costs_total"] == 3000.0
+    assert totals["cogs_missing_count"] == 0
+    assert totals["packaging_missing_count"] == 0
     assert items[0]["extended_costs"]["warehouse_labor_costs_total"] == pytest.approx(1000.0)
     assert items[1]["extended_costs"]["warehouse_labor_costs_total"] == pytest.approx(2000.0)
     assert items[0]["additional_costs_per_unit"] == pytest.approx(100.0)
     assert items[1]["additional_costs_per_unit"] == pytest.approx(100.0)
+
+
+def test_unit_pnl_counts_missing_cogs_and_packaging(monkeypatch):
+    monkeypatch.setattr(
+        db_wb_unit_pnl,
+        "_fetch_packaging_costs",
+        lambda conn, project_id, sku_norms, as_of_date: {"sku-1": None},
+    )
+    monkeypatch.setattr(
+        db_wb_unit_pnl,
+        "_fetch_product_additional_costs",
+        lambda conn, project_id, sku_norms, scope_from, scope_to: {},
+    )
+    monkeypatch.setattr(
+        db_wb_unit_pnl,
+        "_fetch_marketplace_additional_total",
+        lambda conn, project_id, scope_from, scope_to: 0.0,
+    )
+    monkeypatch.setattr(
+        db_wb_unit_pnl,
+        "_fetch_warehouse_labor_total",
+        lambda conn, project_id, scope_from, scope_to: 0.0,
+    )
+
+    items = [{
+        "internal_sku": "sku-1",
+        "sales_cnt": 1,
+        "sale_amount": 100.0,
+        "fact_price_avg": 100.0,
+        "wb_total_cost_per_unit": 10.0,
+        "cogs_per_unit": None,
+        "cogs_missing": True,
+    }]
+
+    totals = db_wb_unit_pnl.apply_extended_costs(
+        object(),
+        1,
+        items,
+        scope_from=date(2026, 3, 1),
+        scope_to=date(2026, 3, 31),
+        as_of_date=date(2026, 3, 31),
+    )
+
+    assert totals["cogs_missing_count"] == 1
+    assert totals["packaging_missing_count"] == 1
+    assert totals["full_profit_total"] is None
 
 
 def test_unit_pnl_warehouse_labor_includes_common_marketplace_rows():

@@ -250,7 +250,8 @@ test.describe('UI v2 navigation contract', () => {
     const wbRoutes = [
       ['/app/project/1/wildberries/price-analytics?ui=v2', /Цены/],
       ['/app/project/1/wildberries/stock-without-photos?ui=v2', /Без фото/],
-      ['/app/project/1/wildberries/finances/unit-pnl?ui=v2', /Unit PNL/],
+      ['/app/project/1/wildberries/finances/unit-pnl?ui=v2', /Разбор фин\. отчётов/],
+      ['/app/project/1/wildberries/finances/unit-pnl-full?ui=v2', /Unit P&L/],
       ['/app/project/1/wildberries/funnel-signals?ui=v2', /Воронка/],
       ['/app/project/1/wildberries/reviews?ui=v2', /Отзывы/],
     ] as const

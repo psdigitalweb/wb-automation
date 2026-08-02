@@ -116,25 +116,6 @@ export function HeaderSummary({ headerTotals, items }: HeaderSummaryProps) {
         </div>
       </div>
 
-      {(() => {
-        const rrp = headerTotals.rrp_model
-        const rrpSalesModel = rrp?.rrp_sales_model ?? headerTotals.rrp_sales_model
-        const wbTookRub = rrp?.wb_took_from_rrp_rub ?? headerTotals.wb_take_from_rrp
-        const wbTookPct = rrp?.wb_took_from_rrp_pct ?? headerTotals.wb_take_pct_of_rrp
-        const coveragePct = rrp?.rrp_coverage_qty_pct ?? headerTotals.rrp_coverage_pct
-        return (
-          <div className={styles.summaryBlock} title={!(rrpSalesModel != null && rrpSalesModel > 0) ? 'Нет Internal Data / РРЦ не найдено' : undefined}>
-            <div className={styles.summaryTitle}>Модель (РРЦ)</div>
-            <div className={styles.summaryList}>
-              <SummaryPair label="Продажи по РРЦ (модель)" value={rrpSalesModel != null && rrpSalesModel > 0 ? `${formatRUB(rrpSalesModel)} ₽` : '—'} />
-              <SummaryPair label="WB забрал от РРЦ, ₽" value={wbTookRub != null ? `${formatRUB(wbTookRub)} ₽` : '—'} />
-              <SummaryPair label="WB забрал от РРЦ, %" value={wbTookPct != null ? `${formatPct(wbTookPct)}%` : '—'} />
-              <SummaryPair label="Покрытие РРЦ" value={coveragePct != null ? `${formatPct(coveragePct)}%` : '—'} />
-            </div>
-          </div>
-        )
-      })()}
-
       <div className={styles.summaryBlock}>
         <div className={styles.summaryTitle}>Операции</div>
         <div className={styles.summaryList}>
@@ -144,23 +125,6 @@ export function HeaderSummary({ headerTotals, items }: HeaderSummaryProps) {
         </div>
       </div>
 
-      <div className={styles.summaryBlock}>
-        <div className={styles.summaryTitle}>Полная экономика</div>
-        <div className={styles.summaryList}>
-          <SummaryPair label="Упаковка" value={fmtRub(headerTotals.packaging_cost_total)} />
-          <SummaryPair label="Доп. расходы" value={fmtRub(headerTotals.additional_costs_total)} />
-          <SummaryPair label="Смены склада" value={fmtRub(headerTotals.warehouse_labor_costs_total)} />
-          <SummaryPair label="Полная прибыль" value={fmtRub(headerTotals.full_profit_total)} accent />
-          <SummaryPair
-            label="Полная маржа"
-            value={
-              headerTotals.full_margin_pct_of_revenue != null
-                ? `${formatPct(headerTotals.full_margin_pct_of_revenue)}%`
-                : '—'
-            }
-          />
-        </div>
-      </div>
     </div>
   )
 }

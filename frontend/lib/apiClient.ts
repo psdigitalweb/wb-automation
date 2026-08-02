@@ -936,6 +936,7 @@ export interface WBUnitPnlResponse {
     net_units_total?: number | null
     packaging_cost_total?: number | null
     cogs_cost_total?: number | null
+    cogs_missing_count?: number
     packaging_missing_count?: number
     additional_costs_total?: number | null
     marketplace_additional_costs_total?: number | null
