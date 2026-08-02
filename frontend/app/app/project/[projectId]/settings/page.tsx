@@ -54,6 +54,11 @@ type RunParams = {
 
 type WbCardStatsRunMode = 'daily' | 'last30' | 'custom'
 
+const HIDDEN_WB_INGEST_JOB_CODES = new Set([
+  'wb_search_queries_daily',
+  'wb_stock_total_daily',
+])
+
 function toDateInputValue(value: Date): string {
   const year = value.getFullYear()
   const month = String(value.getMonth() + 1).padStart(2, '0')
@@ -100,7 +105,9 @@ function statusTone(status: string | null, isRunning: boolean): string {
 }
 
 function normalizeStatuses(items: WBIngestStatus[]): WBIngestStatus[] {
-  return [...items].sort((a, b) => String(a.job_code).localeCompare(String(b.job_code)))
+  return items
+    .filter((status) => !HIDDEN_WB_INGEST_JOB_CODES.has(status.job_code))
+    .sort((a, b) => String(a.job_code).localeCompare(String(b.job_code)))
 }
 
 function statusesHash(items: WBIngestStatus[]): string {
@@ -610,7 +617,7 @@ export default function ProjectSettingsPage({ params }: { params: { projectId: s
                                 </button>
                               ) : null}
 
-                              {(status.job_code === 'wb_search_report_tabular' || status.job_code === 'wb_stock_total_daily') ? (
+                              {status.job_code === 'wb_search_report_tabular' ? (
                                 <Link className={styles.inlineLink} href={`/app/project/${projectId}/wildberries/search-report`}>
                                   Открыть
                                 </Link>
