@@ -978,6 +978,10 @@ export interface WBUnitPnlDetailsResponse {
     breakdown?: {
       commission?: number | null
       acquiring?: number | null
+      pvz_reward?: number | null
+      rebill_logistic_cost?: number | null
+      settlement_adjustment?: number | null
+      settlement_total?: number | null
       logistics?: number | null
       storage?: number | null
       acceptance?: number | null
@@ -989,6 +993,10 @@ export interface WBUnitPnlDetailsResponse {
     own_wb_total_signed?: number
     common_wb_allocated_total?: number
     common_wb_allocation_basis?: Record<string, number>
+    settlement_cost?: number
+    pvz_reward?: number
+    rebill_logistic_cost?: number
+    settlement_adjustment?: number
     logistics_cost?: number
     storage_cost?: number
     acceptance_cost?: number

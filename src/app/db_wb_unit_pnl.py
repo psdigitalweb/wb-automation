@@ -110,6 +110,31 @@ def compute_wb_take_signed(
     )
 
 
+def compute_wb_payout_reconciliation(
+    *,
+    sale_amount: object = 0,
+    transfer_amount: object = 0,
+    commission_vv_signed: object = 0,
+    acquiring: object = 0,
+    pvz_reward: object = 0,
+    rebill_logistic_cost: object = 0,
+) -> Dict[str, float]:
+    """Reconcile WB settlement costs to the sale-to-transfer gap."""
+    sale = Decimal(str(sale_amount or 0))
+    transfer = Decimal(str(transfer_amount or 0))
+    commission = Decimal(str(commission_vv_signed or 0))
+    acquiring_value = Decimal(str(acquiring or 0))
+    pvz = Decimal(str(pvz_reward or 0))
+    rebill = Decimal(str(rebill_logistic_cost or 0))
+    settlement_total = sale - transfer
+    component_total = commission + acquiring_value + pvz + rebill
+    return {
+        "settlement_total": float(settlement_total),
+        "component_total": float(component_total),
+        "settlement_adjustment": float(settlement_total - component_total),
+    }
+
+
 def _compute_unit_pnl_tax_header(
     conn: Connection,
     project_id: int,
@@ -250,6 +275,8 @@ def get_wb_unit_pnl_table(
     v_ppvz_vw = _coalesce_num("ppvz_vw")
     v_ppvz_vw_nds = _coalesce_num("ppvz_vw_nds")
     v_acquiring = _coalesce_num("acquiring_fee")
+    v_ppvz_reward = _coalesce_num("ppvz_reward")
+    v_rebill_logistic_cost = _coalesce_num("rebill_logistic_cost")
 
     sign_expr = """CASE
         WHEN COALESCE(r.payload->>'doc_type_name', r.payload->>'docTypeName') ILIKE '%возврат%'
@@ -350,6 +377,8 @@ def get_wb_unit_pnl_table(
                 {v_ppvz_vw} AS ppvz_vw,
                 {v_ppvz_vw_nds} AS ppvz_vw_nds,
                 {v_acquiring} AS acquiring_fee,
+                {v_ppvz_reward} AS ppvz_reward,
+                {v_rebill_logistic_cost} AS rebill_logistic_cost,
                 {v_retail_price} AS retail_price,
                 {v_ppvz_spp_prc} AS ppvz_spp_prc,
                 {v_delivery_amount} AS delivery_amount,
@@ -366,8 +395,10 @@ def get_wb_unit_pnl_table(
                 nm_id,
                 SUM(sign_val * retail_amount) AS sale_amount,
                 SUM(sign_val * ppvz_for_pay) AS transfer_amount,
-                SUM(COALESCE(ppvz_vw, 0) + COALESCE(ppvz_vw_nds, 0)) AS commission_vv_signed,
-                SUM(COALESCE(acquiring_fee, 0)) AS acquiring,
+                SUM(sign_val * (COALESCE(ppvz_vw, 0) + COALESCE(ppvz_vw_nds, 0))) AS commission_vv_signed,
+                SUM(sign_val * COALESCE(acquiring_fee, 0)) AS acquiring,
+                SUM(sign_val * COALESCE(ppvz_reward, 0)) AS pvz_reward,
+                SUM(sign_val * COALESCE(rebill_logistic_cost, 0)) AS rebill_logistic_cost,
                 SUM(delivery_rub) AS logistics_cost,
                 SUM(storage_fee) AS storage_cost,
                 SUM(acceptance) AS acceptance_cost,
@@ -397,8 +428,8 @@ def get_wb_unit_pnl_table(
         allocation_totals AS (
             SELECT
                 COALESCE(SUM(
-                    COALESCE(commission_vv_signed, 0)
-                    + COALESCE(acquiring, 0)
+                    sale_amount
+                    - transfer_amount
                     + logistics_cost
                     + storage_cost
                     + acceptance_cost
@@ -413,8 +444,8 @@ def get_wb_unit_pnl_table(
                 sa.*,
                 (sales_cnt - returns_cnt)::int AS net_sales_cnt,
                 (
-                    COALESCE(commission_vv_signed, 0)
-                    + COALESCE(acquiring, 0)
+                    sale_amount
+                    - transfer_amount
                     + logistics_cost
                     + storage_cost
                     + acceptance_cost
@@ -444,8 +475,8 @@ def get_wb_unit_pnl_table(
                       END
                 ) AS total_to_pay,
                 (
-                    COALESCE(commission_vv_signed, 0)
-                    + COALESCE(acquiring, 0)
+                    sale_amount
+                    - transfer_amount
                     + logistics_cost
                     + storage_cost
                     + acceptance_cost
@@ -722,7 +753,9 @@ def get_wb_unit_pnl_table(
                 {v_cashback} AS cashback_discount,
                 {v_ppvz_vw} AS ppvz_vw,
                 {v_ppvz_vw_nds} AS ppvz_vw_nds,
-                {v_acquiring} AS acquiring_fee
+                {v_acquiring} AS acquiring_fee,
+                {v_ppvz_reward} AS ppvz_reward,
+                {v_rebill_logistic_cost} AS rebill_logistic_cost
             {from_clause}
             {scope_where}
               AND (COALESCE(r.payload->>'nm_id', r.payload->>'nmId') ~ '^[0-9]+$')
@@ -740,8 +773,10 @@ def get_wb_unit_pnl_table(
             SUM(deduction) AS other_withholdings,
             SUM(penalty) AS penalties,
             SUM(cashback_discount) AS loyalty_comp_display,
-            SUM(COALESCE(ppvz_vw, 0) + COALESCE(ppvz_vw_nds, 0)) AS commission_vv_signed,
-            SUM(COALESCE(acquiring_fee, 0)) AS acquiring,
+            SUM(sign_val * (COALESCE(ppvz_vw, 0) + COALESCE(ppvz_vw_nds, 0))) AS commission_vv_signed,
+            SUM(sign_val * COALESCE(acquiring_fee, 0)) AS acquiring,
+            SUM(sign_val * COALESCE(ppvz_reward, 0)) AS pvz_reward,
+            SUM(sign_val * COALESCE(rebill_logistic_cost, 0)) AS rebill_logistic_cost,
             SUM(CASE WHEN deduction > 0 THEN deduction ELSE 0 END) AS deduction_pos_sum,
             SUM(CASE WHEN deduction < 0 THEN deduction ELSE 0 END) AS deduction_neg_sum,
             SUM(CASE WHEN penalty > 0 THEN penalty ELSE 0 END) AS penalty_pos_sum,
@@ -750,6 +785,7 @@ def get_wb_unit_pnl_table(
     """)
     header_row = conn.execute(header_sql, params).mappings().first()
     if header_row:
+        sale = float(header_row.get("sum_sale_signed") or 0)
         transfer = float(header_row.get("sum_transfer_signed") or 0)
         logistics = float(header_row.get("logistics_cost") or 0)
         storage = float(header_row.get("storage_cost") or 0)
@@ -758,16 +794,9 @@ def get_wb_unit_pnl_table(
         penalties = float(header_row.get("penalties") or 0)
         commission_vv_signed = float(header_row.get("commission_vv_signed") or 0)
         acquiring = float(header_row.get("acquiring") or 0)
-        wb_total_signed = compute_wb_take_signed(
-            commission_vv_signed=commission_vv_signed,
-            acquiring=acquiring,
-            logistics_cost=logistics,
-            storage_cost=storage,
-            acceptance_cost=acceptance,
-            other_withholdings=other,
-            penalties=penalties,
+        wb_total_signed = (
+            sale - transfer + logistics + storage + acceptance + other + penalties
         )
-        sale = float(header_row.get("sum_sale_signed") or 0)
         header_totals = {
             "rows_total": int(header_row.get("rows_total") or 0),
             "sale": sale,
@@ -869,7 +898,7 @@ def get_wb_unit_pnl_table(
         conn, project_id, scope, as_of, params,
         from_clause, scope_where, sign_expr,
         v_retail, v_transfer, v_delivery, v_storage, v_acceptance, v_deduction, v_penalty, v_cashback,
-        v_ppvz_vw, v_ppvz_vw_nds, v_acquiring,
+        v_ppvz_vw, v_ppvz_vw_nds, v_acquiring, v_ppvz_reward, v_rebill_logistic_cost,
         search_sql, category_sql, rrp_q, rrp_subject_id,
     )
 
@@ -890,6 +919,8 @@ def get_wb_unit_pnl_table(
         v_ppvz_vw,
         v_ppvz_vw_nds,
         v_acquiring,
+        v_ppvz_reward,
+        v_rebill_logistic_cost,
         v_retail_price,
         v_ppvz_spp_prc,
         rrp_q,
@@ -996,6 +1027,8 @@ def _compute_rrp_model_header(
     v_ppvz_vw: str,
     v_ppvz_vw_nds: str,
     v_acquiring: str,
+    v_ppvz_reward: str,
+    v_rebill_logistic_cost: str,
     search_sql: str,
     category_sql: str,
     q: Optional[str],
@@ -1038,7 +1071,9 @@ def _compute_rrp_model_header(
             {v_penalty} AS penalty,
             {v_ppvz_vw} AS ppvz_vw,
             {v_ppvz_vw_nds} AS ppvz_vw_nds,
-            {v_acquiring} AS acquiring_fee
+            {v_acquiring} AS acquiring_fee,
+            {v_ppvz_reward} AS ppvz_reward,
+            {v_rebill_logistic_cost} AS rebill_logistic_cost
     """
     sku_agg_select = """
         nm_id,
@@ -1050,8 +1085,10 @@ def _compute_rrp_model_header(
         SUM(acceptance) AS acceptance_cost,
         SUM(deduction) AS other_withholdings,
         SUM(penalty) AS penalties,
-        SUM(COALESCE(ppvz_vw, 0) + COALESCE(ppvz_vw_nds, 0)) AS commission_vv_signed,
-        SUM(COALESCE(acquiring_fee, 0)) AS acquiring
+        SUM(sign_val * (COALESCE(ppvz_vw, 0) + COALESCE(ppvz_vw_nds, 0))) AS commission_vv_signed,
+        SUM(sign_val * COALESCE(acquiring_fee, 0)) AS acquiring,
+        SUM(sign_val * COALESCE(ppvz_reward, 0)) AS pvz_reward,
+        SUM(sign_val * COALESCE(rebill_logistic_cost, 0)) AS rebill_logistic_cost
     """
     rrp_sql = text(f"""
         WITH base_lines AS (
@@ -1069,8 +1106,8 @@ def _compute_rrp_model_header(
         allocation_totals AS (
             SELECT
                 COALESCE(SUM(
-                    COALESCE(commission_vv_signed, 0)
-                    + COALESCE(acquiring, 0)
+                    sale_amount
+                    - transfer_amount
                     + logistics_cost
                     + storage_cost
                     + acceptance_cost
@@ -1432,6 +1469,7 @@ def _fetch_common_wb_allocation_for_nm(
     from_clause = _build_from_clause(scope)
 
     v_retail = _coalesce_num("retail_amount")
+    v_transfer = _coalesce_num("ppvz_for_pay")
     v_delivery = _coalesce_num("delivery_rub")
     v_storage = _coalesce_num("storage_fee")
     v_acceptance = _coalesce_num("acceptance")
@@ -1440,6 +1478,8 @@ def _fetch_common_wb_allocation_for_nm(
     v_ppvz_vw = _coalesce_num("ppvz_vw")
     v_ppvz_vw_nds = _coalesce_num("ppvz_vw_nds")
     v_acquiring = _coalesce_num("acquiring_fee")
+    v_ppvz_reward = _coalesce_num("ppvz_reward")
+    v_rebill_logistic_cost = _coalesce_num("rebill_logistic_cost")
     sign_expr = """CASE
         WHEN COALESCE(r.payload->>'doc_type_name', r.payload->>'docTypeName') ILIKE '%возврат%'
           OR COALESCE(r.payload->>'supplier_oper_name', r.payload->>'supplierOperName') ILIKE '%возврат%'
@@ -1458,6 +1498,7 @@ def _fetch_common_wb_allocation_for_nm(
                     END AS nm_id,
                     ({sign_expr})::int AS sign_val,
                     {v_retail} AS retail_amount,
+                    {v_transfer} AS ppvz_for_pay,
                     {v_delivery} AS delivery_rub,
                     {v_storage} AS storage_fee,
                     {v_acceptance} AS acceptance,
@@ -1465,7 +1506,9 @@ def _fetch_common_wb_allocation_for_nm(
                     {v_penalty} AS penalty,
                     {v_ppvz_vw} AS ppvz_vw,
                     {v_ppvz_vw_nds} AS ppvz_vw_nds,
-                    {v_acquiring} AS acquiring_fee
+                    {v_acquiring} AS acquiring_fee,
+                    {v_ppvz_reward} AS ppvz_reward,
+                    {v_rebill_logistic_cost} AS rebill_logistic_cost
                 {from_clause}
                 {scope_where}
                   AND (COALESCE(r.payload->>'nm_id', r.payload->>'nmId') ~ '^[0-9]+$')
@@ -1474,8 +1517,11 @@ def _fetch_common_wb_allocation_for_nm(
                 SELECT
                     nm_id,
                     SUM(sign_val * retail_amount) AS sale_amount,
-                    SUM(COALESCE(ppvz_vw, 0) + COALESCE(ppvz_vw_nds, 0)) AS commission_vv_signed,
-                    SUM(COALESCE(acquiring_fee, 0)) AS acquiring,
+                    SUM(sign_val * ppvz_for_pay) AS transfer_amount,
+                    SUM(sign_val * (COALESCE(ppvz_vw, 0) + COALESCE(ppvz_vw_nds, 0))) AS commission_vv_signed,
+                    SUM(sign_val * COALESCE(acquiring_fee, 0)) AS acquiring,
+                    SUM(sign_val * COALESCE(ppvz_reward, 0)) AS pvz_reward,
+                    SUM(sign_val * COALESCE(rebill_logistic_cost, 0)) AS rebill_logistic_cost,
                     SUM(delivery_rub) AS logistics_cost,
                     SUM(storage_fee) AS storage_cost,
                     SUM(acceptance) AS acceptance_cost,
@@ -1488,8 +1534,8 @@ def _fetch_common_wb_allocation_for_nm(
             allocation_totals AS (
                 SELECT
                     COALESCE(SUM(
-                        COALESCE(commission_vv_signed, 0)
-                        + COALESCE(acquiring, 0)
+                        sale_amount
+                        - transfer_amount
                         + logistics_cost
                         + storage_cost
                         + acceptance_cost
@@ -1682,6 +1728,8 @@ def _load_extended_header_basis(
     v_ppvz_vw: str,
     v_ppvz_vw_nds: str,
     v_acquiring: str,
+    v_ppvz_reward: str,
+    v_rebill_logistic_cost: str,
     v_retail_price: str,
     v_ppvz_spp_prc: str,
     q: Optional[str],
@@ -1725,6 +1773,8 @@ def _load_extended_header_basis(
                     {v_ppvz_vw} AS ppvz_vw,
                     {v_ppvz_vw_nds} AS ppvz_vw_nds,
                     {v_acquiring} AS acquiring_fee,
+                    {v_ppvz_reward} AS ppvz_reward,
+                    {v_rebill_logistic_cost} AS rebill_logistic_cost,
                     {v_retail_price} AS retail_price,
                     {v_ppvz_spp_prc} AS ppvz_spp_prc
                 {from_clause}
@@ -1735,8 +1785,11 @@ def _load_extended_header_basis(
                 SELECT
                     nm_id,
                     SUM(sign_val * retail_amount) AS sale_amount,
-                    SUM(COALESCE(ppvz_vw, 0) + COALESCE(ppvz_vw_nds, 0)) AS commission_vv_signed,
-                    SUM(COALESCE(acquiring_fee, 0)) AS acquiring,
+                    SUM(sign_val * ppvz_for_pay) AS transfer_amount,
+                    SUM(sign_val * (COALESCE(ppvz_vw, 0) + COALESCE(ppvz_vw_nds, 0))) AS commission_vv_signed,
+                    SUM(sign_val * COALESCE(acquiring_fee, 0)) AS acquiring,
+                    SUM(sign_val * COALESCE(ppvz_reward, 0)) AS pvz_reward,
+                    SUM(sign_val * COALESCE(rebill_logistic_cost, 0)) AS rebill_logistic_cost,
                     SUM(delivery_rub) AS logistics_cost,
                     SUM(storage_fee) AS storage_cost,
                     SUM(acceptance) AS acceptance_cost,
@@ -1753,8 +1806,8 @@ def _load_extended_header_basis(
             allocation_totals AS (
                 SELECT
                     COALESCE(SUM(
-                        COALESCE(commission_vv_signed, 0)
-                        + COALESCE(acquiring, 0)
+                        sale_amount
+                        - transfer_amount
                         + logistics_cost
                         + storage_cost
                         + acceptance_cost
@@ -1769,8 +1822,8 @@ def _load_extended_header_basis(
                     sa.*,
                     (sales_cnt - returns_cnt)::int AS net_sales_cnt,
                     (
-                        COALESCE(commission_vv_signed, 0)
-                        + COALESCE(acquiring, 0)
+                        sale_amount
+                        - transfer_amount
                         + logistics_cost
                         + storage_cost
                         + acceptance_cost
@@ -1785,8 +1838,8 @@ def _load_extended_header_basis(
                         ELSE 0
                     END AS wb_common_allocated_total,
                     (
-                        COALESCE(commission_vv_signed, 0)
-                        + COALESCE(acquiring, 0)
+                        sale_amount
+                        - transfer_amount
                         + logistics_cost
                         + storage_cost
                         + acceptance_cost
@@ -2080,6 +2133,8 @@ def get_wb_unit_pnl_details(
     v_ppvz_vw = _coalesce_num("ppvz_vw")
     v_ppvz_vw_nds = _coalesce_num("ppvz_vw_nds")
     v_acquiring = _coalesce_num("acquiring_fee")
+    v_ppvz_reward = _coalesce_num("ppvz_reward")
+    v_rebill_logistic_cost = _coalesce_num("rebill_logistic_cost")
     v_retail_price = "NULLIF(TRIM(COALESCE(r.payload->>'retail_price', r.payload->>'retailPrice')), '')::numeric"
     v_ppvz_spp_prc = "NULLIF(TRIM(COALESCE(r.payload->>'ppvz_spp_prc', r.payload->>'ppvzSppPrc')), '')::numeric"
     v_delivery_amount = "NULLIF(TRIM(COALESCE(r.payload->>'delivery_amount', r.payload->>'deliveryAmount')), '')::numeric"
@@ -2124,6 +2179,8 @@ def get_wb_unit_pnl_details(
                 {v_ppvz_vw} AS ppvz_vw,
                 {v_ppvz_vw_nds} AS ppvz_vw_nds,
                 {v_acquiring} AS acquiring_fee,
+                {v_ppvz_reward} AS ppvz_reward,
+                {v_rebill_logistic_cost} AS rebill_logistic_cost,
                 {v_retail_price} AS retail_price,
                 {v_ppvz_spp_prc} AS ppvz_spp_prc,
                 {v_delivery_amount} AS delivery_amount,
@@ -2139,8 +2196,10 @@ def get_wb_unit_pnl_details(
             SELECT
                 SUM(sign_val * retail_amount) AS sale_amount,
                 SUM(sign_val * ppvz_for_pay) AS transfer_amount,
-                SUM(COALESCE(ppvz_vw, 0) + COALESCE(ppvz_vw_nds, 0)) AS commission_vv_signed,
-                SUM(COALESCE(acquiring_fee, 0)) AS acquiring,
+                SUM(sign_val * (COALESCE(ppvz_vw, 0) + COALESCE(ppvz_vw_nds, 0))) AS commission_vv_signed,
+                SUM(sign_val * COALESCE(acquiring_fee, 0)) AS acquiring,
+                SUM(sign_val * COALESCE(ppvz_reward, 0)) AS pvz_reward,
+                SUM(sign_val * COALESCE(rebill_logistic_cost, 0)) AS rebill_logistic_cost,
                 SUM(delivery_rub) AS logistics_cost,
                 SUM(storage_fee) AS storage_cost,
                 SUM(acceptance) AS acceptance_cost,
@@ -2184,16 +2243,29 @@ def get_wb_unit_pnl_details(
 
     net_sales = int(row.get("sales_cnt") or 0) - int(row.get("returns_cnt") or 0)
     sales_cnt = int(row.get("sales_cnt") or 0)
+    sale_amount = float(row.get("sale_amount") or 0)
+    transfer_amount = float(row.get("transfer_amount") or 0)
     commission_vv_signed = float(row.get("commission_vv_signed") or 0)
     acquiring = float(row.get("acquiring") or 0)
+    pvz_reward = float(row.get("pvz_reward") or 0)
+    rebill_logistic_cost = float(row.get("rebill_logistic_cost") or 0)
     logistics_cost = float(row.get("logistics_cost") or 0)
     storage_cost = float(row.get("storage_cost") or 0)
     acceptance_cost = float(row.get("acceptance_cost") or 0)
     other_withholdings = float(row.get("other_withholdings") or 0)
     penalties = float(row.get("penalties") or 0)
+    reconciliation = compute_wb_payout_reconciliation(
+        sale_amount=sale_amount,
+        transfer_amount=transfer_amount,
+        commission_vv_signed=commission_vv_signed,
+        acquiring=acquiring,
+        pvz_reward=pvz_reward,
+        rebill_logistic_cost=rebill_logistic_cost,
+    )
+    settlement_cost = reconciliation["settlement_total"]
+    settlement_adjustment = reconciliation["settlement_adjustment"]
     wb_total_signed = (
-        commission_vv_signed
-        + acquiring
+        settlement_cost
         + logistics_cost
         + storage_cost
         + acceptance_cost
@@ -2228,7 +2300,6 @@ def get_wb_unit_pnl_details(
                 elif isinstance(pic, str):
                     photos.append(pic)
 
-    sale_amount = float(row.get("sale_amount") or 0)
     # Per-unit denominator: sales_cnt (as in report)
     wb_total_per_unit = wb_total_signed / sales_cnt if sales_cnt > 0 else None
     wb_total_pct_of_sale = wb_total_signed / sale_amount if sale_amount > 0 else None
@@ -2239,6 +2310,10 @@ def get_wb_unit_pnl_details(
     breakdown = {
         "commission": _pu(commission_vv_signed),
         "acquiring": _pu(acquiring),
+        "pvz_reward": _pu(pvz_reward),
+        "rebill_logistic_cost": _pu(rebill_logistic_cost),
+        "settlement_adjustment": _pu(settlement_adjustment),
+        "settlement_total": _pu(settlement_cost),
         "logistics": _pu(logistics_cost),
         "storage": _pu(storage_cost),
         "acceptance": _pu(acceptance_cost),
@@ -2280,6 +2355,8 @@ def get_wb_unit_pnl_details(
         v_ppvz_vw,
         v_ppvz_vw_nds,
         v_acquiring,
+        v_ppvz_reward,
+        v_rebill_logistic_cost,
         v_retail_price,
         v_ppvz_spp_prc,
         None,
@@ -2347,6 +2424,10 @@ def get_wb_unit_pnl_details(
             "own_wb_total_signed": wb_own_total_signed,
             "common_wb_allocated_total": wb_common_allocated_total,
             "common_wb_allocation_basis": common_wb_allocation,
+            "settlement_cost": settlement_cost,
+            "pvz_reward": pvz_reward,
+            "rebill_logistic_cost": rebill_logistic_cost,
+            "settlement_adjustment": settlement_adjustment,
             "logistics_cost": logistics_cost,
             "storage_cost": storage_cost,
             "acceptance_cost": acceptance_cost,

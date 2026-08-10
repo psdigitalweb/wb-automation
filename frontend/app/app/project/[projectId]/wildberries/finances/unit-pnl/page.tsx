@@ -941,6 +941,12 @@ function DetailsPanel({
 
   const commissionVvSigned = details.commission_vv_signed ?? 0
   const acquiring = details.acquiring ?? 0
+  const settlementCost = wb_costs_per_unit?.settlement_cost ?? (commissionVvSigned + acquiring)
+  const pvzReward = wb_costs_per_unit?.pvz_reward ?? 0
+  const rebillLogisticCost = wb_costs_per_unit?.rebill_logistic_cost ?? 0
+  const settlementAdjustment = wb_costs_per_unit?.settlement_adjustment ?? 0
+  const commonWbAllocated =
+    details.wb_common_allocated_total ?? wb_costs_per_unit?.common_wb_allocated_total ?? 0
   const logistics = wb_costs_per_unit?.logistics_cost ?? 0
   const storage = wb_costs_per_unit?.storage_cost ?? 0
   const acceptance = wb_costs_per_unit?.acceptance_cost ?? 0
@@ -948,7 +954,7 @@ function DetailsPanel({
   const penalties = wb_costs_per_unit?.penalties ?? 0
   const wbTotalSigned =
     details.wb_total_signed ??
-    commissionVvSigned + acquiring + logistics + storage + acceptance + other + penalties
+    settlementCost + logistics + storage + acceptance + other + penalties + commonWbAllocated
 
   const salesCnt = row?.sales_cnt ?? 0
   const breakdown = wb_costs_per_unit?.breakdown
@@ -1002,11 +1008,15 @@ function DetailsPanel({
             label="Эквайринг"
             value={details.acquiring != null ? fmt(details.acquiring) : '—'}
           />
+          <MetricLine label="Вознаграждение ПВЗ" value={fmt(pvzReward)} />
+          <MetricLine label="Перевыставленная логистика" value={fmt(rebillLogisticCost)} />
+          <MetricLine label="Сверочная корректировка" value={fmt(settlementAdjustment)} />
           <MetricLine label="Логистика" value={fmt(logistics)} />
           <MetricLine label="Хранение" value={fmt(storage)} />
           <MetricLine label="Приёмка" value={fmt(acceptance)} />
           <MetricLine label="Удержания" value={fmt(other)} />
           <MetricLine label="Штрафы" value={fmt(penalties)} />
+          <MetricLine label="Общие расходы WB (распределение)" value={fmt(commonWbAllocated)} />
           <MetricLine label="Итого WB" value={fmt(wbTotalSigned)} />
         </div>
       </div>
@@ -1023,6 +1033,26 @@ function DetailsPanel({
               <MetricLine
                 label="Эквайринг / ед, ₽"
                 value={breakdown.acquiring != null ? formatRUB(breakdown.acquiring) : '—'}
+              />
+              <MetricLine
+                label="Вознаграждение ПВЗ / ед, ₽"
+                value={breakdown.pvz_reward != null ? formatRUB(breakdown.pvz_reward) : '—'}
+              />
+              <MetricLine
+                label="Перевыставленная логистика / ед, ₽"
+                value={
+                  breakdown.rebill_logistic_cost != null
+                    ? formatRUB(breakdown.rebill_logistic_cost)
+                    : '—'
+                }
+              />
+              <MetricLine
+                label="Сверочная корректировка / ед, ₽"
+                value={
+                  breakdown.settlement_adjustment != null
+                    ? formatRUB(breakdown.settlement_adjustment)
+                    : '—'
+                }
               />
               <MetricLine
                 label="Логистика / ед, ₽"
@@ -1043,6 +1073,14 @@ function DetailsPanel({
               <MetricLine
                 label="Штрафы / ед, ₽"
                 value={breakdown.penalties != null ? formatRUB(breakdown.penalties) : '—'}
+              />
+              <MetricLine
+                label="Общие расходы WB / ед, ₽"
+                value={
+                  breakdown.common_wb_allocated != null
+                    ? formatRUB(breakdown.common_wb_allocated)
+                    : '—'
+                }
               />
               <MetricLine
                 label="WB итого / ед, ₽"
