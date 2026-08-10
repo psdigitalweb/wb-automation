@@ -44,6 +44,10 @@ interface HeaderTotals {
   other_withholdings?: number
   penalties?: number
   loyalty_comp_display?: number
+  commission_vv_signed?: number | null
+  acquiring?: number | null
+  wb_total_signed?: number | null
+  wb_total_pct_of_revenue?: number | null
   total_to_pay?: number
   rrp_model?: RrpModel | null
   rrp_sales_model?: number | null
@@ -76,9 +80,14 @@ export function HeaderSummary({ headerTotals, items }: HeaderSummaryProps) {
   const otherWithholdings = headerTotals.other_withholdings ?? 0
   const penalties = headerTotals.penalties ?? 0
   const loyaltyComp = headerTotals.loyalty_comp_display ?? 0
+  const commissionVvSigned = headerTotals.commission_vv_signed ?? 0
+  const acquiring = headerTotals.acquiring ?? 0
 
-  const wbTotalCost = logisticsCost + storageCost + acceptanceCost + otherWithholdings + penalties
-  const wbTotalCostPct = sale > 0 ? (wbTotalCost / sale) * 100 : 0
+  const directWbCosts = logisticsCost + storageCost + acceptanceCost + otherWithholdings + penalties
+  const commissionAndAcquiring = commissionVvSigned + acquiring
+  const wbTotalCost = headerTotals.wb_total_signed ?? (directWbCosts + commissionAndAcquiring)
+  const wbTotalCostPct =
+    headerTotals.wb_total_pct_of_revenue ?? (sale > 0 ? (wbTotalCost / sale) * 100 : 0)
 
   const deliveriesTotal = items.reduce((sum, r) => sum + (r.deliveries_qty ?? 0), 0)
   const returnsTotal = items.reduce((sum, r) => sum + (r.returns_log_qty ?? 0), 0)
@@ -100,6 +109,10 @@ export function HeaderSummary({ headerTotals, items }: HeaderSummaryProps) {
         <div className={styles.summaryTitle}>Затраты WB</div>
         <div className={styles.summaryList}>
           <SummaryPair label="Затраты WB, ₽" value={fmtRub(wbTotalCost)} />
+          <SummaryPair
+            label="Комиссия, эквайринг и связанные удержания"
+            value={fmtRub(commissionAndAcquiring)}
+          />
           <SummaryPair label="Затраты WB, % от выручки" value={`${formatPct(wbTotalCostPct)}%`} />
         </div>
       </div>
