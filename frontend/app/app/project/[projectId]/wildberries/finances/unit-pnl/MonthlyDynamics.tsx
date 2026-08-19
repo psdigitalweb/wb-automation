@@ -55,6 +55,15 @@ function formatRub(value: number): string {
   }).format(value)} ₽`
 }
 
+function formatRevenueShare(value: number, revenue: number): string {
+  if (revenue === 0) return 'доля от выручки —'
+  const share = (value / revenue) * 100
+  return `${new Intl.NumberFormat('ru-RU', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(share)}% от выручки`
+}
+
 export function MonthlyDynamics({
   projectId,
   rrDtFrom,
@@ -229,7 +238,7 @@ function DynamicsChart({
               <path d={path} fill="none" stroke={metric.color} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />
               {points.map((point, index) => (
                 <circle key={point.month} cx={xAt(index)} cy={yAt(point[metric.key])} r="4" fill={metric.color}>
-                  <title>{`${metric.label}, ${formatMonth(point.month)}: ${formatRub(point[metric.key])}`}</title>
+                  <title>{`${metric.label}, ${formatMonth(point.month)}: ${formatRub(point[metric.key])} · ${formatRevenueShare(point[metric.key], point.sale)}`}</title>
                 </circle>
               ))}
             </g>
