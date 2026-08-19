@@ -372,6 +372,88 @@
   color: var(--color-accent-text, #166534);
 }
 
+.dynamicsHint {
+  margin: 3px 0 0;
+  color: var(--color-text-2, #4b5563);
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.dynamicsLegend {
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.dynamicsLegendItem {
+  min-height: 26px;
+  padding: 0 8px;
+  border: 0.5px solid var(--color-border, rgba(31, 41, 55, 0.15));
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--color-surface, #fff);
+  color: var(--color-text-2, #4b5563);
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.dynamicsLegendItem > span {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  opacity: 0.35;
+}
+
+.dynamicsLegendItemActive {
+  border-color: var(--color-border-strong, rgba(31, 41, 55, 0.28));
+  background: var(--color-surface-2, #f8fafc);
+  color: var(--color-text, #111827);
+}
+
+.dynamicsLegendItemActive > span {
+  opacity: 1;
+}
+
+.dynamicsChartScroll {
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.dynamicsChart {
+  width: 100%;
+  min-width: 680px;
+  height: auto;
+  display: block;
+}
+
+.chartGridLine {
+  stroke: var(--color-border, rgba(31, 41, 55, 0.15));
+  stroke-width: 1;
+}
+
+.chartAxisLabel {
+  fill: var(--color-text-3, #6b7280);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.dynamicsError {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #b42318;
+  font-size: 12px;
+}
+
 .tableCard {
   overflow: hidden;
 }

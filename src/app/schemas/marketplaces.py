@@ -681,6 +681,25 @@ class WBUnitPnlResponse(BaseModel):
     debug: Optional[Dict[str, Any]] = None
 
 
+class WBUnitPnlDynamicsPoint(BaseModel):
+    """Calendar-month totals built from WB finance report lines."""
+    month: date
+    rows_total: int = 0
+    sale: float = 0
+    total_to_pay: float = 0
+    commission_and_related: float = 0
+    logistics_cost: float = 0
+    storage_cost: float = 0
+    acceptance_cost: float = 0
+
+
+class WBUnitPnlDynamicsResponse(BaseModel):
+    """Monthly dynamics for a Unit PnL period scope."""
+    rr_dt_from: date
+    rr_dt_to: date
+    points: List[WBUnitPnlDynamicsPoint] = Field(default_factory=list)
+
+
 class WBUnitPnlDetailsResponse(BaseModel):
     """Unit PnL details for one nm_id (expand row)."""
     nm_id: int

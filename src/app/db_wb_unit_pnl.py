@@ -241,6 +241,110 @@ def _build_from_clause(scope: Union[ReportScope, PeriodScope]) -> str:
     return "FROM wb_finance_report_lines r"
 
 
+def get_wb_unit_pnl_monthly_dynamics(
+    conn: Connection,
+    project_id: int,
+    *,
+    rr_dt_from: date,
+    rr_dt_to: date,
+) -> List[Dict[str, Any]]:
+    """Aggregate report-line totals into calendar months for the selected period."""
+    v_retail = _coalesce_num("retail_amount")
+    v_transfer = _coalesce_num("ppvz_for_pay")
+    v_delivery = _coalesce_num("delivery_rub")
+    v_storage = _coalesce_num("storage_fee")
+    v_acceptance = _coalesce_num("acceptance")
+    v_deduction = _coalesce_num("deduction")
+    v_penalty = _coalesce_num("penalty")
+    rr_dt_expr = "COALESCE(r.payload->>'rr_dt', r.payload->>'rrDt')"
+    sign_expr = """CASE
+        WHEN COALESCE(r.payload->>'doc_type_name', r.payload->>'docTypeName') ILIKE '%возврат%'
+          OR COALESCE(r.payload->>'supplier_oper_name', r.payload->>'supplierOperName') ILIKE '%возврат%'
+        THEN -1
+        ELSE 1
+    END"""
+
+    sql = text(f"""
+        WITH months AS (
+            SELECT generate_series(
+                date_trunc('month', CAST(:rr_dt_from AS date)),
+                date_trunc('month', CAST(:rr_dt_to AS date)),
+                interval '1 month'
+            )::date AS month
+        ),
+        base_lines AS (
+            SELECT
+                date_trunc('month', ({rr_dt_expr})::date)::date AS month,
+                ({sign_expr})::int AS sign_val,
+                {v_retail} AS retail_amount,
+                {v_transfer} AS ppvz_for_pay,
+                {v_delivery} AS delivery_rub,
+                {v_storage} AS storage_fee,
+                {v_acceptance} AS acceptance,
+                {v_deduction} AS deduction,
+                {v_penalty} AS penalty
+            FROM wb_finance_report_lines r
+            WHERE r.project_id = :project_id
+              AND {rr_dt_expr} ~ '^[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}$'
+              AND ({rr_dt_expr})::date BETWEEN :rr_dt_from AND :rr_dt_to
+              AND COALESCE(r.payload->>'nm_id', r.payload->>'nmId') ~ '^[0-9]+$'
+        ),
+        monthly AS (
+            SELECT
+                month,
+                COUNT(*)::bigint AS rows_total,
+                SUM(sign_val * retail_amount) AS sale,
+                SUM(sign_val * ppvz_for_pay) AS transfer_for_goods,
+                SUM(delivery_rub) AS logistics_cost,
+                SUM(storage_fee) AS storage_cost,
+                SUM(acceptance) AS acceptance_cost,
+                SUM(deduction) AS other_withholdings,
+                SUM(penalty) AS penalties
+            FROM base_lines
+            GROUP BY month
+        )
+        SELECT
+            m.month,
+            COALESCE(a.rows_total, 0)::bigint AS rows_total,
+            COALESCE(a.sale, 0) AS sale,
+            COALESCE(a.transfer_for_goods, 0)
+                - COALESCE(a.logistics_cost, 0)
+                - COALESCE(a.storage_cost, 0)
+                - COALESCE(a.acceptance_cost, 0)
+                - COALESCE(a.other_withholdings, 0)
+                - COALESCE(a.penalties, 0) AS total_to_pay,
+            COALESCE(a.sale, 0) - COALESCE(a.transfer_for_goods, 0) AS commission_and_related,
+            COALESCE(a.logistics_cost, 0) AS logistics_cost,
+            COALESCE(a.storage_cost, 0) AS storage_cost,
+            COALESCE(a.acceptance_cost, 0) AS acceptance_cost
+        FROM months m
+        LEFT JOIN monthly a ON a.month = m.month
+        ORDER BY m.month
+    """)
+    rows = conn.execute(
+        sql,
+        {
+            "project_id": project_id,
+            "rr_dt_from": rr_dt_from,
+            "rr_dt_to": rr_dt_to,
+        },
+    ).mappings().all()
+
+    return [
+        {
+            "month": row["month"],
+            "rows_total": int(row.get("rows_total") or 0),
+            "sale": float(row.get("sale") or 0),
+            "total_to_pay": float(row.get("total_to_pay") or 0),
+            "commission_and_related": float(row.get("commission_and_related") or 0),
+            "logistics_cost": float(row.get("logistics_cost") or 0),
+            "storage_cost": float(row.get("storage_cost") or 0),
+            "acceptance_cost": float(row.get("acceptance_cost") or 0),
+        }
+        for row in rows
+    ]
+
+
 def get_wb_unit_pnl_table(
     conn: Connection,
     project_id: int,

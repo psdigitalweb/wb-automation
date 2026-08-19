@@ -17,6 +17,7 @@ import {
 } from '@/lib/apiClient'
 import { HeaderSummary } from './HeaderSummary'
 import { HeaderSummaryFull } from './HeaderSummaryFull'
+import { MonthlyDynamics } from './MonthlyDynamics'
 import PortalBackButton from '@/components/PortalBackButton'
 import { usePageTitle } from '@/hooks/usePageTitle'
 import styles from './unit-pnl.module.css'
@@ -656,6 +657,15 @@ export default function WBUnitPnlPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {headerTotals && rrDtFromUrl && rrDtToUrl && (
+        <MonthlyDynamics
+          key={`${projectId}:${rrDtFromUrl}:${rrDtToUrl}`}
+          projectId={projectId}
+          rrDtFrom={rrDtFromUrl}
+          rrDtTo={rrDtToUrl}
+        />
       )}
 
       <div className={styles.card}>

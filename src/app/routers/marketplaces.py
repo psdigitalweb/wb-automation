@@ -55,6 +55,8 @@ from app.schemas.marketplaces import (
     WBWeeklySummaryResponse,
     WBUnitPnlRow,
     WBUnitPnlResponse,
+    WBUnitPnlDynamicsPoint,
+    WBUnitPnlDynamicsResponse,
     WBUnitPnlDetailsResponse,
 )
 from app.utils.wb_token_validator import validate_wb_token
@@ -1394,6 +1396,52 @@ async def get_wb_unit_pnl(
         items=[WBUnitPnlRow(**r) for r in result["items"]],
         header_totals=result["header_totals"],
         debug=result.get("debug"),
+    )
+
+
+@router.get(
+    "/projects/{project_id}/marketplaces/wildberries/finances/unit-pnl/dynamics",
+    response_model=WBUnitPnlDynamicsResponse,
+    summary="Unit PnL monthly dynamics (read-only)",
+    description="Monthly totals from wb_finance_report_lines for an rr_dt period.",
+)
+async def get_wb_unit_pnl_dynamics_endpoint(
+    project_id: int = Path(..., description="Project ID"),
+    rr_dt_from: str = Query(..., description="Period start YYYY-MM-DD"),
+    rr_dt_to: str = Query(..., description="Period end YYYY-MM-DD"),
+    _auth: dict = Depends(allow_client_portal_read),
+):
+    """Return one point per calendar month; called lazily by the report UI."""
+    from datetime import date as _date
+    from app.db import engine
+    from app.db_wb_unit_pnl import get_wb_unit_pnl_monthly_dynamics
+
+    try:
+        period_from = _date.fromisoformat(rr_dt_from)
+        period_to = _date.fromisoformat(rr_dt_to)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid date format. Use YYYY-MM-DD",
+        )
+    if period_from > period_to:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="rr_dt_from must be less than or equal to rr_dt_to",
+        )
+
+    with engine.connect() as conn:
+        points = get_wb_unit_pnl_monthly_dynamics(
+            conn,
+            project_id,
+            rr_dt_from=period_from,
+            rr_dt_to=period_to,
+        )
+
+    return WBUnitPnlDynamicsResponse(
+        rr_dt_from=period_from,
+        rr_dt_to=period_to,
+        points=[WBUnitPnlDynamicsPoint(**point) for point in points],
     )
 
 

@@ -955,6 +955,23 @@ export interface WBUnitPnlResponse {
   debug?: Record<string, number>
 }
 
+export interface WBUnitPnlDynamicsPoint {
+  month: string
+  rows_total: number
+  sale: number
+  total_to_pay: number
+  commission_and_related: number
+  logistics_cost: number
+  storage_cost: number
+  acceptance_cost: number
+}
+
+export interface WBUnitPnlDynamicsResponse {
+  rr_dt_from: string
+  rr_dt_to: string
+  points: WBUnitPnlDynamicsPoint[]
+}
+
 export interface WBUnitPnlDetailsResponse {
   nm_id: number
   scope: Record<string, unknown>
@@ -1112,6 +1129,20 @@ export async function getWBUnitPnl(
   if (params.filter_header) qs.set('filter_header', '1')
   const res = await apiGet<WBUnitPnlResponse>(
     `/api/v1/projects/${projectId}/marketplaces/wildberries/finances/unit-pnl?${qs.toString()}`
+  )
+  return res.data
+}
+
+export async function getWBUnitPnlDynamics(
+  projectId: string,
+  params: { rr_dt_from: string; rr_dt_to: string }
+): Promise<WBUnitPnlDynamicsResponse> {
+  const qs = new URLSearchParams({
+    rr_dt_from: params.rr_dt_from,
+    rr_dt_to: params.rr_dt_to,
+  })
+  const res = await apiGet<WBUnitPnlDynamicsResponse>(
+    `/api/v1/projects/${projectId}/marketplaces/wildberries/finances/unit-pnl/dynamics?${qs.toString()}`
   )
   return res.data
 }
